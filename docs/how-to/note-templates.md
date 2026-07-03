@@ -103,7 +103,7 @@ memex note template dir --local
 memex note template delete sprint_retrospective
 ```
 
-Add `--yes` to skip the confirmation prompt. Use `--local` to target a project-local template specifically.
+Add `--force` to skip the confirmation prompt. Use `--local` to target a project-local template specifically.
 
 > **Note:** Built-in templates cannot be deleted.
 
@@ -121,5 +121,5 @@ An AI assistant can call `memex_list_templates()` to discover available template
 
 ## See Also
 
-* [Using the MCP Server](using-mcp.md) — connecting AI clients to Memex
-* [Configuring Memex](configure-memex.md) — filestore and project configuration
+* [Using the MCP Server](../reference/mcp-tools.md) — connecting AI clients to Memex
+* [Configuring Memex](configuring-server/default-model.md) — filestore and project configuration

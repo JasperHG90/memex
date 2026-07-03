@@ -24,10 +24,13 @@ from memex_core.services.vault_summary_signatures import LLMTheme
 def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryService:
     metastore = MagicMock()
     lm = MagicMock()
+    embedding_model = MagicMock()
+    embedding_model.encode.return_value = [MagicMock(tolist=lambda: [0.1] * 384)]
     return VaultSummaryService(
         metastore=metastore,
         lm=lm,
         config=config or VaultSummaryConfig(),
+        embedding_model=embedding_model,
     )
 
 

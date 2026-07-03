@@ -61,13 +61,29 @@ MIN_COVERAGE_FOR_STRUCTURED = 0.5
 MAX_GAP_RATIO_FOR_STRUCTURED = 0.4
 MAX_AVG_SECTION_TOKENS = 4000
 
+# A ``# comment`` line inside a fenced code block is not a document section.
+# Mask fenced regions before header matching, preserving every character
+# position (and newlines) so header ``start_index`` values still index into the
+# original text. Fences must open at line start (optionally indented).
+_FENCED_CODE_RE = re.compile(
+    r'^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)',
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def _mask_fenced_code(text: str) -> str:
+    """Blank out fenced code spans, keeping length and line structure intact."""
+    return _FENCED_CODE_RE.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text)
+
 
 def detect_markdown_headers_regex(full_text: str) -> list[DetectedHeader]:
     """Detect markdown headers using regex pattern matching."""
     headers: list[DetectedHeader] = []
     pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 
-    for match in pattern.finditer(full_text):
+    # Match against a copy with fenced code masked out; positions are preserved,
+    # so a genuine header's groups and start index are identical to the source.
+    for match in pattern.finditer(_mask_fenced_code(full_text)):
         level_markers = match.group(1)
         title_text = match.group(2).strip()
         exact = match.group(0)

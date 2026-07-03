@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -12,30 +11,19 @@ from uuid import UUID
 if TYPE_CHECKING:
     from memex_core.services.vault_summary import VaultSummaryService
 
-from sqlmodel import col
+from sqlmodel import col, select
 
 from sqlalchemy import func, text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
+from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 from memex_core.config import MemexConfig
+from memex_core.memory.sql_models import Note
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
-
-
-def derive_note_uuid_from_key(note_key: str) -> UUID:
-    """Derive a deterministic Note.id UUID from a user-supplied note_key.
-
-    Mirrors NoteInput.note_key (api.py): if the caller passed an actual UUID
-    string, use it; otherwise, hash the key with MD5.
-    """
-    try:
-        return UUID(note_key)
-    except ValueError:
-        return UUID(hashlib.md5(note_key.encode('utf-8')).hexdigest())
-
 
 _VALID_DATE_FIELDS = {'coalesce', 'created_at', 'publish_date'}
 
@@ -210,20 +198,49 @@ class NoteService:
         status: str,
         linked_note_id: UUID | None = None,
     ) -> dict[str, Any]:
-        """Set a note's lifecycle status and optionally link to another note.
+        """Set lifecycle status.
 
-        When status is 'superseded' or 'archived', marks all memory units as stale
-        and prunes mental model evidence + queues affected entities for reflection.
-        When status is 'active', reactivates all memory units (sets them back to active).
+        Accepts ``'active' | 'superseded' | 'archived'``. ``'appended'``
+        is rejected with ``ValueError``; use the append verb (HTTP
+        ``POST /notes/append`` with the parent identifier in the request
+        body, or the ``memex_append_note`` tool) to set the
+        ``appended_to`` relation atomically with post-commit
+        contradiction detection.
+
+        Cascades:
+        * ``'superseded'`` marks every memory unit ``status='stale'`` and
+          prunes mental-model evidence; affected entities are queued
+          for reflection.
+        * ``'archived'`` records ``Note.archived_at`` and flips units to
+          ``is_deprioritized=true`` (FSFM suppression) — units stay
+          ``status='active'``, can be surfaced via
+          ``include_deprioritized=True``, and restored individually via
+          ``memex_memory_restore``. ``Note.status`` is intentionally
+          NOT flipped here so an already-superseded or appended note
+          keeps its provenance label.
+        * ``'active'`` reactivates every unit and clears the
+          archive/supersede pointers.
         """
+        from datetime import datetime, timezone
+
         from memex_core.memory.sql_models import MemoryUnit, Note
         from sqlmodel import select
 
-        valid_statuses = ('active', 'superseded', 'appended', 'archived')
+        if status == 'appended':
+            raise ValueError(
+                "'appended' is not a settable lifecycle status; append "
+                'content to an existing note via the append verb (HTTP '
+                'POST /notes/append with the parent identifier in the body, '
+                'or the `memex_append_note` tool), which is the only path '
+                'that sets the appended_to FK and runs post-commit '
+                'contradiction detection atomically.'
+            )
+        valid_statuses = ('active', 'superseded', 'archived')
         if status not in valid_statuses:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
         note_vault_id: UUID | None = None
+        was_archived_pretransition = False
 
         async with self.metastore.session() as session:
             # SELECT ... FOR UPDATE so concurrent appends/status changes serialise
@@ -236,33 +253,51 @@ class NoteService:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 
             note_vault_id = doc.vault_id
-            doc.status = status
             assert note_vault_id is not None
             if status == 'superseded':
+                doc.status = status
                 doc.superseded_by = linked_note_id
                 await self._deactivate_note_units(session, note_id, note_vault_id)
             elif status == 'archived':
-                await self._deactivate_note_units(session, note_id, note_vault_id)
-            elif status == 'appended':
-                doc.appended_to = linked_note_id
+                # Archive intent is recorded in archived_at + unit
+                # deprioritization; doc.status is intentionally left
+                # alone so an already-superseded note keeps its
+                # provenance label (both signals can coexist).
+                # Idempotent re-archive preserves the original
+                # archived_at so the MCP idempotentHint holds.
+                if doc.archived_at is None:
+                    doc.archived_at = datetime.now(timezone.utc)
+                await self._deprioritize_note_units(session, note_id)
             elif status == 'active':
+                # Only reverse ``is_deprioritized`` when the note was actually
+                # archived; otherwise preserve per-unit deprioritize signals.
+                was_archived_pretransition = doc.archived_at is not None
+                doc.status = status
                 doc.superseded_by = None
                 doc.appended_to = None
+                doc.archived_at = None
                 doc.summary_version_incorporated = None
-                # Cascade: reactivate all memory units
                 from sqlmodel import select
 
                 units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
                 units = (await session.exec(units_stmt)).all()
                 for unit in units:
                     unit.status = 'active'
+                    if was_archived_pretransition:
+                        unit.is_deprioritized = False
                     session.add(unit)
 
             session.add(doc)
             await session.commit()
 
-        # Mark vault summary for regeneration after commit (fire-and-forget)
-        if status in ('superseded', 'archived') and note_vault_id and self._vault_summary_service:
+        # Mark vault summary for regeneration after commit (fire-and-forget).
+        # Triggers on supersede, archive, and un-archive (active reactivation
+        # of a previously-archived note) — every transition that changes the
+        # note's contribution to summary aggregates.
+        triggers_regen = status in ('superseded', 'archived') or (
+            status == 'active' and was_archived_pretransition
+        )
+        if triggers_regen and note_vault_id and self._vault_summary_service:
             task = asyncio.create_task(
                 self._vault_summary_service.mark_needs_regeneration(note_vault_id)
             )
@@ -276,6 +311,25 @@ class NoteService:
             'linked_note_id': str(linked_note_id) if linked_note_id else None,
         }
 
+    async def _deprioritize_note_units(
+        self,
+        session: Any,
+        note_id: UUID,
+    ) -> None:
+        """FSFM archive cascade — flip every unit of ``note_id`` to
+        ``is_deprioritized=true`` while leaving ``status`` unchanged.
+        The supersession-stale path lives in ``_deactivate_note_units``.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+        units = (await session.exec(units_stmt)).all()
+        for unit in units:
+            unit.is_deprioritized = True
+            session.add(unit)
+
     async def _deactivate_note_units(
         self,
         session: Any,
@@ -284,7 +338,8 @@ class NoteService:
     ) -> None:
         """Mark note's memory units as stale, prune evidence, and queue for reflection.
 
-        Shared by both 'superseded' and 'archived' status transitions.
+        Used by the ``'superseded'`` status transition; ``'archived'`` now
+        goes through ``_deprioritize_note_units`` (FSFM) instead.
         """
         from sqlmodel import select
 
@@ -539,6 +594,27 @@ class NoteService:
 
             return doc.model_dump()
 
+    async def note_exists(self, note_id: UUID) -> bool:
+        """Return True iff a note with this id exists.
+
+        A.5: cheap existence check used by the HEAD /notes/{id} route.
+        Issues a single primary-key index lookup with `select(Note.id)
+        ... LIMIT 1`, so the row is never hydrated into a model instance
+        (unlike `get_note`, which loads the full Note + relationships).
+        The hermes-plugin's `_wait_for_note_row` polls this rather than
+        get_note so the readback-loop doesn't pay the full hydration cost
+        once per attempt under a 120s deadline.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            result = await session.exec(
+                select(col(Note.id)).where(col(Note.id) == note_id).limit(1)
+            )
+            return result.first() is not None
+
     async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
         """Return just the metadata portion of the page index."""
         from memex_core.memory.sql_models import Note
@@ -557,6 +633,11 @@ class NoteService:
 
                 metadata = dict(metadata)
                 metadata['has_assets'] = bool(doc.assets)
+                # created_at is always set (row creation time); the publish_date
+                # column wins when present but preserves any page_index value.
+                metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+                if doc.publish_date:
+                    metadata['publish_date'] = doc.publish_date.isoformat()
                 metadata.setdefault('vault_id', str(doc.vault_id))
                 vault = await session.get(Vault, doc.vault_id)
                 if vault:
@@ -663,6 +744,11 @@ class NoteService:
                     continue
                 metadata = dict(metadata)
                 metadata['has_assets'] = bool(doc.assets)
+                # created_at is always set (row creation time); the publish_date
+                # column wins when present but preserves any page_index value.
+                metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+                if doc.publish_date:
+                    metadata['publish_date'] = doc.publish_date.isoformat()
                 metadata.setdefault('vault_id', str(doc.vault_id))
                 vault_name = vault_map.get(doc.vault_id)
                 if vault_name:
@@ -684,10 +770,12 @@ class NoteService:
         tags: list[str] | None = None,
         status: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the given vault_id(s), or returns all vaults if not provided.
+        Filters by the given vault_id(s); when none are provided, scopes to
+        content vaults only (system vaults are reached by naming them).
         Optional after/before filters compare against ``date_field``:
           - ``'created_at'``  — when Memex ingested the note
           - ``'publish_date'`` — note's authored/publication date
@@ -713,6 +801,10 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -728,11 +820,26 @@ class NoteService:
                     .contains(literal(json.dumps(tags)).cast(JSONB))
                 )
             if status is not None:
-                stmt = stmt.where(col(Note.status) == status)
+                # ``'archived'`` is a logical / user-intent status; storage
+                # records it as ``archived_at IS NOT NULL``. Every other
+                # status filter is disjoint from archived — a note that
+                # was first archived and then later superseded surfaces
+                # only under ``status='archived'``, never under the
+                # supersession-state enum filters.
+                if status == 'archived':
+                    stmt = stmt.where(col(Note.archived_at).is_not(None))
+                else:
+                    stmt = stmt.where(col(Note.status) == status).where(
+                        col(Note.archived_at).is_(None)
+                    )
 
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())
             notes = await self._attach_vault_names(session, notes)
+            if slim:
+                for note in notes:
+                    object.__setattr__(note, 'summaries', [])
+                return notes
             return await self._attach_summaries(session, notes)
 
     async def get_recent_notes(
@@ -744,6 +851,7 @@ class NoteService:
         before: datetime | None = None,
         template: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         from sqlmodel import select
@@ -760,6 +868,8 @@ class NoteService:
             stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -769,6 +879,10 @@ class NoteService:
             stmt = stmt.limit(limit)
             notes = list((await session.exec(stmt)).all())
             notes = await self._attach_vault_names(session, notes)
+            if slim:
+                for note in notes:
+                    object.__setattr__(note, 'summaries', [])
+                return notes
             return await self._attach_summaries(session, notes)
 
     @staticmethod
@@ -847,20 +961,35 @@ class NoteService:
                     'vault_ids': list(vault_ids),
                     'limit': limit,
                 }
+                result = await session.exec(stmt, params=params)
             else:
-                stmt = text("""
-                    SELECT
-                        id, title,
-                        similarity(lower(title), lower(:query)) AS score,
-                        vault_id, created_at, publish_date, status
-                    FROM notes
-                    WHERE lower(title) % lower(:query)
-                    ORDER BY score DESC
-                    LIMIT :limit
-                """)
-                params = {'query': query, 'limit': limit}
-
-            result = await session.exec(stmt, params=params)
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
+                # The kind predicate is the SAME subquery the ORM
+                # list_notes / get_recent_notes paths use, so this raw-SQL
+                # branch can't drift from the SSOT.
+                content_subq = VaultService.content_vault_ids_subquery()
+                score_label = func.similarity(func.lower(Note.title), func.lower(query)).label(
+                    'score'
+                )
+                stmt = (
+                    select(
+                        Note.id,
+                        Note.title,
+                        score_label,
+                        Note.vault_id,
+                        Note.created_at,
+                        Note.publish_date,
+                        Note.status,
+                    )
+                    .where(
+                        func.lower(Note.title).op('%')(func.lower(query)),
+                        Note.vault_id.in_(content_subq),
+                    )
+                    .order_by(score_label.desc())
+                    .limit(limit)
+                )
+                result = await session.exec(stmt)
             rows = []
             for row in result:
                 rows.append(
@@ -881,7 +1010,7 @@ class NoteService:
         Delete a document and all associated data.
 
         Uses AsyncTransaction for atomicity across metastore + filestore.
-        ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
+        ORM cascades handle: memory_units, chunks, unit_entities, memory_links.
         FileStore cleanup handles: assets and filestore_path.
         Entity cleanup (orphan removal, mention_count recount, mental model pruning)
         runs as a background task after the transaction commits to avoid lock contention.
@@ -976,9 +1105,9 @@ class NoteService:
         """
         from sqlmodel import select, update
 
+        from memex_core.memory.entity_resolver import recompute_cooccurrences_for_entities
         from memex_core.memory.sql_models import (
             Chunk,
-            EntityCooccurrence,
             MentalModel,
             MemoryLink,
             MemoryUnit,
@@ -1072,18 +1201,21 @@ class NoteService:
                     .values(vault_id=target_vault_id)
                 )
 
-            # --- Cleanup EntityCooccurrence in source vault for affected entities ---
-            # Skip destructive cleanup when source == target (note isn't leaving)
+            # --- Recompute EntityCooccurrence in BOTH vaults for affected entities ---
+            # Cooccurrence is tracked per-vault (PK includes vault_id). Moving a note
+            # subtracts its contribution from the source vault and adds it to the target.
+            # We recompute from ground truth (post-move unit_entities/memory_units) for
+            # every pair touching the note's entities, in both vaults, so edges that
+            # OTHER notes still support are preserved rather than blanket-deleted.
+            # Skip when source == target (note isn't leaving).
             if not same_vault and entity_ids_for_cleanup:
-                for eid in entity_ids_for_cleanup:
-                    co_stmt = select(EntityCooccurrence).where(
-                        col(EntityCooccurrence.vault_id) == source_vault_id,
-                        (col(EntityCooccurrence.entity_id_1) == eid)
-                        | (col(EntityCooccurrence.entity_id_2) == eid),
+                # Units have already been re-pointed to the target vault above, so the
+                # recompute below sees the correct post-move state on both sides.
+                await session.flush()
+                for recompute_vault_id in (source_vault_id, target_vault_id):
+                    await recompute_cooccurrences_for_entities(
+                        session, recompute_vault_id, entity_ids_for_cleanup
                     )
-                    co_result = await session.exec(co_stmt)
-                    for co in co_result.all():
-                        await session.delete(co)
 
             # --- Cleanup orphaned MentalModels in source vault ---
             # --- Prune cross-vault evidence from surviving models ---

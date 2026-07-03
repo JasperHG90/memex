@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "1b9a568cfbd18fbbb0c28f105104e918",
+  "created_at": "2026-06-12T19:47:52.481567+00:00",
+  "description": "Quantum Measurement and Control Systems Research",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "1b9a568cfbd18fbbb0c28f105104e918",
+      "filestore_path": null,
+      "note_description": "Profile of Dr. Amara Osei at QuantumTech Labs.",
+      "note_name": "Dr. Amara Osei — Quantum Control Systems",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "research",
+        "profile"
+      ],
+      "template": null,
+      "uuid": "176ed498e7eeaa0cb3b8bacb19827fbe"
+    },
+    "tags": [
+      "quantum",
+      "research",
+      "profile",
+      "quantum computing",
+      "topological qubits",
+      "quantum error correction",
+      "measurement protocols",
+      "quantum coherence",
+      "quantumtech labs"
+    ]
+  },
+  "filestore_path": null,
+  "id": "176ed498-e7ee-aa0c-b3b8-bacb19827fbe",
+  "page_index": {
+    "metadata": {
+      "description": "Quantum Measurement and Control Systems Research",
+      "publish_date": "2026-06-12 19:47:52.481142+00:00",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "research",
+        "profile",
+        "quantum computing",
+        "topological qubits",
+        "quantum error correction",
+        "measurement protocols",
+        "quantum coherence",
+        "quantumtech labs"
+      ],
+      "title": "Dr. Amara Osei — Quantum Control Systems",
+      "total_tokens": 149
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "f83807a19882d501bc6aa593831faf29",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "f83807a19882d501bc6aa593831faf29",
+            "children": [],
+            "end_index": 487,
+            "id": "ed71d5dfa648faa3e60bab15909da404",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 175,
+            "subtree_tokens": 61,
+            "summary": {
+              "how": "By achieving sub-nanosecond timing precision to maintain quantum coherence",
+              "what": "Development of high-fidelity measurement protocols for topological qubit experiments",
+              "when": null,
+              "where": "QuantumTech Labs",
+              "who": "Dr. Amara Osei and the Quantum Control Systems group"
+            },
+            "title": "Research",
+            "token_estimate": 61
+          },
+          {
+            "assets": [],
+            "block_id": "f83807a19882d501bc6aa593831faf29",
+            "children": [],
+            "end_index": 735,
+            "id": "df44767d78db1a1c08884e1cbfa30d78",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 487,
+            "subtree_tokens": 50,
+            "summary": {
+              "how": "Through collaborative research and academic partnerships at institutions like MIT",
+              "what": "Co-authoring 15 papers and a landmark Nature publication on quantum error correction and topological qubit control",
+              "when": null,
+              "where": "MIT and Nature journal",
+              "who": "Amara Osei, J. Rodriguez, and Professor Kim"
+            },
+            "title": "Publications",
+            "token_estimate": 50
+          }
+        ],
+        "end_index": 735,
+        "id": "61302bdc21dd1dd45da27c397000e911",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 149,
+        "summary": {
+          "how": "By specializing in quantum measurement and control systems.",
+          "what": "A research profile detailing professional expertise and affiliation.",
+          "when": null,
+          "where": "QuantumTech Labs",
+          "who": "Dr. Amara Osei, Principal Scientist"
+        },
+        "title": "Dr. Amara Osei — Research Profile",
+        "token_estimate": 38
+      }
+    ]
+  },
+  "publish_date": "2026-06-12T19:47:52.481142+00:00",
+  "session_id": "da5d9975-91c3-49af-b25a-ce56abada43b",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Dr. Amara Osei — Quantum Control Systems",
+  "updated_at": "2026-06-12T19:47:52.481567+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

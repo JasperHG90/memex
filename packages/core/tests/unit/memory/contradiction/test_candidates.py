@@ -1,10 +1,12 @@
 """Unit tests for contradiction candidate retrieval."""
 
+import inspect
 from datetime import datetime, timezone
 from uuid import uuid4, UUID
 
 from memex_core.memory.contradiction.candidates import (
     _source_diverse_select,
+    get_candidates,
 )
 from memex_core.memory.sql_models import MemoryUnit, ContentStatus
 
@@ -90,3 +92,17 @@ class TestSourceDiverseSelect:
         result = _source_diverse_select(candidates, k=6)
         note_ids = {u.note_id for u in result}
         assert len(note_ids) == 3
+
+
+class TestGetCandidatesSignature:
+    """``get_candidates`` accepts an optional ``target_entity_ids`` parameter.
+
+    Pure signature + parameter-routing tests; the SQL-side filtering is
+    exercised in the contradiction integration suite where Postgres is
+    available.
+    """
+
+    def test_accepts_target_entity_ids(self) -> None:
+        sig = inspect.signature(get_candidates)
+        assert 'target_entity_ids' in sig.parameters
+        assert sig.parameters['target_entity_ids'].default is None

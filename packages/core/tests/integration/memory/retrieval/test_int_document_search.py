@@ -374,6 +374,49 @@ class TestNoteSearchEngine:
         # Result should exist (chunks are grouped by document)
         assert doc_result.score > 0
 
+    async def test_tag_filter_jsonb_containment(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """Tag-filtered search must (a) not raise and (b) return ONLY tagged docs.
+
+        Regression for the JSONB-codec bug: the production filter built
+        ``doc_metadata['tags'].astext.cast(JSONB).contains(json.dumps(tags))``
+        with a BARE python-str RHS, which compiles to ``jsonb @> character
+        varying`` and Postgres rejects at runtime ("operator does not exist") —
+        so EVERY tag-filtered document search raised a 500. The fix wraps the
+        RHS ``literal(json.dumps(tags)).cast(JSONB)`` (mirrors notes.search_notes).
+        This test drives the real ``NoteSearchEngine.search`` so it exercises the
+        exact expression, not a reconstruction.
+        """
+        tagged, _ = await self._seed_document_with_chunks(
+            session,
+            embedder,
+            ['Distributed consensus protocols and the Raft algorithm explained.'],
+            doc_metadata={'tags': ['distributed-systems', 'raft']},
+        )
+        untagged, _ = await self._seed_document_with_chunks(
+            session,
+            embedder,
+            ['Distributed consensus protocols and leader election overview.'],
+            doc_metadata={'tags': ['other']},
+        )
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='distributed consensus protocols',
+            strategies=['semantic'],
+            limit=10,
+            tags=['distributed-systems'],
+        )
+        # Must not raise (the bug raised ProgrammingError: jsonb @> varchar).
+        results = await search_engine.search(session, request)
+
+        returned_ids = {r.note_id for r in results}
+        assert tagged.id in returned_ids, (
+            'tagged doc not returned — JSONB containment tag filter regression'
+        )
+        assert untagged.id not in returned_ids, 'untagged doc leaked past the tag filter'
+
     async def test_metadata_passthrough(
         self, session: AsyncSession, search_engine, embedder
     ) -> None:
@@ -385,6 +428,9 @@ class TestNoteSearchEngine:
             ['Specific unique content for metadata passthrough test.'],
             doc_metadata=meta,
         )
+        pub = datetime(2024, 3, 15, tzinfo=timezone.utc)
+        doc.publish_date = pub
+        session.add(doc)
         await session.commit()
 
         request = NoteSearchRequest(
@@ -398,6 +444,9 @@ class TestNoteSearchEngine:
         assert doc_result is not None
         assert doc_result.metadata.get('source') == 'test'
         assert doc_result.metadata.get('name') == 'My Research Note'
+        # Timestamps for recency ranking without a follow-up metadata lookup.
+        assert doc_result.metadata.get('created_at') is not None
+        assert doc_result.metadata.get('publish_date') == pub.isoformat()
 
     async def test_graph_with_entity_alias(
         self, session: AsyncSession, search_engine, embedder

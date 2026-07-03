@@ -9,21 +9,22 @@ from memex_core.services.entities import EntityWithMetadata
 async def test_search_entities(api, mock_metastore):
     read_session = mock_metastore.session.return_value.__aenter__.return_value
 
-    # Mock entities — service now returns (Entity, MentalModel|None) tuples from LEFT JOIN
     e1 = Entity(id=uuid4(), canonical_name='Apple Inc.')
     e2 = Entity(id=uuid4(), canonical_name='Pineapple')
 
-    # First exec call: vault resolution (Vault lookup)
-    mock_vault = MagicMock()
-    mock_vault.id = uuid4()
-    mock_vault_res = MagicMock()
-    mock_vault_res.first.return_value = mock_vault
+    # exec #1: content-vault scope resolution -> vault ids.
+    scope_res = MagicMock()
+    scope_res.all.return_value = [uuid4()]
 
-    # Second exec call: actual entity search
-    mock_entity_res = MagicMock()
-    mock_entity_res.all.return_value = [(e1, None), (e2, None)]
+    # exec #2: entity search -> Entity scalars (membership via EXISTS, no join tuples).
+    entity_res = MagicMock()
+    entity_res.all.return_value = [e1, e2]
 
-    read_session.exec.side_effect = [mock_vault_res, mock_entity_res]
+    # exec #3: mental-model aggregation lookup -> none.
+    models_res = MagicMock()
+    models_res.all.return_value = []
+
+    read_session.exec.side_effect = [scope_res, entity_res, models_res]
 
     result = await api.search_entities(query='apple')
 
@@ -56,9 +57,11 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_config.server.reranker_max_concurrency = 4
     mock_config.server.embedding_max_concurrency = 4
     mock_config.server.ner_max_concurrency = 4
+    mock_config.server.nli_max_concurrency = 4
     mock_config.server.reranker_call_timeout = 30
     mock_config.server.embedding_call_timeout = 30
     mock_config.server.ner_call_timeout = 30
+    mock_config.server.nli_call_timeout = 30
 
     # Configure mock_metastore to support lifespan initialization
     mock_metastore.connect = AsyncMock()
@@ -120,9 +123,11 @@ def _make_server_test_client(api, mock_metastore, mock_filestore):
     mock_config.server.reranker_max_concurrency = 4
     mock_config.server.embedding_max_concurrency = 4
     mock_config.server.ner_max_concurrency = 4
+    mock_config.server.nli_max_concurrency = 4
     mock_config.server.reranker_call_timeout = 30
     mock_config.server.embedding_call_timeout = 30
     mock_config.server.ner_call_timeout = 30
+    mock_config.server.nli_call_timeout = 30
 
     mock_metastore.connect = AsyncMock()
     mock_metastore.close = AsyncMock()
@@ -248,7 +253,7 @@ async def test_entity_listing_without_query_returns_ranked(api, mock_metastore, 
 
     api.search_entities = AsyncMock()
 
-    async def _ranked(limit=100, vault_ids=None, entity_type=None):
+    async def _ranked(limit=100, vault_ids=None, entity_type=None, slim=False, **kwargs):
         e = Entity(id=uuid4(), canonical_name='User', mention_count=2368)
         yield EntityWithMetadata(entity=e, metadata={})
 

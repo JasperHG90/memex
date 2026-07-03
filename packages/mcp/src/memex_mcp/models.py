@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from memex_common.asset_cache import SessionAssetCache
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
-from memex_common.schemas import TOCNodeDTO
+from memex_common.schemas import SectionAssetDTO, TOCNodeDTO
 
 
 class Staleness(str, Enum):
@@ -131,6 +131,14 @@ class McpMemoryUnitBase(BaseModel):
     virtual: bool = False
     mental_model_id: UUID | None = None
     evidence_ids: list[UUID] = Field(default_factory=list)
+    success_co_count: int = 0
+    failure_co_count: int = 0
+    is_deprioritized: bool = False
+    intent_class: str = 'durable'
+    risk_class: str = 'none'
+    exploration: bool = False
+    created_at: datetime | None = None
+    event_date: datetime | None = None
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -212,6 +220,8 @@ class McpNoteSearchResult(BaseModel):
     tags: list[str] = []
     source_uri: str | None = None
     has_assets: bool = False
+    created_at: datetime | None = None
+    publish_date: datetime | None = None
     related_notes: list[McpRelatedNote] = Field(default_factory=list)
     links: list[McpMemoryLink] = Field(default_factory=list)
     previously_returned: bool = False
@@ -266,6 +276,8 @@ class McpNoteMetadata(BaseModel):
     vault_name: str | None = None
     tags: list[str] = []
     has_assets: bool = False
+    created_at: datetime | None = None
+    publish_date: datetime | None = None
 
 
 class McpNode(BaseModel):
@@ -274,6 +286,8 @@ class McpNode(BaseModel):
     title: str
     text: str | None = None
     level: int
+    block_id: UUID | None = None
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
 
 
 # ── Note listing ──
@@ -314,6 +328,7 @@ class McpVault(BaseModel):
     id: UUID
     name: str
     description: str | None = None
+    kind: str = 'content'
     is_active: bool = False
     note_count: int = 0
     last_note_added_at: datetime | None = None
@@ -354,7 +369,7 @@ class McpKVEntry(BaseModel):
     expires_at: datetime | None = None
 
 
-class McpKVWriteResult(BaseModel):
+class McpKVPutResult(BaseModel):
     key: str
     value: str
     scope: str
@@ -451,3 +466,131 @@ class McpSurveyResult(BaseModel):
     total_notes: int = 0
     total_facts: int = 0
     truncated: bool = False
+
+
+# ── Procedural plane  ──
+
+
+class McpProceduralSource(BaseModel):
+    """Source pointer on an procedural entry.
+
+    Exactly one pointer is set (DB CHECK): ``entry_id`` for a strategy's
+    backing procedure, ``note_id`` for a case, ``memory_unit_id`` for a
+    fact. Mirrors the DTO's ``source_entry_id`` / ``source_note_id`` /
+    ``source_memory_unit_id``.
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    entry_id: UUID | None = None
+    note_id: UUID | None = None
+    memory_unit_id: UUID | None = None
+    role: str
+
+
+class McpProceduralPin(BaseModel):
+    """Pin linking an entry to a context key in the briefing pin chain."""
+
+    model_config = {'extra': 'forbid'}
+
+    context_key: str
+    position: int
+
+
+class McpProceduralEntry(BaseModel):
+    """Public-facing procedural entry. Embedding vectors are omitted — they
+    are not meaningful at the LLM-tool boundary; they live in the search path.
+
+    ``vault_id`` is deliberately omitted: procedures are presented to agents as
+    vault-agnostic knowledge, and the entries physically live in a hidden
+    ``procedural`` system vault. Echoing that backing vault id out the tool
+    boundary leaks storage plumbing the agent must not reason about (it would
+    let an agent infer the system vault and the cross-tenant sharing model).
+    The id stays available server-side for the vault-scope guardrail.
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    id: UUID
+    kind: Literal['procedure', 'strategy']
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    title: str
+    summary: str
+    body: str = ''
+    trigger: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    extra_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: Literal['draft', 'published', 'deprecated'] = 'draft'
+    # Must mirror memex_common.procedural_schemas.OriginLiteral exactly — the
+    # DTO can emit any of these five and _dto_to_mcp_entry copies origin through.
+    origin: Literal['seed', 'derived', 'authored', 'manual', 'import'] = 'manual'
+    supersedes_id: UUID | None = None
+    superseded_by_id: UUID | None = None
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    sources: list[McpProceduralSource] = Field(default_factory=list)
+    pins: list[McpProceduralPin] = Field(default_factory=list)
+
+
+class McpProceduralSearchHit(BaseModel):
+    """One hit from the procedural hybrid search."""
+
+    model_config = {'extra': 'forbid'}
+
+    entry_id: UUID
+    kind: Literal['procedure', 'strategy']
+    score: float
+    matched_via: Literal['bm25', 'vector', 'pin', 'rrf']
+    title: str
+    summary: str
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    trigger: str | None = None
+    pin_position: int | None = None
+
+
+class McpProceduralSearchResult(BaseModel):
+    """Enveloped hits from memex_procedural_search."""
+
+    model_config = {'extra': 'forbid'}
+
+    hits: list[McpProceduralSearchHit] = Field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+    took_ms: float = 0.0
+
+
+class McpCaseSubmitResult(BaseModel):
+    """Result envelope for memex_case_submit.
+
+    ``assignment_mode='escalated'`` means a contested assignment landed
+    in the lint queue (``finding_id``) — resolve via the lint tools or
+    leave it for human review (file-then-lint).
+
+    ``assignment_mode='queued'`` means the case was filed in the background
+    (``background=true``): ``job_id`` tracks the durable job and ``note_id`` /
+    assignment fields are absent — the assignment resolves async and any
+    escalation / new-procedure draft surfaces in the lint queue.
+
+    ``vault_id`` is deliberately omitted: the backing ``procedural`` system
+    vault is storage plumbing the agent must not see (mirrors the same
+    redaction on McpProceduralEntry).
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    note_id: UUID | None = None
+    job_id: UUID | None = None
+    assignment_mode: Literal[
+        'explicit', 'auto_assigned', 'new_procedure_draft', 'escalated', 'skipped', 'queued'
+    ]
+    entry_id: UUID | None = None
+    finding_id: UUID | None = None
+    separation: str | None = None
+    reasoning: str | None = None
+    scope: str | None = None
+    scope_reasoning: str | None = None

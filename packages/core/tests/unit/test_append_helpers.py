@@ -7,11 +7,11 @@ from uuid import UUID
 
 import pytest
 
+from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.schemas import (
     NoteAppendRequest,
     append_joiner_separator,
 )
-from memex_core.services.notes import derive_note_uuid_from_key
 
 
 class TestDeriveNoteUuidFromKey:

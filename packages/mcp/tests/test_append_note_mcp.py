@@ -13,12 +13,13 @@ fixture) with the ``RemoteMemexAPI`` patched. Validates:
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from helpers import parse_tool_result
 
-from memex_common.schemas import NoteAppendRequest, NoteAppendResponse
+from memex_common.schemas import NoteAppendResponse
 from memex_mcp.server import mcp
 
 
@@ -79,12 +80,11 @@ async def test_append_note_success_round_trips(mock_api, mcp_client):
     assert data['new_unit_count'] == 0
 
     mock_api.append_to_note.assert_called_once()
-    sent = mock_api.append_to_note.call_args.args[0]
-    assert isinstance(sent, NoteAppendRequest)
-    assert sent.note_key == 'session-2026'
-    assert sent.vault_id == 'global'
-    assert sent.delta == 'a new line'
-    assert sent.append_id == append_id
+    kwargs = mock_api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == 'session-2026'
+    assert kwargs['vault_id'] == 'global'
+    assert kwargs['delta'] == 'a new line'
+    assert kwargs['append_id'] == append_id
 
 
 @pytest.mark.asyncio
@@ -111,15 +111,15 @@ async def test_append_note_auto_generates_append_id(mock_api, mcp_client):
     """Calls without append_id receive a fresh uuid4 each time."""
     note_id = uuid4()
 
-    def _fake_append(req: NoteAppendRequest):
-        return _response(note_id, req.append_id)
+    def _fake_append(**kwargs: Any):
+        return _response(note_id, kwargs['append_id'])
 
     mock_api.append_to_note.side_effect = _fake_append
 
     await mcp_client.call_tool('memex_append_note', {'note_id': str(note_id), 'delta': 'one'})
     await mcp_client.call_tool('memex_append_note', {'note_id': str(note_id), 'delta': 'two'})
 
-    a, b = (c.args[0].append_id for c in mock_api.append_to_note.call_args_list)
+    a, b = (c.kwargs['append_id'] for c in mock_api.append_to_note.call_args_list)
     assert a != b
 
 

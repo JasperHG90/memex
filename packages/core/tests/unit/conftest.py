@@ -92,6 +92,34 @@ def _reset_inflight_gauges():
 
 
 @pytest.fixture(autouse=True)
+def _reset_global_circuit_breaker():
+    """Per-test reset of the process-wide LLM circuit breaker.
+
+    ``memex_core.llm._circuit_breaker`` is a module-level singleton (see the
+    block-comment at the top of ``llm.py``). Tests that drive the real
+    ``run_dspy_operation`` path with a mock predictor that raises (e.g.
+    ``test_extract_facts_from_chunk_*_error`` in ``memory/extraction/test_core.py``)
+    record consecutive failures against this global. After the failure
+    threshold is crossed, the breaker latches OPEN and a downstream test
+    in the same process — most visibly
+    ``test_fact_classification.py::test_extraction_rules_contain_classification_guidance``
+    — fails with ``CircuitBreakerOpen`` instead of running its assertions.
+
+    The leak is order-dependent: alone, the downstream test passes; under
+    ``-p no:randomly`` it fails reproducibly because alphabetical order puts
+    the failure-recording tests before it. This fixture resets the breaker
+    pre- and post-yield so each unit test starts from a known CLOSED state.
+    """
+    from memex_core.llm import get_circuit_breaker
+
+    get_circuit_breaker().reset()
+    try:
+        yield
+    finally:
+        get_circuit_breaker().reset()
+
+
+@pytest.fixture(autouse=True)
 def _configure_offload_semaphores_default():
     """Initialise sync-offload semaphores so gated to_thread sites are callable.
 
@@ -206,6 +234,22 @@ def mock_config():
     config.server.memory.extraction.model.model = 'test-model'
     config.server.logging.level = 'WARNING'
     config.server.logging.json_output = False
+    # F5: real ints so TokenBucketRateLimiter validation passes; disabled
+    # so unit tests don't get throttled across iterations.
+    rate_cfg = config.server.memory.reflection.summarize_node_rate_limit
+    rate_cfg.enabled = False
+    rate_cfg.per_entity_per_seconds = 60
+    rate_cfg.burst = 1
+    rate_cfg.max_keys = 1000
+    # F9: per-vault consolidate rate limit; mirror the F5 disabled-by-default
+    # convention so unit tests building LocksService don't get throttled.
+    consolidate_cfg = config.server.memory.consolidate_rate_limit
+    consolidate_cfg.enabled = False
+    consolidate_cfg.per_vault_per_seconds = 3600
+    consolidate_cfg.burst = 1
+    consolidate_cfg.max_keys = 1000
+    # Default Memory Worth mode for newly created vaults.
+    config.server.memory.outcomes.mw_mode_default = 'ema'
     return config
 
 

@@ -178,16 +178,20 @@ class TestMigration002:
         await engine.dispose()
 
     @pytest.mark.asyncio
-    async def test_full_upgrade_to_head(self, clean_db, postgres_uri):
-        """Running upgrade to head from scratch works end-to-end."""
-        _run_alembic(postgres_uri, 'upgrade', 'head')
+    async def test_full_upgrade_to_pre_tier_a_baseline(self, clean_db, postgres_uri):
+        """Running upgrade through the pre-Tier-A chain end-to-end works.
+
+        Pinned to ``024_intent_risk_classifier`` (Wave 1 head). Tier A seed PR
+        introduced revisions 025-029 as NIE stubs; running ``upgrade head``
+        here would crash on the first stub. Each Tier A feature PR adds its
+        own ``test_int_alembic_NNN.py`` to exercise its filled-in body.
+        """
+        _run_alembic(postgres_uri, 'upgrade', '024_intent_risk_classifier')
 
         engine = create_async_engine(postgres_uri, poolclass=NullPool)
         async with engine.connect() as conn:
-            from memex_core.migration import get_expected_head
-
             result = await conn.execute(text('SELECT version_num FROM alembic_version'))
-            assert result.scalar() == get_expected_head()
+            assert result.scalar() == '024_intent_risk_classifier'
         await engine.dispose()
 
     @pytest.mark.asyncio

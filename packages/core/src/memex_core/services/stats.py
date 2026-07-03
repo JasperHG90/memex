@@ -14,6 +14,7 @@ from memex_common.exceptions import MemoryUnitNotFoundError
 from memex_core.config import MemexConfig
 from memex_core.services.base import BaseService
 from memex_core.services.notes import _cleanup_entities_after_delete
+from memex_core.services.vaults import VaultService
 from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
@@ -68,6 +69,13 @@ class StatsService(BaseService):
                 note_stmt = note_stmt.where(col(Note.vault_id).in_(ids))
                 memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(ids))
                 queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only for vault-scoped counts.
+                # Entity is global (no vault_id, §4.3) so its count stays global.
+                content_subq = VaultService.content_vault_ids_subquery()
+                note_stmt = note_stmt.where(col(Note.vault_id).in_(content_subq))
+                memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(content_subq))
+                queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(content_subq))
 
             note_count = (await session.exec(note_stmt)).one()
             memory_count = (await session.exec(memory_stmt)).one()
@@ -89,11 +97,84 @@ class StatsService(BaseService):
         async with self.metastore.session() as session:
             return await session.get(MemoryUnit, uid)
 
+    async def get_memory_units_by_chunks(
+        self,
+        chunk_ids: list[UUID],
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return all memory units whose ``chunk_id`` is in ``chunk_ids``, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — chunk-traversal must not leak units from
+        sibling vaults that happen to reference the same chunk UUID.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not chunk_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                col(MemoryUnit.chunk_id).in_(chunk_ids),
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
+    async def get_memory_units_by_ids(
+        self,
+        unit_ids: list[UUID],
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return memory units whose ``id`` is in ``unit_ids``, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — IDs from a sibling vault are silently
+        omitted, never returned. Duplicate IDs are deduplicated by the SQL
+        ``IN``; result order is not guaranteed to follow input order.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not unit_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                col(MemoryUnit.id).in_(unit_ids),
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
+    async def list_memory_units_by_note(
+        self,
+        note_id: UUID,
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return all memory units whose ``note_id`` matches, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — the same note_id could exist in another
+        vault under a different lifecycle and must not leak across.
+        Backed by ``idx_memory_units_note_id``.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                MemoryUnit.note_id == note_id,
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data.
 
         ORM cascades handle: unit_entities, outgoing_links, incoming_links.
-        DB FK cascade handles: evidence_log.
         Entity cleanup (orphan removal, mention_count recount, mental model pruning)
         runs as a background task after the commit to avoid lock contention.
         """

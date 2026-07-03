@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Mock `memex` CLI used by unit tests.
+#
+# Behavior:
+#   - Records every invocation as one JSON line in ${MOCK_MEMEX_CALLS}.
+#   - Reads canned KV state from ${MOCK_MEMEX_KV_FILE} (key=value lines).
+#   - Records `note add` / `note append` content to ${MOCK_MEMEX_NOTES_DIR}/.
+#   - For `briefing`, prints a fixed string.
+#   - Honors ${MOCK_MEMEX_FAIL} — if set to a comma-separated list of
+#     subcommands (e.g. "note append"), those calls exit non-zero.
+set -uo pipefail
+
+_calls_file="${MOCK_MEMEX_CALLS:-/dev/null}"
+_kv_file="${MOCK_MEMEX_KV_FILE:-/dev/null}"
+_notes_dir="${MOCK_MEMEX_NOTES_DIR:-}"
+_fail_list="${MOCK_MEMEX_FAIL:-}"
+
+# Capture stdin (notes append reads delta from stdin)
+_stdin=""
+if [ ! -t 0 ]; then
+    _stdin=$(cat)
+fi
+
+# Write a JSON-ish call record
+_subcommand="$1"
+_subsubcommand="${2:-}"
+_json_escape() {
+    # Escape backslashes, quotes, and control characters per RFC 8259.
+    # Each control char (newline, tab, CR, etc.) becomes \uXXXX.
+    python3 -c '
+import json, sys
+print(json.dumps(sys.argv[1]), end="")
+' "$1"
+}
+
+{
+    printf '{"argv":['
+    _first=1
+    for _a in "$@"; do
+        [ $_first -eq 1 ] || printf ','
+        _json_escape "$_a"
+        _first=0
+    done
+    printf '],"stdin":'
+    _json_escape "$_stdin"
+    printf '}\n'
+} >> "$_calls_file"
+
+# Check for forced failures
+case ",$_fail_list," in
+    *",${_subcommand} ${_subsubcommand},"*)
+        echo "mock_memex: forced failure for: $_subcommand $_subsubcommand" >&2
+        exit 1
+        ;;
+esac
+
+# Dispatch
+case "$_subcommand $_subsubcommand" in
+    "kv get")
+        # `memex kv get <key> [--value-only]`
+        _key="$3"
+        if [ -f "$_kv_file" ]; then
+            # awk does fixed-string equality on the key field, so KV keys with
+            # regex metacharacters (e.g. `+`, `.`, `*`) can't accidentally match
+            # siblings the way `grep -E "^${_key}="` would.
+            _val=$(awk -F= -v k="$_key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$_kv_file" 2>/dev/null)
+            if [ -n "$_val" ]; then
+                printf '%s' "$_val"
+                exit 0
+            fi
+        fi
+        # Not found
+        if printf '%s\n' "$@" | grep -q -- '--value-only'; then
+            exit 1
+        fi
+        echo "Key not found: $_key"
+        exit 1
+        ;;
+    "kv put")
+        # `memex kv put <key> <value>`
+        _key="$3"
+        _val="$4"
+        if [ -f "$_kv_file" ]; then
+            # Remove any existing line for this key (fixed-string equality
+            # via awk so regex metacharacters in keys never match siblings —
+            # mirrors the `kv get` fix above), then append the new value.
+            _tmp=$(mktemp)
+            awk -F= -v k="$_key" '$1 != k' "$_kv_file" > "$_tmp" 2>/dev/null || true
+            printf '%s=%s\n' "$_key" "$_val" >> "$_tmp"
+            mv "$_tmp" "$_kv_file"
+        fi
+        echo "Stored: $_key = $_val"
+        exit 0
+        ;;
+    "note add")
+        if [ -n "$_notes_dir" ]; then
+            mkdir -p "$_notes_dir" 2>/dev/null || true
+            _ts=$(date +%s%N)
+            _file="${_notes_dir}/note_add_${_ts}.txt"
+            {
+                printf 'argv: '
+                for _a in "$@"; do printf '%q ' "$_a"; done
+                printf '\n---\nstdin:\n%s\n' "$_stdin"
+            } > "$_file"
+        fi
+        echo "Note added successfully! UUID: 00000000-0000-0000-0000-000000000000"
+        exit 0
+        ;;
+    "note append")
+        if [ -n "$_notes_dir" ]; then
+            mkdir -p "$_notes_dir" 2>/dev/null || true
+            _ts=$(date +%s%N)
+            _file="${_notes_dir}/note_append_${_ts}.txt"
+            {
+                printf 'argv: '
+                for _a in "$@"; do printf '%q ' "$_a"; done
+                printf '\n---\nstdin:\n%s\n' "$_stdin"
+            } > "$_file"
+        fi
+        echo "Appended."
+        exit 0
+        ;;
+    "briefing"*)
+        printf '## Memex briefing\n\n(mock briefing content)\n'
+        exit 0
+        ;;
+    "agent-surface "*|"agent-surface")
+        # `memex agent-surface <target> [--output-format=...] [--output-dir <dir>]`
+        # Echo a deterministic fixed string so tests can pin the position
+        # of agent-surface content within the hook's concatenated output.
+        # When --output-dir is supplied, write the body to <dir>/memex-agent-surface.md
+        # instead of stdout — mirrors the real CLI's --output-dir behavior so the
+        # SessionStart-hook install path is exercisable in tests.
+        _target="${_subsubcommand:-universal}"
+        _agent_surface_out_dir=""
+        _agent_surface_skip=0
+        for _agent_surface_arg in "$@"; do
+            if [ "$_agent_surface_skip" -eq 1 ]; then
+                _agent_surface_out_dir="$_agent_surface_arg"
+                _agent_surface_skip=0
+                continue
+            fi
+            case "$_agent_surface_arg" in
+                --output-dir) _agent_surface_skip=1 ;;
+                --output-dir=*) _agent_surface_out_dir="${_agent_surface_arg#--output-dir=}" ;;
+            esac
+        done
+        if [ -n "$_agent_surface_out_dir" ]; then
+            mkdir -p "$_agent_surface_out_dir" 2>/dev/null || true
+            printf '<mock-agent-surface target="%s"/>\n' "$_target" \
+                > "${_agent_surface_out_dir}/memex-agent-surface.md"
+            exit 0
+        fi
+        printf '<mock-agent-surface target="%s"/>\n' "$_target"
+        exit 0
+        ;;
+    *)
+        echo "mock_memex: unknown subcommand: $_subcommand $_subsubcommand" >&2
+        exit 1
+        ;;
+esac

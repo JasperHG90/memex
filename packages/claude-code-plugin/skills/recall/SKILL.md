@@ -1,26 +1,33 @@
 ---
 name: recall
-description: "Search Memex long-term memory for relevant information. Returns facts, notes, and entities matching the query."
+description: "Search Memex long-term memory. Returns facts, notes, and entities matching the query."
 argument-hint: "[search query]"
 ---
 
-# /recall — Search Memex Long-Term Memory
+# /recall — Search Memex
 
-You have been invoked via the `/recall` slash command.
+1. **Query source**:
+   - If `$ARGUMENTS` is non-empty, use it as the search query.
+   - If `$ARGUMENTS` is empty, look for a "Composed query" block in the additional context — the plugin's `UserPromptExpansion` hook supplies one when you invoke `/recall` without arguments. Print a one-line summary of the composed query so the user can see what's being matched.
+   - If neither is available, ask the user.
 
-## Instructions
+2. **Search strategy**:
+   - **Vault scope (applies to every search/list call below)**: if the SessionStart "Per-project vault" block names a vault, pass it — `memex_memory_search`/`memex_note_search`/`memex_list_entities` scope via `vault_ids=["<that vault>"]`. If no project vault is set, omit `vault_ids` (server default). To search every vault, pass `vault_ids=["*"]`. (Listing without it queries the server's default read scope, which is usually NOT the project vault — the cause of "nothing found" when the briefing shows the vault has content.)
+   - **How-to queries first** ("how do I X?", "how do we deploy?", "what's the checklist for Y?"): call **`memex_procedural_search` ONLY** (see "Procedure recall" below). Do NOT also run `memex_memory_search` / `memex_note_search` for a how-to — the procedural plane is the only home for how-tos.
+   - **Otherwise** (facts, decisions, context): `memex_memory_search` AND `memex_note_search` in parallel (both scoped per the rule above). If insufficient, retry with `expand_query=true`.
+   - If still nothing, try `memex_list_entities`. If all fail, say so — do not guess.
+   - **Historical queries** ("how has X evolved?", "show me everything/hidden"): use `memex_get_unit_history(unit_id)` or `memex_memory_search(apply_pre_filter=False)`.
 
-1. **Determine the search query.**
-   - Use `$ARGUMENTS` as the search query.
-   - If `$ARGUMENTS` is empty, ask the user what they would like to recall.
+3. **Present results**: summarize clearly, include source Note IDs.
 
-2. **Search strategy** (two-stage with expansion fallback):
-   a. **First pass**: call `memex_memory_search` AND `memex_note_search` in parallel (no expansion).
-   b. **If insufficient**: retry both with `expand_query=true` for broader recall via LLM query expansion.
-   c. If still no results, call `memex_list_entities` to browse the knowledge graph.
-   d. If nothing is found after all three strategies, say so — do not guess.
+4. **Procedure recall**: for "how do I X?" queries, the procedural plane is the ONLY source — there is no KV fallback for how-tos.
+   - **Pinned cards**: the highest-value procedures are already in your SessionStart briefing (pin chain `global → project:<id> → app:claude-code`) — answer from there before searching.
+   - **Procedural search**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `procedure` / `strategy` kinds under the identity anchor `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)` with no context.
 
-3. **Present results.**
-   - Summarize the findings in a clear, readable format.
-   - Include source Note IDs so the user can drill deeper with `memex_read_note`.
-   - If no results are found, tell the user and suggest alternative queries.
+5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags` (omit `vault_id` to use the active vault, or pass the project vault). Each finding's id is the `id` field; `rule_name` discriminates the type. Surface findings for the user to act on — do NOT apply autonomously: a canned `resolve --action` / `memex_lint_apply_winner` is server-gated and returns **HTTP 403** unless the server runs with `MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1`. For the full resolve/dismiss workflow use `/lint`.
+
+6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary` (omit `vault_id` for the active vault, or pass the project vault) — returns cluster count, top entities, and MW score distribution.
+
+## Transcript-aware fallback contract
+
+When you invoke `/recall` with no arguments, a `UserPromptExpansion` hook reads the conversation transcript, extracts the last `MEMEX_CC_RECALL_TURNS` turns (default 3, range 1–10), and injects a composed query as additional context. The composed text is enclosed between `--- Composed query (last N turns) ---` markers so the skill can locate it deterministically. If an explicit query is supplied, the hook does not run — your `$ARGUMENTS` always wins.

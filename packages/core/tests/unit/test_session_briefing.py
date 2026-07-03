@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -277,11 +278,20 @@ class TestTrendSorting:
 class TestKVNamespaces:
     def test_without_project(self):
         ns = _build_kv_namespaces(None)
+        # Procedures live UNDER global:/user:/project:/app: as
+        # `<scope>:procedure:*` rows, so they are covered by the scope
+        # prefixes already in the fetch list — there is no bare `procedure`
+        # namespace.
         assert ns == ['global', 'user', 'app:claude-code']
 
     def test_with_project(self):
         ns = _build_kv_namespaces('my-project')
-        assert ns == ['global', 'user', 'app:claude-code', 'project:my-project']
+        assert ns == [
+            'global',
+            'user',
+            'app:claude-code',
+            'project:my-project',
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +332,19 @@ class TestSessionBriefingGenerate:
 
     @pytest.mark.asyncio
     async def test_section_order(self):
-        """Sections appear in order: header, KV, vault overview, entities, binding."""
+        """Sections appear in order: header, KV, vault overview, entities, binding.
+
+        Procedures are NOT in KV — they live in the procedural plane and
+        render as a separate "Procedural Cards" section (covered in
+        test_session_briefing_procedural_cards.py).
+        """
         svc = _make_service(
             summary=_make_vault_summary(),
             mental_models=_make_mental_models(3, with_observations=True),
-            kv_entries=[_make_kv_entry('global:test', 'value')],
+            kv_entries=[
+                _make_kv_entry('global:test', 'value'),
+                _make_kv_entry('user:pref', 'another value'),
+            ],
         )
         result = await svc.generate(uuid4(), budget=2000)
 
@@ -924,6 +942,18 @@ class TestVaultsSection:
         svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
         result = await svc.generate(vault_id=VAULT_ID, budget=2000)
         assert '**(active)**' in result
+
+    @pytest.mark.asyncio
+    async def test_vaults_heading_has_blank_line_separator(self):
+        """The heading is preceded by a blank line so it doesn't glue onto the
+        previous section's last list item. Regression: this section lacked the
+        leading newline that every other section carries, so e.g. the last
+        Procedural Card ran straight into `## Available Vaults`."""
+        vaults = [_mock_vault('global', 'Default', 10, vault_id=VAULT_ID)]
+        svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '\n\n## Available Vaults' in result
+        assert '\n## Available Vaults' in result and '_\n## Available Vaults' not in result
 
     @pytest.mark.asyncio
     async def test_empty_vaults_no_section(self):

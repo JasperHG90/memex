@@ -31,8 +31,8 @@ from memex_common.exceptions import (
 )
 from memex_core.api import NoteInput
 from memex_core.memory.sql_models import MemoryUnit, Note, NoteAppend, Vault
-from memex_core.services.notes import derive_note_uuid_from_key
 from memex_common.config import GLOBAL_VAULT_ID
+from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.types import FactTypes
 
 
@@ -415,13 +415,17 @@ async def test_concurrent_same_append_id_one_wins(api, metastore):
 
 @pytest.mark.asyncio
 async def test_append_to_archived_parent_raises(api, metastore):
-    """Archived parents reject appends with NoteNotAppendableError."""
+    """Archived parents reject appends with NoteNotAppendableError; the
+    guard checks ``archived_at IS NOT NULL`` since archive storage shape
+    is ``status='active' AND archived_at IS NOT NULL``."""
+    from datetime import datetime, timezone
+
     api.memory.retain.side_effect = _make_retain_upsert()
     parent_id = await _seed_parent_note(api, note_key='arch-1', body='b')
 
     async with metastore.session() as session:
         doc = await session.get(Note, parent_id)
-        doc.status = 'archived'
+        doc.archived_at = datetime.now(timezone.utc)
         session.add(doc)
         await session.commit()
 

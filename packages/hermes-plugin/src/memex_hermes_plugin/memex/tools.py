@@ -43,7 +43,30 @@ from memex_common.asset_cache import (
     SessionAssetCache,
 )
 from memex_common.asset_resize import validate_and_resize
-from memex_common.schemas import NoteAppendRequest
+from memex_common.schemas import (
+    VALID_INTENT_CLASSES,
+    VALID_RISK_CLASSES,
+    IntentClass,
+    RiskClass,
+)
+from memex_common.tool_descriptions import (
+    MEMEX_CASE_SUBMIT_DESC,
+    MEMEX_KV_GET_DESC,
+    MEMEX_KV_LIST_DESC,
+    MEMEX_KV_SEARCH_DESC,
+    MEMEX_KV_PUT_DESC,
+    MEMEX_LIST_LINT_ACTIONS_DESC,
+    MEMEX_MEMORY_CONSOLIDATE_DESC,
+    MEMEX_MEMORY_DEPRIORITIZE_DESC,
+    MEMEX_MEMORY_RECONSOLIDATE_DESC,
+    MEMEX_MEMORY_RESTORE_DESC,
+    MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    MEMEX_PROCEDURAL_GET_DESC,
+    MEMEX_PROCEDURAL_SEARCH_DESC,
+    MEMEX_RECORD_OUTCOME_DESC,
+    MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+)
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -51,6 +74,13 @@ from .config import HermesMemexConfig
 from .templates import HERMES_USER_NOTE_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+
+# Canonical-source-derived JSON Schema enum lists. Sourced from the
+# ``IntentClass`` / ``RiskClass`` enums in ``memex_common.schemas`` so adding
+# or renaming a class value does not silently desync the Hermes tool surface.
+_INTENT_ENUM_VALUES: list[str] = [c.value for c in IntentClass]
+_RISK_ENUM_VALUES: list[str] = [c.value for c in RiskClass]
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +125,14 @@ class MemexAPIProtocol(Protocol):
     async def get_entity_cooccurrences(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_entity_mentions(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_memory_units_by_chunks(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_links(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_unit_history(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def record_outcome(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Vaults
     async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -113,6 +149,31 @@ class MemexAPIProtocol(Protocol):
     async def kv_get(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_list(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_search_text(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # F32 — Diagnostics
+    async def get_diagnostics_summary(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # F8 — Lint flags (read-only agent surface)
+    async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Lint resolution (winner-proposal apply / reverse)
+    async def lint_apply_winner(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def lint_reverse_winner(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # External lint proposals (closed action catalogue)
+    async def list_lint_actions(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def submit_lint_proposals(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # F9 — Per-entity advisory lock + vault-wide consolidate
+    async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Procedural plane (procedure / strategy) + case submission
+    async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_get_by_identity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def case_submit(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +308,27 @@ RECALL_SCHEMA: dict[str, Any] = {
                     'level (default: false).'
                 ),
             },
+            'intent_class': {
+                'type': 'string',
+                'enum': _INTENT_ENUM_VALUES,
+                'description': ('Filter by intent class. Omit to return all classes.'),
+            },
+            'risk_class': {
+                'type': 'string',
+                'enum': _RISK_ENUM_VALUES,
+                'description': ('Filter by risk class. Omit to return all classes.'),
+            },
+            'apply_pre_filter': {
+                'type': 'boolean',
+                'description': (
+                    'Pre-reranker MW/FSFM filter at hydration. Default true drops '
+                    'obviously-failed (low Memory Worth) or decayed candidates before '
+                    'the cross-encoder. Set false for HISTORICAL / AUDIT / LINEAGE '
+                    'queries ("how has my view on X evolved", "show me everything I '
+                    'used to think about Y") so contradicted, behaviorally-failed, '
+                    'and decayed units appear.'
+                ),
+            },
         },
         'required': ['query'],
     },
@@ -308,7 +390,10 @@ SURVEY_SCHEMA: dict[str, Any] = {
 RETAIN_SCHEMA: dict[str, Any] = {
     'name': 'memex_add_note',
     'description': (
-        'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
+        'Ingest a NEW note into Memex (a FACT / DECISION / DOCUMENT — "what is true"), '
+        'or fully replace the body of an existing one. NOT for how-to workflows, '
+        'procedures, or worked episodes ("how we deploy", "how the run went") — those '
+        'go to memex_case_submit, NEVER here (and never both). '
         'If note_key matches an existing note the content is upserted. For appending '
         'NEW content to a session note (or any existing note) prefer memex_append_note — '
         'it sends only the delta and is atomic, avoiding the full-body re-send. '
@@ -372,6 +457,26 @@ RETAIN_SCHEMA: dict[str, Any] = {
                     'only — does not scaffold the body). Use memex_list_templates '
                     'to discover slugs. Recommended for ADRs, retros, technical '
                     'briefs, RFCs. Omit to use the default hermes-user-note tag.'
+                ),
+            },
+            'intent_class': {
+                'type': 'string',
+                'enum': _INTENT_ENUM_VALUES,
+                'description': (
+                    'Intent override for all extracted facts. "permanent" = enduring '
+                    'preferences/conventions (kept indefinitely); "durable" (default) '
+                    '= load-bearing facts; "ephemeral" = transient context (decays '
+                    'faster). Omit to let the write-time classifier decide.'
+                ),
+            },
+            'risk_class': {
+                'type': 'string',
+                'enum': _RISK_ENUM_VALUES,
+                'description': (
+                    'Risk override for all extracted facts. "none" (default); '
+                    '"private" = PII/secrets; "sensitive" = restricted topic; '
+                    '"safety" = refuse persistence entirely. Omit to let the '
+                    'write-time classifier decide.'
                 ),
             },
         },
@@ -470,7 +575,9 @@ GET_ENTITY_MENTIONS_SCHEMA: dict[str, Any] = {
     'description': (
         'Return memory units (facts/observations/events) that mention a '
         'specific entity, plus the source note for each. Requires an '
-        'entity_id from memex_list_entities.'
+        'entity_id from memex_list_entities. Defaults to active, '
+        'non-superseded, non-deprioritized units; set include_* flags to '
+        'widen to the historical record.'
     ),
     'parameters': {
         'type': 'object',
@@ -484,6 +591,18 @@ GET_ENTITY_MENTIONS_SCHEMA: dict[str, Any] = {
                 'description': 'Max mentions to return (default: 20).',
             },
             'vault_ids': _vault_ids_schema(),
+            'include_stale': {
+                'type': 'boolean',
+                'description': 'Include archived/deleted units (default: false).',
+            },
+            'include_superseded': {
+                'type': 'boolean',
+                'description': 'Include confidence-decayed units (default: false).',
+            },
+            'include_deprioritized': {
+                'type': 'boolean',
+                'description': 'Include deprioritized units (default: false).',
+            },
         },
         'required': ['entity_id'],
     },
@@ -494,7 +613,12 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
     'description': (
         'Return entities that co-occur with a given entity, with '
         'co-occurrence counts. Surfaces related concepts, people, or '
-        'projects. Requires an entity_id from memex_list_entities.'
+        'projects. Requires an entity_id from memex_list_entities. '
+        'Counts are corpus frequency across the entire historical record '
+        '(including superseded / deprioritized / archived units) — high '
+        'count says "mentioned together a lot", NOT "currently linked". '
+        'For currency, follow up with memex_get_entity_mentions (active-'
+        'only by default).'
     ),
     'parameters': {
         'type': 'object',
@@ -518,12 +642,18 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
 LIST_VAULTS_SCHEMA: dict[str, Any] = {
     'name': 'memex_list_vaults',
     'description': (
-        'List all vaults with note counts and active status. Call this before '
-        'using vault_ids on other tools so you know what vault names/UUIDs exist.'
+        'List content vaults with note counts and active status. Call this before '
+        'using vault_ids on other tools so you know what vault names/UUIDs exist. '
+        'Pass include_system_vaults=true to also list system vaults (inbox, etc.).'
     ),
     'parameters': {
         'type': 'object',
-        'properties': {},
+        'properties': {
+            'include_system_vaults': {
+                'type': 'boolean',
+                'description': 'Also list system vaults (inbox, etc.). Default false.',
+            },
+        },
         'required': [],
     },
 }
@@ -599,7 +729,8 @@ GET_PAGE_INDICES_SCHEMA: dict[str, Any] = {
     'description': (
         'Get the table of contents (section titles, node IDs, token counts) '
         'for a single note. Pass leaf node IDs to memex_get_nodes to read the '
-        'content of specific sections.'
+        'content of specific sections. Each node carries assets[] — embedded '
+        'image refs (path, alt_text, filename) parsed at ingest.'
     ),
     'parameters': {
         'type': 'object',
@@ -617,7 +748,9 @@ GET_NODES_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_nodes',
     'description': (
         'Batch-read note sections by node IDs. Get node IDs from '
-        'memex_get_page_indices. Accepts 1 or more IDs.'
+        'memex_get_page_indices. Accepts 1 or more IDs. Each node carries '
+        'block_id (pass to memex_get_memory_units) and assets[] (alt_text + '
+        'path per section).'
     ),
     'parameters': {
         'type': 'object',
@@ -688,7 +821,7 @@ LIST_NOTES_SCHEMA: dict[str, Any] = {
             },
             'status': {
                 'type': 'string',
-                'description': 'Filter by lifecycle status (active/superseded/appended/archived).',
+                'description': 'Filter by lifecycle status (active/superseded/archived).',
             },
             'date_by': {
                 'type': 'string',
@@ -696,6 +829,13 @@ LIST_NOTES_SCHEMA: dict[str, Any] = {
                     "Which date column after/before filter on: 'created_at' "
                     "(ingest time; default), 'publish_date' (authored), or "
                     "'coalesce' (publish_date if set else created_at)."
+                ),
+            },
+            'slim': {
+                'type': 'boolean',
+                'description': (
+                    'Drop per-note summaries to keep responses under hook-output '
+                    'caps. Default false.'
                 ),
             },
         },
@@ -734,6 +874,13 @@ RECENT_NOTES_SCHEMA: dict[str, Any] = {
                     "Which date column after/before filter on: 'created_at' "
                     "(ingest time; default), 'publish_date' (authored), or "
                     "'coalesce' (publish_date if set else created_at)."
+                ),
+            },
+            'slim': {
+                'type': 'boolean',
+                'description': (
+                    'Drop per-note summaries to keep responses under hook-output '
+                    'caps. Default false.'
                 ),
             },
         },
@@ -788,8 +935,10 @@ GET_ENTITIES_SCHEMA: dict[str, Any] = {
 GET_MEMORY_UNITS_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_memory_units',
     'description': (
-        'Batch lookup of memory units (facts, events, observations) by ID. '
-        'Includes status and supersession info.'
+        'Batch lookup of memory units (facts, events, observations). Provide '
+        'exactly one of `unit_ids` (direct ID lookup) or `chunk_ids` (returns '
+        'all units extracted from the named chunks, vault-scoped). Includes '
+        'status and supersession info.'
     ),
     'parameters': {
         'type': 'object',
@@ -799,8 +948,23 @@ GET_MEMORY_UNITS_SCHEMA: dict[str, Any] = {
                 'items': {'type': 'string'},
                 'description': 'List of memory unit UUIDs to fetch.',
             },
+            'chunk_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': (
+                    'List of chunk UUIDs. Returns all memory units extracted '
+                    'from these chunks, scoped to `vault_id`. Mutually '
+                    'exclusive with `unit_ids`.'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name. Required when `chunk_ids` is set; '
+                    'ignored for the `unit_ids` path.'
+                ),
+            },
         },
-        'required': ['unit_ids'],
     },
 }
 
@@ -871,7 +1035,7 @@ GET_LINEAGE_SCHEMA: dict[str, Any] = {
 
 # --- Lifecycle/templates (Stream 4) ---
 
-_VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'appended', 'archived'})
+_VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'archived'})
 
 # Canonical set accepted by ``client.list_notes(date_field=...)`` — see the
 # docstring at ``packages/common/src/memex_common/client.py:list_notes``.
@@ -880,12 +1044,18 @@ _VALID_DATE_BY = frozenset({'coalesce', 'created_at', 'publish_date'})
 SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
-        'Set note lifecycle status: active, superseded, appended, or archived. '
-        '**Cascading side-effect:** marking a note `superseded` flags every '
-        'memory unit extracted from it as stale. Prefer letting contradiction '
-        'detection auto-supersede facts via a new ingested note; reach for '
-        'this tool only for explicit archival or when an immediate state '
-        'change is required. Optionally link to the replacing/parent note via '
+        'Set note lifecycle status: active, superseded, or archived. '
+        '**Cascades:** `superseded` flags every memory unit extracted from '
+        'the note as stale. `archived` records an `archived_at` timestamp '
+        'and flips the note units to `is_deprioritized=true` (FSFM '
+        'suppression) — the units stay active and can be surfaced via '
+        '`include_deprioritized=True` retrieval, then restored with '
+        '`memex_memory_restore`. To append content to an existing note, '
+        'use `memex_append_note`; that is the only path that sets the '
+        '`appended_to` relation. Prefer letting contradiction detection '
+        'auto-supersede facts via a new ingested note; reach for this tool '
+        'only for explicit archival or when an immediate state change is '
+        'required. Optionally link to the replacing/parent note via '
         'linked_note_id.'
     ),
     'parameters': {
@@ -897,8 +1067,8 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
             },
             'status': {
                 'type': 'string',
-                'enum': ['active', 'superseded', 'appended', 'archived'],
-                'description': 'New status: active, superseded, appended, or archived.',
+                'enum': ['active', 'superseded', 'archived'],
+                'description': 'New status: active, superseded, or archived.',
             },
             'linked_note_id': {
                 'type': 'string',
@@ -1148,18 +1318,9 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 
 # --- KV store (Stream 5) ---
 
-KV_WRITE_SCHEMA: dict[str, Any] = {
-    'name': 'memex_kv_write',
-    'description': (
-        'Write a namespaced operational pointer to the KV store — a '
-        'preference, project binding, or convention. Generates a semantic '
-        'embedding for fuzzy lookup. NOT for facts learned from content; '
-        'those become memory units when you `memex_add_note` (or '
-        '`memex_append_note`) a note. Key must start with global:, user:, '
-        'project:, or app:. Examples: "global:lang:python:version", '
-        '"user:work:employer", "project:github.com/user/repo:vault", '
-        '"app:claude-code:theme".'
-    ),
+KV_PUT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_put',
+    'description': MEMEX_KV_PUT_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1184,7 +1345,7 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
 
 KV_GET_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_get',
-    'description': 'Get a KV entry by exact key. Returns null if not found.',
+    'description': MEMEX_KV_GET_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1199,10 +1360,7 @@ KV_GET_SCHEMA: dict[str, Any] = {
 
 KV_SEARCH_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_search',
-    'description': (
-        'Semantic search over KV entries. Returns the closest matching '
-        'entries. Optionally filter by namespace prefixes.'
-    ),
+    'description': MEMEX_KV_SEARCH_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1226,7 +1384,7 @@ KV_SEARCH_SCHEMA: dict[str, Any] = {
 
 KV_LIST_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_list',
-    'description': ('List KV entries, optionally filtered by namespace prefixes.'),
+    'description': MEMEX_KV_LIST_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1239,6 +1397,47 @@ KV_LIST_SCHEMA: dict[str, Any] = {
         'required': [],
     },
 }
+
+# --- F32 — Diagnostics ---
+
+GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_diagnostics_summary',
+    'description': (
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
+        'and top-5 retrieved entities. Synchronous — surfaces manifold status without '
+        'waiting on UMAP compute.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
+
+TOOLS_MODE_SCHEMAS: list[dict[str, Any]] = [
+    # The minimal "primary" tool surface exposed when ``memory_mode='tools'``.
+    # Memory-mode 'tools' opts the agent out of briefing + prefetch context,
+    # so we hand it only the LLM-reaches-for-most-often verbs and rely on the
+    # model to compose them. Keep this list narrow; do NOT auto-grow it when
+    # new MCP verbs land — Tier-A's ALL_SCHEMAS expansion silently broke this
+    # surface once already (46 tools leaking into tools-mode). New verbs ship
+    # in 'hybrid' mode by default; promote one to TOOLS_MODE_SCHEMAS only when
+    # there is a deliberate product decision and a paired test update.
+    RECALL_SCHEMA,
+    RETRIEVE_NOTES_SCHEMA,
+    SURVEY_SCHEMA,
+    RETAIN_SCHEMA,
+    LIST_ENTITIES_SCHEMA,
+    GET_ENTITY_MENTIONS_SCHEMA,
+    GET_ENTITY_COOCCURRENCES_SCHEMA,
+]
 
 
 ALL_SCHEMAS: list[dict[str, Any]] = [
@@ -1280,10 +1479,13 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     RESIZE_IMAGE_SCHEMA,
     ADD_ASSETS_SCHEMA,
     # --- KV store (Stream 5) ---
-    KV_WRITE_SCHEMA,
+    KV_PUT_SCHEMA,
     KV_GET_SCHEMA,
     KV_SEARCH_SCHEMA,
     KV_LIST_SCHEMA,
+    # --- F32 diagnostics ---
+    GET_DIAGNOSTICS_SUMMARY_SCHEMA,
+    # --- Tier A schemas appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 ]
 
 
@@ -1460,6 +1662,35 @@ def handle_memory_search(
     tags = args.get('tags') or None
     vault_ids = _resolve_vault_ids(api, args, vault_id)
 
+    # Allowed sets are canonical in memex_common.schemas (derived from the
+    # IntentClass / RiskClass enums). After the local string check we coerce
+    # to the enum so we satisfy ``RemoteMemexAPI.search``'s
+    # ``IntentClass | None`` / ``RiskClass | None`` signature without relying
+    # on implicit Pydantic coercion downstream.
+    #
+    # Use ``is not None`` rather than truthiness — IntentClass / RiskClass
+    # subclass ``str``, so a hypothetical enum member with value ``''`` would
+    # be falsy and silently coerce to None. Matches the convention in
+    # ``memex_core.server.retrieval``.
+    raw_intent = args.get('intent_class')
+    if raw_intent is not None and raw_intent not in VALID_INTENT_CLASSES:
+        return tool_error(
+            f'Invalid intent_class: {raw_intent!r}. '
+            f'Valid values: {" | ".join(sorted(VALID_INTENT_CLASSES))}'
+        )
+    raw_risk = args.get('risk_class')
+    if raw_risk is not None and raw_risk not in VALID_RISK_CLASSES:
+        return tool_error(
+            f'Invalid risk_class: {raw_risk!r}. '
+            f'Valid values: {" | ".join(sorted(VALID_RISK_CLASSES))}'
+        )
+    intent_class = IntentClass(raw_intent) if raw_intent is not None else None
+    risk_class = RiskClass(raw_risk) if raw_risk is not None else None
+
+    # F40 — default True. Set False for historical / audit / lineage queries
+    # so contradicted, behaviorally-failed, and decayed units appear.
+    apply_pre_filter = bool(args.get('apply_pre_filter', True))
+
     try:
         results = run_sync(
             api.search(
@@ -1470,9 +1701,12 @@ def handle_memory_search(
                 strategies=config.recall.strategies,
                 include_stale=bool(args.get('include_stale', config.recall.include_stale)),
                 include_superseded=config.recall.include_superseded,
+                apply_pre_filter=apply_pre_filter,
                 after=_parse_iso(args.get('after')),
                 before=_parse_iso(args.get('before')),
                 tags=tags,
+                intent_class=intent_class,
+                risk_class=risk_class,
             ),
             timeout=60.0,
         )
@@ -1587,7 +1821,26 @@ def handle_add_note(
     note_key = args.get('note_key') or None
     template = args.get('template') or HERMES_USER_NOTE_TEMPLATE
 
-    from memex_common.schemas import NoteCreateDTO
+    from memex_common.schemas import IntentClass, NoteCreateDTO, RiskClass
+
+    raw_intent = args.get('intent_class')
+    raw_risk = args.get('risk_class')
+    parsed_intent: IntentClass | None = None
+    parsed_risk: RiskClass | None = None
+    if raw_intent:
+        try:
+            parsed_intent = IntentClass(str(raw_intent).lower())
+        except ValueError:
+            return tool_error(
+                f'Invalid intent_class={raw_intent!r}. Allowed: {[c.value for c in IntentClass]}'
+            )
+    if raw_risk:
+        try:
+            parsed_risk = RiskClass(str(raw_risk).lower())
+        except ValueError:
+            return tool_error(
+                f'Invalid risk_class={raw_risk!r}. Allowed: {[c.value for c in RiskClass]}'
+            )
 
     dto = NoteCreateDTO(
         name=name,
@@ -1598,6 +1851,8 @@ def handle_add_note(
         vault_id=str(vault_id) if vault_id else None,
         author='hermes',
         template=template,
+        intent_class=parsed_intent,
+        risk_class=parsed_risk,
     )
 
     try:
@@ -1657,18 +1912,19 @@ def handle_append_note(
     joiner = args.get('joiner') or 'paragraph'
     user_notes = args.get('user_notes') or None
 
-    request = NoteAppendRequest(
-        note_id=note_id_uuid,
-        note_key=note_key,
-        vault_id=str(vault_id) if vault_id else None,
-        delta=delta,
-        append_id=append_id,
-        joiner=joiner,
-        user_notes=user_notes,
-    )
-
     try:
-        response = run_sync(api.append_to_note(request), timeout=60.0)
+        response = run_sync(
+            api.append_to_note(
+                note_id=note_id_uuid,
+                note_key=note_key,
+                vault_id=str(vault_id) if vault_id else None,
+                delta=delta,
+                append_id=append_id,
+                joiner=joiner,
+                user_notes=user_notes,
+            ),
+            timeout=60.0,
+        )
     except Exception as e:
         logger.warning('memex_append_note failed: %s', e)
         return tool_error(f'Append failed: {e}')
@@ -1729,6 +1985,9 @@ def handle_get_entity_mentions(
                 entity_id=entity_id,
                 limit=limit,
                 vault_ids=vault_ids,
+                include_stale=bool(args.get('include_stale') or False),
+                include_superseded=bool(args.get('include_superseded') or False),
+                include_deprioritized=bool(args.get('include_deprioritized') or False),
             ),
             timeout=30.0,
         )
@@ -1818,6 +2077,7 @@ def _serialize_vault(vault: Any) -> dict[str, Any]:
         'id': str(getattr(vault, 'id', '')),
         'name': getattr(vault, 'name', ''),
         'description': getattr(vault, 'description', None),
+        'kind': getattr(vault, 'kind', 'content'),
         'is_active': bool(getattr(vault, 'is_active', False)),
         'note_count': int(getattr(vault, 'note_count', 0) or 0),
         'last_note_added_at': last_added.isoformat() if last_added else None,
@@ -1854,18 +2114,28 @@ def _serialize_note_dto(note: Any) -> dict[str, Any]:
     }
 
 
+def _serialize_section_asset(asset: Any) -> dict[str, Any]:
+    return {
+        'path': getattr(asset, 'path', ''),
+        'alt_text': getattr(asset, 'alt_text', None),
+        'filename': getattr(asset, 'filename', ''),
+    }
+
+
 def _serialize_node_dto(node: Any) -> dict[str, Any]:
     created_at = getattr(node, 'created_at', None)
     return {
         'id': str(getattr(node, 'id', '')),
         'note_id': str(n) if (n := getattr(node, 'note_id', None)) else None,
         'vault_id': str(v) if (v := getattr(node, 'vault_id', None)) else None,
+        'block_id': str(b) if (b := getattr(node, 'block_id', None)) else None,
         'title': getattr(node, 'title', ''),
         'text': getattr(node, 'text', ''),
         'level': getattr(node, 'level', 0),
         'seq': getattr(node, 'seq', 0),
         'status': getattr(node, 'status', None),
         'created_at': created_at.isoformat() if created_at else None,
+        'assets': [_serialize_section_asset(a) for a in getattr(node, 'assets', []) or []],
     }
 
 
@@ -1894,8 +2164,9 @@ def _parse_iso_or_raise(value: str, field: str) -> Any:
 def handle_list_vaults(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
+    include_system = bool(args.get('include_system_vaults', False))
     try:
-        vaults = run_sync(api.list_vaults(), timeout=30.0)
+        vaults = run_sync(api.list_vaults(include_system=include_system), timeout=30.0)
     except Exception as e:
         logger.warning('memex_list_vaults failed: %s', e)
         return tool_error(f'List vaults failed: {e}')
@@ -2137,6 +2408,7 @@ def handle_list_notes(
                 date_field=date_by,
                 limit=limit,
                 offset=offset,
+                slim=bool(args.get('slim') or False),
             ),
             timeout=30.0,
         )
@@ -2176,6 +2448,7 @@ def handle_recent_notes(
                 before=parsed_before,
                 template=args.get('template') or None,
                 date_field=date_by,
+                slim=bool(args.get('slim') or False),
             ),
             timeout=30.0,
         )
@@ -2281,33 +2554,91 @@ def _serialize_full_entity(ent: Any) -> dict[str, Any]:
 def handle_get_memory_units(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    """Fetch memory units by ID.
+    """Fetch memory units by ID or by chunk_id.
 
-    Issues one ``api.get_memory_unit`` call per ID — ``RemoteMemexAPI`` does
-    not currently expose a batch ``get_memory_units`` endpoint. If one is
-    added later, adopt the try-batch-then-fallback pattern used by
-    ``handle_get_entities`` (batch call wrapped in try/except, falling back
-    to the per-ID loop on failure).
+    Provide exactly one of ``unit_ids`` or ``chunk_ids``. The chunk-traversal
+    path is vault-scoped; an unknown chunk simply contributes nothing to the
+    result set.
     """
-    raw_ids = args.get('unit_ids') or []
-    uuids: list[UUID] = []
-    for uid_str in raw_ids:
+    raw_unit_ids = args.get('unit_ids')
+    raw_chunk_ids = args.get('chunk_ids')
+
+    has_unit_ids = raw_unit_ids is not None
+    has_chunk_ids = raw_chunk_ids is not None
+
+    if has_unit_ids == has_chunk_ids:
+        return json.dumps(
+            {
+                'error': (
+                    'Provide exactly one of `unit_ids` or `chunk_ids` (not both, not neither).'
+                ),
+                'results': [],
+            }
+        )
+
+    items: list[dict[str, Any]] = []
+
+    if has_unit_ids:
+        uuids: list[UUID] = []
+        for uid_str in raw_unit_ids or []:
+            try:
+                uuids.append(UUID(str(uid_str)))
+            except (ValueError, TypeError):
+                continue
+
+        for uid in uuids:
+            try:
+                unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
+            except Exception as e:
+                logger.warning('get_memory_unit(%s) failed: %s', uid, e)
+                continue
+            if unit is None:
+                continue
+            items.append(_serialize_memory_unit_full(unit))
+
+        return json.dumps({'results': items})
+
+    chunk_uuids: list[UUID] = []
+    for cid_str in raw_chunk_ids or []:
         try:
-            uuids.append(UUID(str(uid_str)))
+            chunk_uuids.append(UUID(str(cid_str)))
         except (ValueError, TypeError):
             continue
 
-    items: list[dict[str, Any]] = []
-    # Singular per-ID loop — no batch API available; see docstring for the
-    # pattern to adopt if RemoteMemexAPI grows a batch variant.
-    for uid in uuids:
+    if not chunk_uuids:
+        return json.dumps({'results': []})
+
+    arg_vault = args.get('vault_id')
+    target_vault: UUID | None = None
+    if arg_vault:
+        # When the caller explicitly passes vault_id, an unparseable value
+        # MUST fail fast — silently falling back to the session-bound vault
+        # could return data from a different vault than the one the agent
+        # asked for (Wave 0 vault-scoping invariant).
         try:
-            unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
-        except Exception as e:
-            logger.warning('get_memory_unit(%s) failed: %s', uid, e)
-            continue
-        if unit is None:
-            continue
+            target_vault = UUID(str(arg_vault))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid vault UUID: {arg_vault}')
+    else:
+        target_vault = vault_id
+    if target_vault is None:
+        return json.dumps(
+            {
+                'error': 'vault_id is required when chunk_ids is provided.',
+                'results': [],
+            }
+        )
+
+    try:
+        units = run_sync(
+            api.get_memory_units_by_chunks(chunk_uuids, target_vault),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('get_memory_units_by_chunks failed: %s', e)
+        return json.dumps({'results': []})
+
+    for unit in units or []:
         items.append(_serialize_memory_unit_full(unit))
 
     return json.dumps({'results': items})
@@ -2490,6 +2821,12 @@ def handle_set_note_status(
     except ValueError as e:
         return tool_error(str(e))
 
+    if status == 'appended':
+        return tool_error(
+            "'appended' is not a settable lifecycle status; use "
+            "'memex_append_note' to append content to a note (that is the "
+            'only path that sets the appended_to relation).'
+        )
     if status not in _VALID_NOTE_STATUSES:
         return tool_error(
             f'Invalid status: {status!r}. Must be one of: {", ".join(sorted(_VALID_NOTE_STATUSES))}'
@@ -2899,7 +3236,7 @@ def handle_add_assets(
 # --- KV store (Stream 5) ---
 
 
-def handle_kv_write(
+def handle_kv_put(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Write a fact or preference to the KV store with semantic embedding."""
@@ -2923,8 +3260,8 @@ def handle_kv_write(
             timeout=15.0,
         )
     except Exception as e:
-        logger.warning('memex_kv_write failed: %s', e)
-        return tool_error(f'KV write failed: {e}')
+        logger.warning('memex_kv_put failed: %s', e)
+        return tool_error(f'KV put failed: {e}')
 
     return json.dumps(
         {
@@ -2970,7 +3307,7 @@ def handle_kv_search(
 
     try:
         entries = run_sync(
-            api.kv_search(query=query, namespaces=namespaces, limit=limit),
+            api.kv_search_text(query=query, namespaces=namespaces, limit=limit),
             timeout=15.0,
         )
     except Exception as e:
@@ -3055,10 +3392,11 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     'memex_resize_image': handle_resize_image,
     'memex_add_assets': handle_add_assets,
     # --- KV store (Stream 5) ---
-    'memex_kv_write': handle_kv_write,
+    'memex_kv_put': handle_kv_put,
     'memex_kv_get': handle_kv_get,
     'memex_kv_search': handle_kv_search,
     'memex_kv_list': handle_kv_list,
+    # --- Tier A handlers appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 }
 
 
@@ -3096,6 +3434,7 @@ __all__ = [
     'RETAIN_SCHEMA',
     'RETRIEVE_NOTES_SCHEMA',
     'SURVEY_SCHEMA',
+    'TOOLS_MODE_SCHEMAS',
     'VaultResolutionError',
     'dispatch',
     # --- Read/discovery (Stream 2) ---
@@ -3130,5 +3469,1425 @@ __all__ = [
     'KV_GET_SCHEMA',
     'KV_LIST_SCHEMA',
     'KV_SEARCH_SCHEMA',
-    'KV_WRITE_SCHEMA',
+    'KV_PUT_SCHEMA',
+    # --- F32 diagnostics ---
+    'GET_DIAGNOSTICS_SUMMARY_SCHEMA',
+    # --- F4 (WS-quick-wins) ---
+    'MEMORY_DEPRIORITIZE_SCHEMA',
+    'MEMORY_RESTORE_SCHEMA',
+    # --- record_outcome ---
+    'RECORD_OUTCOME_SCHEMA',
+    # --- F49 contradiction-graph timeline ---
+    'GET_UNIT_HISTORY_SCHEMA',
+    # --- Procedural plane (procedure / strategy) + case submission ---
+    'CASE_SUBMIT_SCHEMA',
+    'PROC_GET_BY_IDENTITY_SCHEMA',
+    'PROC_GET_SCHEMA',
+    'PROC_SEARCH_SCHEMA',
 ]
+
+
+# ============================================================
+# Tier A — Hermes sync wrappers
+# F4:  WS-quick-wins  (handle_memory_deprioritize, handle_memory_restore)
+# F5:  WS-quick-wins  (handle_memory_summarize_node)
+# F8:  WS-linter      (handle_get_lint_flags)
+# F9:  WS-locks       (handle_memory_reconsolidate, handle_memory_consolidate)
+# F32: WS-diagnostics (handle_get_diagnostics_summary)
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_deprioritize',
+    'description': MEMEX_MEMORY_DEPRIORITIZE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+            'reason': {
+                'type': 'string',
+                'description': (
+                    'Brief text explanation logged to audit_logs (e.g., '
+                    "'user confirmed issue fixed', 'superseded by v2.3 release')."
+                ),
+            },
+        },
+        'required': ['unit_id', 'reason'],
+    },
+}
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
+
+MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_restore',
+    'description': MEMEX_MEMORY_RESTORE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+
+
+def handle_memory_deprioritize(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+        reason = _require(args, 'reason')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot deprioritize.')
+    try:
+        result = run_sync(
+            api.deprioritize_memory_unit(uuid_obj, reason=reason, vault_id=vault_id),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_memory_deprioritize failed: %s', e)
+        return tool_error(f'Deprioritize failed: {e}')
+    return json.dumps(
+        {
+            'unit_id': str(getattr(result, 'id', uuid_obj)),
+            'is_deprioritized': True,
+            'reason': reason,
+        }
+    )
+
+
+def handle_memory_restore(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot restore.')
+    try:
+        result = run_sync(api.restore_memory_unit(uuid_obj, vault_id=vault_id), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_memory_restore failed: %s', e)
+        return tool_error(f'Restore failed: {e}')
+    return json.dumps({'unit_id': str(getattr(result, 'id', uuid_obj)), 'is_deprioritized': False})
+
+
+HANDLERS['memex_memory_deprioritize'] = handle_memory_deprioritize
+HANDLERS['memex_memory_restore'] = handle_memory_restore
+ALL_SCHEMAS.extend([MEMORY_DEPRIORITIZE_SCHEMA, MEMORY_RESTORE_SCHEMA])
+
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_summarize_node',
+    'description': MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reflect on.',
+            },
+            'scope': {
+                'type': 'string',
+                'enum': ['incremental', 'full'],
+                'description': (
+                    "'incremental' (default — only new evidence) or 'full' "
+                    '(re-evaluate all evidence; capped at 100 most-recent units).'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID; defaults to the global vault when omitted.',
+            },
+        },
+        'required': ['entity_id'],
+    },
+}
+
+
+def handle_memory_summarize_node(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    from memex_common.client import RateLimitExceeded, ReflectionAbandoned
+
+    try:
+        raw_entity_id = _require(args, 'entity_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity_id))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity_id}')
+
+    scope = args.get('scope', 'incremental')
+    if scope not in ('incremental', 'full'):
+        return tool_error(f"scope must be 'incremental' or 'full', got {scope!r}")
+
+    raw_vault = args.get('vault_id')
+    target_vault: UUID | None
+    if raw_vault is None:
+        target_vault = vault_id
+    else:
+        try:
+            target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
+        except ValueError as e:
+            # Malformed identifier — string failed to parse as a UUID or vault
+            # name (typo, bad format). Distinct log line from the KeyError path
+            # so operators can grep for "malformed" vs "not found" in
+            # log aggregators. User-facing tool_error stays generic for UX.
+            logger.warning(
+                'memex_memory_summarize_node: vault identifier malformed (input=%r): %s',
+                raw_vault,
+                e,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except KeyError as e:
+            # Identifier parsed cleanly but no vault with that id/name exists.
+            # Distinct log line from the ValueError path; same generic
+            # user-facing tool_error message for UX consistency.
+            logger.warning(
+                'memex_memory_summarize_node: vault identifier parsed but vault '
+                'not found (input=%r): %s',
+                raw_vault,
+                e,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except TimeoutError:
+            # `run_sync` raises `concurrent.futures.TimeoutError` (aliased to
+            # the built-in `TimeoutError` in 3.11+) when the 10s budget is
+            # exhausted. Surface a distinct message so a stuck backend doesn't
+            # masquerade as a generic resolution failure.
+            # ORDERING INVARIANT: `TimeoutError` is a subclass of `OSError`
+            # (Python 3.3+). This handler MUST stay above any `except OSError:`
+            # branch — otherwise OSError would silently intercept timeouts.
+            logger.warning(
+                'memex_memory_summarize_node: vault resolution timed out for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Vault resolution timed out')
+        except Exception:
+            # Catch-all for infrastructure failures (HTTP errors, network
+            # errors, backend exceptions). Surface a distinct message so
+            # genuine connectivity issues don't masquerade as missing-vault
+            # errors.
+            logger.exception(
+                'memex_memory_summarize_node: vault resolution failed for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Failed to resolve vault identifier')
+
+    # Narrow ``target_vault`` to ``UUID``. ``api.resolve_vault_identifier`` is
+    # contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
+    # but the protocol stub used here (line 110) types it as ``Any`` and the
+    # protocol-level return is ``UUID | None``. ``None`` is not a valid downstream
+    # value for this handler, and ``isinstance(None, UUID)`` is ``False`` — so a
+    # single ``not isinstance`` check catches both ``None`` and any other unexpected
+    # type. Keep the diagnostic detail in the operator log; return a generic
+    # user-facing message that matches the obfuscation policy of the surrounding
+    # ValueError / KeyError / TimeoutError / generic-Exception paths in this
+    # handler instead of leaking the type name to the caller. A regular
+    # ``if``/``return`` (not ``assert``) ensures the check survives ``python -O``.
+    if not isinstance(target_vault, UUID):
+        logger.error(
+            'memex_memory_summarize_node: vault resolution returned unexpected '
+            'type %s (expected UUID, raw_input=%r)',
+            type(target_vault).__name__,
+            raw_vault,
+        )
+        return tool_error('Internal error: vault resolution returned unexpected result')
+
+    try:
+        result = run_sync(
+            api.summarize_node(entity_uuid, scope=scope, vault_id=target_vault),
+            timeout=120.0,
+        )
+    except RateLimitExceeded as exc:
+        return json.dumps(
+            {
+                'error': 'rate_limit_exceeded',
+                'entity_id': str(entity_uuid),
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        )
+    except ReflectionAbandoned as exc:
+        envelope: dict[str, Any] = {
+            'error': 'reflection_abandoned',
+            'entity_id': str(entity_uuid),
+            'retry_after_seconds': exc.retry_after_seconds,
+            'message': str(exc),
+        }
+        if exc.hint:
+            envelope['hint'] = exc.hint
+        return json.dumps(envelope)
+    except Exception as e:
+        logger.warning('memex_memory_summarize_node failed: %s', e)
+        return tool_error(f'summarize_node failed: {e}')
+
+    return json.dumps(
+        {
+            'entity_id': str(getattr(result, 'entity_id', entity_uuid)),
+            'observation_count': len(getattr(result, 'new_observations', []) or []),
+            'status': getattr(result, 'status', 'completed'),
+            'scope': scope,
+        }
+    )
+
+
+HANDLERS['memex_memory_summarize_node'] = handle_memory_summarize_node
+ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
+
+
+# --- record_outcome ---
+
+RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
+    'name': 'memex_record_outcome',
+    'description': MEMEX_RECORD_OUTCOME_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'success': {
+                'type': 'boolean',
+                'description': (
+                    'Legacy shape (FutureWarning). True/false. Prefer the '
+                    'per-unit `units` parameter.'
+                ),
+            },
+            'units': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'unit_id': {'type': 'string'},
+                        'verb': {
+                            'type': 'string',
+                            'enum': ['helpful', 'not_helpful', 'not_used'],
+                        },
+                        'reason': {'type': ['string', 'null']},
+                    },
+                    'required': ['unit_id', 'verb'],
+                },
+                'description': (
+                    'Per-unit verb classifications. `reason` is required for '
+                    'helpful and not_helpful, optional for not_used.'
+                ),
+            },
+            'unit_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': ('Legacy shape (FutureWarning). Prefer `units`.'),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name. Defaults to the session-bound vault.',
+            },
+            'outcome_confidence': {
+                'type': 'number',
+                'minimum': 0.0,
+                'maximum': 1.0,
+                'description': 'Weight for this outcome signal (0.0-1.0). Default 1.0.',
+            },
+            'reason': {
+                'type': 'string',
+                'description': 'Optional free-text reason (logged, not stored on units).',
+            },
+            'retrieved_set_size': {
+                'type': 'integer',
+                'minimum': 0,
+                'description': (
+                    'Size of the retrieved set the caller was asked to classify. '
+                    'Drives coverage_ratio on the audit log.'
+                ),
+            },
+            'caller_id': {
+                'type': 'string',
+                'description': (
+                    'Caller identifier (session id or API key fingerprint) for the audit log.'
+                ),
+            },
+            'turn_outcome': {
+                'type': 'string',
+                'description': ('Coarse turn-level outcome label (e.g. success/failure/mixed).'),
+            },
+            'exploration_tagged': {
+                'type': 'boolean',
+                'description': 'True iff any unit was exploration-injected on retrieval.',
+            },
+        },
+    },
+}
+
+
+_RECORD_OUTCOME_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {
+        'success',
+        'units',
+        'unit_ids',
+        'vault_id',
+        'outcome_confidence',
+        'reason',
+        'retrieved_set_size',
+        'caller_id',
+        'turn_outcome',
+        'exploration_tagged',
+    }
+)
+
+
+def handle_record_outcome(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Record outcome on memory units.
+
+    Accepts the per-unit ``units`` shape (preferred) or the legacy
+    ``(unit_ids, success)`` shape (FutureWarning).
+    """
+    unknown = set(args) - _RECORD_OUTCOME_ALLOWED_KEYS
+    if unknown:
+        return tool_error(f'unknown args: {sorted(unknown)}')
+
+    units = args.get('units')
+    if units is not None and not isinstance(units, list):
+        return tool_error("'units' must be a list of {unit_id, verb, reason} objects")
+
+    unit_ids = args.get('unit_ids')
+    if unit_ids is not None and not isinstance(unit_ids, list):
+        return tool_error("'unit_ids' must be a list of UUID strings")
+
+    success_raw = args.get('success')
+    success: bool | None
+    if success_raw is None:
+        success = None
+    elif isinstance(success_raw, bool):
+        success = success_raw
+    else:
+        return tool_error(f"'success' must be a boolean, got {type(success_raw).__name__}")
+
+    if units is None and unit_ids is None:
+        return tool_error(
+            "record_outcome requires either 'units' (preferred) or legacy ('unit_ids' + 'success')."
+        )
+
+    raw_vault = args.get('vault_id')
+    target_vault: str | None
+    if raw_vault is None:
+        target_vault = str(vault_id) if vault_id else None
+    else:
+        target_vault = str(raw_vault)
+
+    outcome_confidence = args.get('outcome_confidence', 1.0)
+    reason = args.get('reason')
+    retrieved_set_size = args.get('retrieved_set_size')
+
+    caller_id = args.get('caller_id')
+    if caller_id is not None and not isinstance(caller_id, str):
+        return tool_error("'caller_id' must be a string")
+
+    turn_outcome = args.get('turn_outcome')
+    if turn_outcome is not None and not isinstance(turn_outcome, str):
+        return tool_error("'turn_outcome' must be a string")
+
+    exploration_tagged_raw = args.get('exploration_tagged', False)
+    if not isinstance(exploration_tagged_raw, bool):
+        return tool_error("'exploration_tagged' must be a boolean")
+    exploration_tagged = exploration_tagged_raw
+
+    try:
+        result = run_sync(
+            api.record_outcome(
+                unit_ids,
+                success,
+                target_vault,
+                outcome_confidence,
+                reason,
+                units=units,
+                caller_id=caller_id,
+                turn_outcome=turn_outcome,
+                retrieved_set_size=retrieved_set_size,
+                exploration_tagged=exploration_tagged,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_record_outcome failed: %s', e)
+        return tool_error(f'record_outcome failed: {e}')
+
+    return json.dumps(result)
+
+
+HANDLERS['memex_record_outcome'] = handle_record_outcome
+ALL_SCHEMAS.append(RECORD_OUTCOME_SCHEMA)
+
+
+# --- F8 ---  (filled by WS-linter)
+
+GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_lint_flags',
+    'description': (
+        'memex_get_lint_flags — List pending memory-hygiene findings the linter has detected.\n'
+        'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
+        '\n'
+        '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
+        'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
+        'all-vault view).\n'
+        '- lint_type (optional): structural | quality | governance | schema | routing\n'
+        '- status (optional): pending | resolved | dismissed (default: pending)\n'
+        '- limit (default 20)\n'
+        '\n'
+        'Each finding includes: target_id, lint_type, evidence (why detected), suggested_action.\n'
+        'Most findings can be auto-resolved by calling the relevant tool (e.g., memory_deprioritize\n'
+        'for low-MW units). Surface high-confidence findings to the user; act autonomously on\n'
+        'low-risk ones (deprioritize, mark stale).'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name. Omit to default to the session active write vault.'
+                ),
+            },
+            'lint_type': {
+                'type': 'string',
+                'enum': ['structural', 'quality', 'governance', 'schema', 'routing'],
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['pending', 'resolved', 'dismissed'],
+                'default': 'pending',
+            },
+            'limit': {
+                'type': 'integer',
+                'minimum': 1,
+                'maximum': 200,
+                'default': 20,
+            },
+            'cursor': {
+                'type': 'string',
+                'description': 'Opaque cursor from a prior page; omit on first call.',
+            },
+        },
+        'required': [],
+    },
+}
+
+
+def handle_get_lint_flags(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_get_flags.
+
+    HIGH-006: never falls through to an all-vault view. Either the agent
+    supplies vault_id, or the Hermes session vault binding is used. If
+    neither is available, the call is rejected.
+    """
+    raw_vault = args.get('vault_id')
+    resolved: str | None = None
+    try:
+        if raw_vault:
+            resolved_id = run_sync(api.resolve_vault_identifier(raw_vault), timeout=10.0)
+            resolved = str(resolved_id) if resolved_id else None
+        elif vault_id is not None:
+            resolved = str(vault_id)
+        if resolved is None:
+            return tool_error(
+                'memex_get_lint_flags requires a vault_id or an active session '
+                'vault binding (Wave 0 vault-scoping invariant; refusing to '
+                'fall through to a global all-vault view).'
+            )
+        result = run_sync(
+            api.lint_get_flags(
+                vault_id=resolved,
+                lint_type=args.get('lint_type'),
+                status=args.get('status', 'pending'),
+                limit=int(args.get('limit', 20)),
+                cursor=args.get('cursor'),
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_lint_flags failed: %s', e)
+        return tool_error(f'Lint flags query failed: {e}')
+
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_get_lint_flags'] = handle_get_lint_flags
+ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
+
+
+LINT_APPLY_WINNER_SCHEMA: dict[str, Any] = {
+    'name': 'memex_lint_apply_winner',
+    'description': (
+        'Apply the recommended action on a winner-proposal lint finding '
+        "(rule_name=propose_contradiction_winner). The finding's "
+        'evidence.action drives the mutation: mark a unit stale, mark a '
+        'note superseded, rewrite a contradicts link as refines, or a '
+        'no-op write when inconclusive. Captures prior_state so the change '
+        'is reversible via memex_lint_reverse_winner.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'finding_id': {
+                'type': 'string',
+                'description': 'UUID of the pending winner-proposal finding.',
+            },
+        },
+        'required': ['finding_id'],
+    },
+}
+
+
+LINT_REVERSE_WINNER_SCHEMA: dict[str, Any] = {
+    'name': 'memex_lint_reverse_winner',
+    'description': (
+        'Reverse a previously applied winner-proposal lint finding. Restores '
+        'the row(s) recorded under evidence.resolution.prior_state and '
+        'writes a paired audit row. The original finding stays resolved.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'finding_id': {
+                'type': 'string',
+                'description': (
+                    'UUID of the previously applied (status=resolved) '
+                    'winner-proposal finding to reverse.'
+                ),
+            },
+        },
+        'required': ['finding_id'],
+    },
+}
+
+
+def handle_lint_apply_winner(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_apply_winner."""
+    finding_id = args.get('finding_id')
+    if not finding_id:
+        return tool_error('memex_lint_apply_winner requires finding_id')
+    try:
+        result = run_sync(api.lint_apply_winner(str(finding_id)), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_lint_apply_winner failed: %s', e)
+        return tool_error(f'Lint apply failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_lint_reverse_winner(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_reverse_winner."""
+    finding_id = args.get('finding_id')
+    if not finding_id:
+        return tool_error('memex_lint_reverse_winner requires finding_id')
+    try:
+        result = run_sync(api.lint_reverse_winner(str(finding_id)), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_lint_reverse_winner failed: %s', e)
+        return tool_error(f'Lint reverse failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_lint_apply_winner'] = handle_lint_apply_winner
+HANDLERS['memex_lint_reverse_winner'] = handle_lint_reverse_winner
+ALL_SCHEMAS.append(LINT_APPLY_WINNER_SCHEMA)
+ALL_SCHEMAS.append(LINT_REVERSE_WINNER_SCHEMA)
+
+
+# --- External lint proposals (closed action catalogue) ---
+
+LIST_LINT_ACTIONS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_list_lint_actions',
+    'description': MEMEX_LIST_LINT_ACTIONS_DESC,
+    'parameters': {'type': 'object', 'properties': {}},
+}
+
+
+def handle_list_lint_actions(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.list_lint_actions (read-only)."""
+    try:
+        result = run_sync(api.list_lint_actions(), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_list_lint_actions failed: %s', e)
+        return tool_error(f'Lint action catalogue query failed: {e}')
+    return json.dumps(result, default=str)
+
+
+SUBMIT_LINT_PROPOSAL_SCHEMA: dict[str, Any] = {
+    'name': 'memex_submit_lint_proposal',
+    'description': MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'rule_name': {
+                'type': 'string',
+                'description': (
+                    'Caller-owned lowercase slug; internal rule names and the '
+                    'llm_ prefix are reserved.'
+                ),
+            },
+            'lint_type': {
+                'type': 'string',
+                'enum': ['structural', 'quality', 'governance', 'schema', 'routing'],
+            },
+            'target_type': {
+                'type': 'string',
+                'description': "Construct kind: 'note' | 'memory_unit' | 'entity' | 'kv' | ...",
+            },
+            'target_id': {
+                'type': 'string',
+                'description': 'UUID of the targeted construct (KV key for kv targets).',
+            },
+            'description': {
+                'type': 'string',
+                'description': 'Why the rule fired — shown to the reviewer (max 500 chars).',
+            },
+            'suggested_action': {
+                'type': 'string',
+                'description': 'Free-text remediation summary (max 500 chars).',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name. Omit to default to the session active write vault.'
+                ),
+            },
+            'evidence': {
+                'type': 'object',
+                'description': (
+                    'Supporting payload; keys resolution / rule_metadata / '
+                    'proposed_action are server-owned and rejected.'
+                ),
+            },
+            'proposed_action': {
+                'type': 'object',
+                'description': (
+                    '{action_name, params} from memex_list_lint_actions; must '
+                    'apply to target_type and pass its params schema.'
+                ),
+            },
+        },
+        'required': [
+            'rule_name',
+            'lint_type',
+            'target_type',
+            'target_id',
+            'description',
+            'suggested_action',
+        ],
+    },
+}
+
+
+def handle_submit_lint_proposal(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.submit_lint_proposals (one item).
+
+    Vault scoping mirrors handle_get_lint_flags: explicit vault_id wins,
+    otherwise the session vault binding; refuses without either.
+    """
+    raw_vault = args.get('vault_id')
+    resolved: str | None = None
+    try:
+        if raw_vault:
+            resolved_id = run_sync(api.resolve_vault_identifier(raw_vault), timeout=10.0)
+            resolved = str(resolved_id) if resolved_id else None
+        elif vault_id is not None:
+            resolved = str(vault_id)
+        if resolved is None:
+            return tool_error(
+                'memex_submit_lint_proposal requires a vault_id or an active session vault binding.'
+            )
+        proposal: dict[str, Any] = {
+            key: args[key]
+            for key in (
+                'rule_name',
+                'lint_type',
+                'target_type',
+                'target_id',
+                'description',
+                'suggested_action',
+            )
+            if key in args
+        }
+        proposal['vault_id'] = resolved
+        if args.get('evidence') is not None:
+            proposal['evidence'] = args['evidence']
+        if args.get('proposed_action') is not None:
+            proposal['proposed_action'] = args['proposed_action']
+        result = run_sync(api.submit_lint_proposals([proposal]), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_submit_lint_proposal failed: %s', e)
+        return tool_error(f'Lint proposal submission failed: {e}')
+    # Mirror the MCP guard (memex_mcp.server.memex_submit_lint_proposal): a
+    # 200-with-error-body envelope must NOT masquerade as success. Non-2xx
+    # responses already raise upstream (caught above); but a 200 carrying
+    # {'error': 'rate_limited'} or an empty/missing `results` list would
+    # otherwise be returned verbatim as a fake success. We submitted exactly
+    # one proposal, so a missing result row is never a normal success —
+    # surface the server's detail via the Hermes tool_error idiom instead.
+    if not isinstance(result, dict):
+        return tool_error(
+            f'Lint proposal submission failed: unexpected response (expected an '
+            f'object with a results list, got {type(result).__name__}).'
+        )
+    items = result.get('results')
+    if not isinstance(items, list) or not items:
+        error_detail = result.get('error') or result.get('detail') or result
+        return tool_error(f'Lint proposal submission failed: {error_detail}')
+    return json.dumps(items[0], default=str)
+
+
+HANDLERS['memex_list_lint_actions'] = handle_list_lint_actions
+HANDLERS['memex_submit_lint_proposal'] = handle_submit_lint_proposal
+ALL_SCHEMAS.append(LIST_LINT_ACTIONS_SCHEMA)
+ALL_SCHEMAS.append(SUBMIT_LINT_PROPOSAL_SCHEMA)
+
+
+# --- F9 ---  (filled by WS-locks)
+
+MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_reconsolidate',
+    'description': MEMEX_MEMORY_RECONSOLIDATE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reconsolidate.',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID — required for vault-scoped unit resolution.',
+            },
+        },
+        'required': ['entity_id', 'vault_id'],
+    },
+}
+
+
+MEMORY_CONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_consolidate',
+    'description': MEMEX_MEMORY_CONSOLIDATE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID to consolidate.',
+            },
+            'dry_run': {
+                'type': 'boolean',
+                'description': 'If true, preview without making changes.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
+
+def handle_memory_reconsolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_entity = _require(args, 'entity_id')
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity}')
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    try:
+        result = run_sync(api.reconsolidate_entity(entity_uuid, vault_uuid), timeout=120.0)
+    except Exception as e:
+        logger.warning('memex_memory_reconsolidate failed: %s', e)
+        return tool_error(f'Reconsolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_memory_consolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    dry_run = bool(args.get('dry_run', False))
+    try:
+        result = run_sync(api.consolidate_vault(vault_uuid, dry_run=dry_run), timeout=300.0)
+    except Exception as e:
+        logger.warning('memex_memory_consolidate failed: %s', e)
+        return tool_error(f'Consolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_memory_reconsolidate'] = handle_memory_reconsolidate
+HANDLERS['memex_memory_consolidate'] = handle_memory_consolidate
+ALL_SCHEMAS.extend([MEMORY_RECONSOLIDATE_SCHEMA, MEMORY_CONSOLIDATE_SCHEMA])
+
+
+# --- F32 --- (filled by WS-diagnostics)
+def handle_get_diagnostics_summary(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.get_diagnostics_summary."""
+    raw = args.get('vault_id')
+    if not raw and vault_id is None:
+        return tool_error('No vault specified and no session-bound vault.')
+
+    try:
+        if raw:
+            target = run_sync(api.resolve_vault_identifier(raw), timeout=10.0)
+        else:
+            target = vault_id
+        summary = run_sync(api.get_diagnostics_summary(target), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_get_diagnostics_summary failed: %s', e)
+        return tool_error(f'Diagnostics summary failed: {e}')
+
+    return json.dumps(summary)
+
+
+HANDLERS['memex_get_diagnostics_summary'] = handle_get_diagnostics_summary
+
+
+# --- F49 contradiction-graph timeline ---
+
+GET_UNIT_HISTORY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_unit_history',
+    'description': (
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID to start the walk from (root, depth=0).',
+            },
+            'max_depth': {
+                'type': 'integer',
+                'description': (
+                    'Maximum recursion depth (default: 10). Nodes reached at '
+                    'the cap are returned with truncated=True.'
+                ),
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from the `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
+
+
+def handle_get_unit_history(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot walk history.')
+
+    raw_depth = args.get('max_depth')
+    try:
+        max_depth = int(raw_depth) if raw_depth is not None else 10
+    except (TypeError, ValueError):
+        return tool_error(f'Invalid max_depth: {raw_depth!r}')
+    if max_depth < 0:
+        return tool_error('max_depth must be >= 0.')
+
+    try:
+        result = run_sync(
+            api.get_unit_history(uuid_obj, vault_id=vault_id, max_depth=max_depth),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_unit_history failed: %s', e)
+        return tool_error(f'Get unit history failed: {e}')
+
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    return json.dumps(result)
+
+
+HANDLERS['memex_get_unit_history'] = handle_get_unit_history
+ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
+
+
+# ============================================================
+# Procedural plane (procedure / strategy)
+#
+# The procedural plane is the agent's "how to do X" surface — distinct
+# from notes (long-form prose) and KV (preferences / bindings). It has
+# an identity anchor (kind, scope, verb, context) UNIQUE NULLS NOT
+# DISTINCT, two kinds (procedure, strategy), and scopes global /
+# project:<id> / app:<id> (NO user scope). Cases are NOTES
+# (memex_case_submit), not plane entries.
+#
+# The eight tools (7 procedural + memex_case_submit) mirror the MCP server. Vault_id is sourced from the
+# Hermes session binding (handler injects from `vault_id` arg); not
+# exposed in the schema since the agent never names a vault directly.
+# ============================================================
+
+_VALID_PROCEDURAL_KINDS: tuple[str, ...] = ('procedure', 'strategy')
+
+
+def _validate_kind(raw: Any) -> str | None:
+    if not isinstance(raw, str):
+        return f'kind must be a string, got {type(raw).__name__}'
+    if raw not in _VALID_PROCEDURAL_KINDS:
+        return f'Invalid kind {raw!r}. Valid values: {" | ".join(_VALID_PROCEDURAL_KINDS)}'
+    return None
+
+
+PROC_GET_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get',
+    'description': MEMEX_PROCEDURAL_GET_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entry_id': {
+                'type': 'string',
+                'description': 'Entry UUID.',
+            },
+        },
+        'required': ['entry_id'],
+    },
+}
+
+
+def handle_procedural_get(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_id = _require(args, 'entry_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entry_uuid = UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid entry UUID: {raw_id}')
+    try:
+        result = run_sync(
+            api.procedural_get(entry_uuid, vault_id=vault_id),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get failed: %s', e)
+        return tool_error(f'Procedural get failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_GET_BY_IDENTITY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get_by_identity',
+    'description': MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Entry kind.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'One of: "global", "project:<id>", "app:<id>".',
+            },
+            'verb': {'type': 'string', 'description': 'Verb — required for both kinds.'},
+            'context': {
+                'type': 'string',
+                'description': 'Required for procedure; MUST be omitted for strategy.',
+            },
+        },
+        'required': ['kind', 'scope', 'verb'],
+    },
+}
+
+
+def handle_procedural_get_by_identity(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        kind = _require(args, 'kind')
+        scope = _require(args, 'scope')
+    except ValueError as e:
+        return tool_error(str(e))
+    if (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+    if vault_id is None:
+        return tool_error('No vault bound to this Hermes session; cannot probe identity anchor.')
+
+    verb = args.get('verb')
+    context = args.get('context')
+    if not verb:
+        return tool_error('verb is required (both procedure and strategy anchor on it).')
+    if kind == 'procedure' and not context:
+        return tool_error('kind="procedure" anchors require context.')
+    if kind == 'strategy' and context:
+        return tool_error(
+            'kind="strategy" anchors MUST omit context — a strategy groups all '
+            'procedures sharing (scope, verb).'
+        )
+
+    try:
+        result = run_sync(
+            api.procedural_get_by_identity(
+                kind=str(kind),
+                scope=str(scope),
+                verb=args.get('verb'),
+                context=args.get('context'),
+                vault_id=vault_id,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get_by_identity failed: %s', e)
+        return tool_error(f'Procedural get_by_identity failed: {e}')
+    if result is None:
+        return json.dumps(None)
+    return _dump_dto(result)
+
+
+PROC_SEARCH_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_search',
+    'description': MEMEX_PROCEDURAL_SEARCH_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'query': {'type': 'string', 'description': 'Search query text.'},
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Optional kind filter.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'Optional scope filter (global / project:<id> / app:<id>).',
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['draft', 'published', 'deprecated', 'all'],
+                'description': 'Default "published" (drafts hidden). Pass "all" to include everything.',
+            },
+            'top_k': {'type': 'integer', 'description': 'Max hits (default 10, max 100).'},
+            'include_pin_chain': {
+                'type': 'boolean',
+                'description': 'Union in pinned entries from related contexts.',
+            },
+            'pin_contexts': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Contexts whose pinned entries to include (when include_pin_chain=true).',
+            },
+            'bm25_weight': {
+                'type': 'number',
+                'description': 'BM25 fusion weight (0-1); vector weight is 1 - this.',
+            },
+        },
+        'required': ['query'],
+    },
+}
+
+
+def handle_procedural_search(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        query = _require(args, 'query')
+    except ValueError as e:
+        return tool_error(str(e))
+    kind = args.get('kind')
+    if kind is not None and (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+
+    from memex_common.procedural_schemas import ProceduralSearchRequest
+
+    # Pydantic 2 + ``extra='forbid'`` rejects ``None`` for fields with
+    # non-None defaults (``bool``, ``float``, ``list``). Build the
+    # request conditionally — only set fields the agent actually
+    # supplied, and use the DTO's defaults for the rest.
+    req_kwargs: dict[str, Any] = {
+        'query': str(query),
+        'status': args.get('status', 'published'),  # type: ignore[arg-type]
+    }
+    if kind is not None:
+        req_kwargs['kind'] = kind  # type: ignore[assignment]
+    if args.get('scope') is not None:
+        req_kwargs['scope'] = args['scope']
+    if args.get('top_k') is not None:
+        req_kwargs['limit'] = int(args['top_k'])
+    if args.get('include_pin_chain') is not None:
+        req_kwargs['include_pin_chain'] = bool(args['include_pin_chain'])
+    if args.get('pin_contexts') is not None:
+        req_kwargs['pin_contexts'] = list(args['pin_contexts'])
+    if args.get('bm25_weight') is not None:
+        req_kwargs['bm25_weight'] = float(args['bm25_weight'])
+    if vault_id is not None:
+        req_kwargs['vault_id'] = vault_id
+
+    try:
+        request = ProceduralSearchRequest(**req_kwargs)
+    except Exception as e:
+        return tool_error(f'Invalid search request: {e}')
+
+    try:
+        result = run_sync(api.procedural_search(request), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_procedural_search failed: %s', e)
+        return tool_error(f'Procedural search failed: {e}')
+    return _dump_dto(result)
+
+
+CASE_SUBMIT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_case_submit',
+    'description': MEMEX_CASE_SUBMIT_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'title': {'type': 'string', 'description': 'Short title (max 256 chars).'},
+            'trigger': {
+                'type': 'string',
+                'description': (
+                    'What kicked the episode off — embedded for case↔procedure matching. REQUIRED.'
+                ),
+            },
+            'situation': {
+                'type': 'string',
+                'description': 'Context going in (prior state, constraints).',
+            },
+            'actions': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Ordered actions taken, one step per item.',
+            },
+            'outcome': {
+                'type': 'string',
+                'enum': ['success', 'failure', 'mixed'],
+                'description': 'How the episode ended.',
+            },
+            'lesson': {
+                'type': 'string',
+                'description': 'What to do differently / confirm next time.',
+            },
+            'project_id': {
+                'type': 'string',
+                'description': 'Provenance — recorded in doc_metadata, NOT a vault binding.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': (
+                    'Identity scope for the case: "global" | "project:<id>" | '
+                    '"app:<id>". REQUIRED — the agent must reason about where '
+                    'this episode belongs.'
+                ),
+            },
+            'scope_reasoning': {
+                'type': 'string',
+                'description': ('One-sentence justification for the chosen scope. REQUIRED.'),
+            },
+            'case_of': {
+                'type': 'string',
+                'description': (
+                    'UUID of the procedural entry this case instantiates '
+                    '(explicit assignment — supply it whenever you know it; '
+                    'skips the assignment judge).'
+                ),
+            },
+            'submitted_by': {
+                'type': 'string',
+                'description': 'Submitting app/agent identity (provenance).',
+            },
+            'tags': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Optional tags for searchability.',
+            },
+        },
+        'required': ['title', 'trigger', 'outcome', 'scope', 'scope_reasoning'],
+    },
+}
+
+
+def handle_case_submit(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        title = _require(args, 'title')
+        trigger = _require(args, 'trigger')
+        outcome = _require(args, 'outcome')
+        scope = _require(args, 'scope')
+        scope_reasoning = _require(args, 'scope_reasoning')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    from memex_common.procedural_schemas import CaseSubmit
+
+    raw_case_of = args.get('case_of')
+    case_of_uuid: UUID | None = None
+    if raw_case_of:
+        try:
+            case_of_uuid = UUID(str(raw_case_of))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid case_of UUID: {raw_case_of}')
+
+    # CaseSubmit uses ``extra='forbid'`` and non-None defaults — build the
+    # kwargs conditionally (same pattern as handle_procedural_search).
+    submit_kwargs: dict[str, Any] = {
+        'title': str(title),
+        'trigger': str(trigger),
+        'outcome': outcome,
+        'scope': str(scope),
+        'scope_reasoning': str(scope_reasoning),
+    }
+    if args.get('situation') is not None:
+        submit_kwargs['situation'] = str(args['situation'])
+    if args.get('actions') is not None:
+        submit_kwargs['actions'] = [str(a) for a in args['actions']]
+    if args.get('lesson') is not None:
+        submit_kwargs['lesson'] = str(args['lesson'])
+    if args.get('project_id') is not None:
+        submit_kwargs['project_id'] = str(args['project_id'])
+    if case_of_uuid is not None:
+        submit_kwargs['case_of'] = case_of_uuid
+    if args.get('submitted_by') is not None:
+        submit_kwargs['submitted_by'] = str(args['submitted_by'])
+    if args.get('tags') is not None:
+        submit_kwargs['tags'] = [str(t) for t in args['tags']]
+
+    try:
+        payload = CaseSubmit(**submit_kwargs)
+    except Exception as e:
+        return tool_error(f'Invalid case submission: {e}')
+
+    try:
+        result = run_sync(api.case_submit(payload), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_case_submit failed: %s', e)
+        return tool_error(f'Case submit failed: {e}')
+    return _dump_dto(result)
+
+
+def _dump_dto(result: Any) -> str:
+    """Serialize a Pydantic DTO (or dict / None) to JSON. Mirrors the
+    pattern used by other handlers — ``model_dump(mode='json')`` when
+    available, otherwise fall back to ``str()`` so handlers don't crash
+    on schema-drifted test mocks."""
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    if isinstance(result, (list, dict)):
+        return json.dumps(result, default=str)
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_procedural_get'] = handle_procedural_get
+HANDLERS['memex_procedural_get_by_identity'] = handle_procedural_get_by_identity
+HANDLERS['memex_procedural_search'] = handle_procedural_search
+HANDLERS['memex_case_submit'] = handle_case_submit
+ALL_SCHEMAS.append(PROC_GET_SCHEMA)
+ALL_SCHEMAS.append(PROC_GET_BY_IDENTITY_SCHEMA)
+ALL_SCHEMAS.append(PROC_SEARCH_SCHEMA)
+ALL_SCHEMAS.append(CASE_SUBMIT_SCHEMA)

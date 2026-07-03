@@ -44,10 +44,9 @@ memex memory search "What are the key points?"
 | `memex kv` | Key-value store operations (get, write, search, list). |
 | `memex server` | Start, stop, and check status of the API server. |
 | `memex mcp` | Run the MCP server (stdio or SSE transport). |
-| `memex system` | View system statistics and token usage. |
+| `memex stats` | View system statistics and token usage. |
 | `memex config` | Show current configuration or initialize a config file. |
 | `memex database` | Database migrations via Alembic (upgrade, downgrade, history, stamp, revision). |
-| `memex setup` | Configure Claude Code integration (MCP, hooks, skills). |
 | `memex report-bug` | Open a pre-filled GitHub issue with system info. |
 
 ## Global Options

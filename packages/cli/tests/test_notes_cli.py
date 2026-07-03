@@ -31,6 +31,7 @@ def test_note_list(runner, mock_api, mock_config, monkeypatch):
         before=None,
         template=None,
         date_field='created_at',
+        slim=False,
     )
 
 
@@ -50,6 +51,7 @@ def test_note_list_with_vault(runner, mock_api, mock_config, monkeypatch):
         before=None,
         template=None,
         date_field='created_at',
+        slim=False,
     )
 
 
@@ -73,6 +75,85 @@ def test_note_list_invalid_date_by_rejected(runner, mock_api, mock_config, monke
     result = runner.invoke(note_app, ['list', '--date-by', 'banana'], obj=mock_config)
     assert result.exit_code != 0
     assert 'Invalid --date-by' in result.stdout
+
+
+def test_note_list_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """--format ids prints one note id per line and nothing else."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(nid)
+    assert 'My Note' not in result.stdout
+
+
+def test_note_list_format_line(runner, mock_api, mock_config, monkeypatch):
+    """--format line prints one descriptive line per note (title + id)."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'My Note' in result.stdout
+    assert str(nid) in result.stdout
+
+
+def test_note_list_json_flag_overrides_format(runner, mock_api, mock_config, monkeypatch):
+    """--json wins over --format ids (shorthand precedence)."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'ids', '--json'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data[0]['id'] == str(nid)
+
+
+def test_note_search_format_line(runner, mock_api, mock_config, monkeypatch):
+    """note search --format line prints score + title + id per result."""
+    from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
+
+    nid = uuid4()
+    mock_api.search_notes.return_value = [
+        NoteSearchResult(
+            note_id=nid,
+            metadata={'name': 'Found Note'},
+            summaries=[BlockSummaryDTO(topic='a topic')],
+            score=0.42,
+        )
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['search', 'query', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'Found Note' in result.stdout
+    assert str(nid) in result.stdout
+
+
+def test_note_search_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """note search --format ids prints one note id per line."""
+    from memex_common.schemas import NoteSearchResult
+
+    nid = uuid4()
+    mock_api.search_notes.return_value = [
+        NoteSearchResult(note_id=nid, metadata={'name': 'Found Note'}, score=0.42)
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['search', 'query', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(nid)
+    assert 'Found Note' not in result.stdout
 
 
 def test_note_view(runner, mock_api, monkeypatch):
@@ -130,7 +211,7 @@ def test_note_page_index_invalid_uuid(runner, mock_api, monkeypatch):
     monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(note_app, ['page-index', 'not-a-uuid'])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert 'Invalid UUID' in result.stdout
 
 
@@ -204,22 +285,19 @@ def test_add_note_file_not_exists(runner):
 
 
 def test_add_note_with_vault(runner, mock_api, mock_config, monkeypatch):
-    captured_config = None
-
-    def mock_get_api_context(config):
-        nonlocal captured_config
-        captured_config = config
-        return mock_api
-
     mock_api.ingest.return_value = IngestResponse(
         status='success', note_id='test-uuid', unit_ids=[uuid4()]
     )
-    monkeypatch.setattr('memex_cli.notes.get_api_context', mock_get_api_context)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(note_app, ['add', 'test', '--vault', 'MyVault'], obj=mock_config)
     assert result.exit_code == 0
-    assert captured_config is not None
-    assert captured_config.vault.active == 'MyVault'
+    mock_api.ingest.assert_called_once()
+    note = mock_api.ingest.call_args[0][0]
+    assert isinstance(note, NoteCreateDTO)
+    assert note.vault_id == 'MyVault'
+    # The shared config object is NOT mutated as a side-effect.
+    assert mock_config.vault.active is None
 
 
 def test_add_note_with_key(runner, mock_api, mock_config, monkeypatch):
@@ -604,12 +682,15 @@ def test_note_append_requires_some_identifier(runner, mock_api, mock_config, mon
     mock_api.append_to_note.assert_not_called()
 
 
-def test_note_append_key_without_vault_errors(runner, mock_api, mock_config, monkeypatch):
-    """`--key` requires `--vault`."""
+def test_note_append_key_without_vault_uses_default(runner, mock_api, mock_config, monkeypatch):
+    """`--key` without `--vault` uses the default write vault."""
+    mock_api.append_to_note.return_value = _append_response(uuid4(), uuid4())
     monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
     result = runner.invoke(note_app, ['append', '--key', 'k', '--delta', 'x'], obj=mock_config)
-    assert result.exit_code != 0
-    mock_api.append_to_note.assert_not_called()
+    assert result.exit_code == 0, result.stdout
+    request = mock_api.append_to_note.call_args.args[0]
+    assert request.note_key == 'k'
+    assert request.vault_id == mock_config.write_vault
 
 
 def test_note_append_rejects_both_delta_and_file(

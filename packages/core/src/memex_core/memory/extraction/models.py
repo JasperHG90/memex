@@ -10,10 +10,28 @@ from uuid import UUID
 
 import tiktoken
 from sqlmodel import SQLModel, Field
-from pydantic import BaseModel, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+
+from memex_core.memory.extraction.pipeline.asset_parser import extract_image_refs
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
+from memex_common.schemas import (
+    ClaimTypeLiteral,
+    IntentClass,
+    IntentLiteral,
+    RiskClass,
+    RiskLiteral,
+    coerce_claim_type as _shared_coerce_claim_type,
+    coerce_intent_class as _shared_coerce_intent_class,
+    coerce_risk_class as _shared_coerce_risk_class,
+)
 
 DATE_REGEX = r'^-?\d{4,}-\d{2}-\d{2}$'
 
@@ -148,6 +166,16 @@ class TOCNode(BaseModel):
         None,
         description="The hash ID of the Block this section's content was merged into.",
     )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def assets(self) -> list[dict[str, Any]]:
+        """Embedded image refs parsed from this section's content.
+
+        Derived from ``content`` so the page-index thin tree (which excludes
+        ``content``) still carries per-section assets after ``model_dump``.
+        """
+        return extract_image_refs(self.content or '')
 
     @property
     def content_hash(self) -> str | None:
@@ -384,6 +412,31 @@ class BaseFact(SQLModel):
         return fact_type.value
 
 
+class ClaimTarget(BaseModel):
+    """Target of an explicit resolution / contradiction claim.
+
+    ``target_topic`` is a short noun-phrase paraphrase of what the new fact
+    is resolving or contradicting (LLM-produced). ``target_entity_ids`` is
+    populated downstream after entity resolution — the LLM leaves it empty.
+    """
+
+    target_topic: str | None = Field(
+        default=None,
+        description=(
+            'Short noun-phrase paraphrase of what the claim resolves or '
+            "contradicts (e.g. 'the note-search bug'). LLM-produced."
+        ),
+    )
+    target_entity_ids: list[UUID] = Field(
+        default_factory=list,
+        description=(
+            'UUIDs of entities the claim targets. Populated by the '
+            'extraction engine after entity resolution; the LLM leaves '
+            'this empty.'
+        ),
+    )
+
+
 class RawFact(BaseFact):
     """A single fact extracted from text by an LLM."""
 
@@ -435,17 +488,67 @@ class RawFact(BaseFact):
         description="'dated' = specific datable occurrence (set occurred dates), "
         "'conversation' = general info (no occurred dates)",
     )
+    intent_class: IntentLiteral = Field(
+        default='durable',
+        description=(
+            'Lifecycle durability — how long the fact stays relevant '
+            '(NOT how important it feels). The deciding question is: '
+            'WILL THIS FACT STILL BE TRUE / RELEVANT IN 4+ WEEKS? '
+            'The cue words below are signals, not absolute rules; the '
+            'underlying semantic content always wins.\n'
+            "- 'permanent' (never-decay): identity, long-standing "
+            'preferences, values. Signal phrases: "I am", "I prefer", '
+            '"I always", "I never", "my favorite", "my goal", "I work as".\n'
+            "- 'durable' (DEFAULT, multi-week relevance): decisions, "
+            'ongoing project state, role assignments, relationships, '
+            'announcements that establish persistent state. Signal '
+            'phrases: "we decided", "the team owns", "we use", "the '
+            'lead is", "Project X uses", "today we announced".\n'
+            "- 'ephemeral' (days-to-weeks): short-lived tasks, deadlines, '"
+            'transient blockers, in-flight work. Signal phrases: "by '
+            'EOD", "blocked by", "right now", "this sprint" — but only '
+            'when the fact itself decays (a one-day blocker), not when '
+            'a "today" prefix is on a durable announcement.\n'
+            'When in doubt, choose durable. Never use ephemeral for '
+            'identity / preference / decision facts even if a transient '
+            'cue word appears in the surrounding text.'
+        ),
+    )
+    risk_class: RiskLiteral = Field(
+        default='none',
+        description='Sensitivity. '
+        "'none' = public-safe (default). "
+        "'sensitive' = flagged for review. "
+        "'private' = excluded from default retrieval (PII, medical). "
+        "'safety' = recorded but passed through (deferred blocking).",
+    )
+    claim_type: ClaimTypeLiteral | None = Field(
+        default=None,
+        description=(
+            'Explicit corrective-claim signal. Only set when the fact '
+            'explicitly negates / supersedes / resolves a PRIOR claim. '
+            'Do NOT set on general statements or first-time observations. '
+            "'resolution' = the fact resolves or decides a prior question "
+            "or open issue. 'contradiction' = the fact directly disagrees "
+            'with a prior claim. Default null = no explicit claim signal.'
+        ),
+    )
+    claim_target: ClaimTarget | None = Field(
+        default=None,
+        description=(
+            'Topic + entity targets for the claim. REQUIRED when claim_type '
+            "is set; the LLM populates 'target_topic' as a short noun-phrase "
+            "paraphrase ('the note-search bug') and leaves 'target_entity_ids' "
+            'empty — the extraction engine fills entity IDs downstream.'
+        ),
+    )
     occurred_start: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
-        "WHEN the event happened (ISO timestamp). Only for fact_kind='dated'. Leave null for conversations. If a `date "
-        "is mentioned in 'when', you **MUST** convert it here.",
+        description='ISO 8601 date (YYYY-MM-DD). Only for fact_kind="dated". Leave null for conversations.',
     )
     occurred_end: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
-        'WHEN the event ended (ISO timestamp). Only for dated events with duration. Leave null for conversations. '
-        "If an **end date** is mentioned in 'when', you **MUST** convert it here.",
+        description='ISO 8601 end date. Only for dated events with duration. Leave null otherwise.',
     )
 
     @field_serializer('fact_kind')
@@ -459,6 +562,41 @@ class RawFact(BaseFact):
         if v in ('assistant', 'experience'):
             return 'event'
         return v
+
+    @field_validator('intent_class', mode='before')
+    @classmethod
+    def coerce_intent_class(cls, v: object) -> str:
+        # Delegated to the shared utility in ``memex_common.schemas`` —
+        # single source of truth for the coercion across RawFact + ExtractedFact.
+        return _shared_coerce_intent_class(v)
+
+    @field_validator('risk_class', mode='before')
+    @classmethod
+    def coerce_risk_class(cls, v: object) -> str:
+        return _shared_coerce_risk_class(v)
+
+    @field_validator('claim_type', mode='before')
+    @classmethod
+    def coerce_claim_type(cls, v: object) -> str | None:
+        return _shared_coerce_claim_type(v)
+
+    @model_validator(mode='after')
+    def _enforce_claim_target_with_claim_type(self) -> 'RawFact':
+        """Drop ``claim_target`` when ``claim_type`` is None; default a target
+        when ``claim_type`` is set but ``claim_target`` was omitted.
+
+        The extraction LLM occasionally produces a ``claim_type`` without a
+        matching ``claim_target`` or vice-versa. Be permissive (extraction
+        must never fail on a classification mishap) but coherent: an
+        explicit claim always carries a (possibly empty-topic) target so
+        the downstream contradiction branch has somewhere to attach entity
+        IDs.
+        """
+        if self.claim_type is None:
+            self.claim_target = None
+        elif self.claim_target is None:
+            self.claim_target = ClaimTarget()
+        return self
 
     @field_validator('occurred_start', 'occurred_end')
     @classmethod
@@ -486,8 +624,9 @@ class RawFact(BaseFact):
         'What | When | Where | Involving: Who | Why'
         """
         parts = [self.what]
-        if self.when and str(self.when).upper() != 'N/A':
-            parts.append(f'When: {self.when}')
+        when_value = self.occurred_start or self.when
+        if when_value and str(when_value).upper() != 'N/A':
+            parts.append(f'When: {when_value}')
         if self.where and str(self.where).upper() != 'N/A':
             parts.append(f'Where: {self.where}')
         if self.who and str(self.who).upper() != 'N/A':
@@ -552,6 +691,59 @@ class ExtractedFact(BaseFact):
     where: str | None = Field(
         default=None, description='Location information associated with the fact.'
     )
+    intent_class: IntentLiteral = Field(
+        default='durable',
+        description='Write-time lifecycle class produced by the extraction LLM '
+        '(permanent | durable | ephemeral). Coerced to default on invalid input.',
+    )
+    risk_class: RiskLiteral = Field(
+        default='none',
+        description='Write-time risk class produced by the extraction LLM '
+        '(none | sensitive | private | safety). Coerced to default on invalid input.',
+    )
+    claim_type: ClaimTypeLiteral | None = Field(
+        default=None,
+        description=(
+            'Explicit corrective-claim signal carried through from RawFact. '
+            'None when the fact is not an explicit resolution/contradiction.'
+        ),
+    )
+    claim_target: ClaimTarget | None = Field(
+        default=None,
+        description=(
+            'Topic + entity targets for the claim. Required when claim_type '
+            'is set; coerced to None when claim_type is None.'
+        ),
+    )
+
+    # Mirror RawFact's default-on-fail coercion so direct construction with
+    # an invalid string degrades gracefully.
+
+    @field_validator('intent_class', mode='before')
+    @classmethod
+    def coerce_intent_class(cls, v: object) -> str:
+        # Delegates to the shared utility — same coercion logic as RawFact,
+        # so a future addition to IntentClass propagates to both validators
+        # without manual lockstep.
+        return _shared_coerce_intent_class(v)
+
+    @field_validator('risk_class', mode='before')
+    @classmethod
+    def coerce_risk_class(cls, v: object) -> str:
+        return _shared_coerce_risk_class(v)
+
+    @field_validator('claim_type', mode='before')
+    @classmethod
+    def coerce_claim_type(cls, v: object) -> str | None:
+        return _shared_coerce_claim_type(v)
+
+    @model_validator(mode='after')
+    def _enforce_claim_target_with_claim_type(self) -> 'ExtractedFact':
+        if self.claim_type is None:
+            self.claim_target = None
+        elif self.claim_target is None:
+            self.claim_target = ClaimTarget()
+        return self
 
 
 class ProcessedFact(SQLModel):
@@ -607,6 +799,26 @@ class ProcessedFact(SQLModel):
         default_factory=list, description='Tags for categorization or filtering.'
     )
 
+    intent_class: IntentClass = Field(
+        default=IntentClass.DURABLE,
+        description='Write-time lifecycle class (permanent | durable | ephemeral).',
+    )
+    risk_class: RiskClass = Field(
+        default=RiskClass.NONE,
+        description='Write-time risk class (none | sensitive | private | safety).',
+    )
+    claim_type: ClaimTypeLiteral | None = Field(
+        default=None,
+        description=(
+            'Explicit corrective-claim signal. None when the fact is not an '
+            'explicit resolution/contradiction.'
+        ),
+    )
+    claim_target: ClaimTarget | None = Field(
+        default=None,
+        description='Topic + entity targets for the claim; None when claim_type is None.',
+    )
+
     @field_validator('occurred_start', 'occurred_end', 'mentioned_at')
     @classmethod
     def ensure_timezone(cls, v: dt.datetime | None) -> dt.datetime | None:
@@ -653,4 +865,8 @@ class ProcessedFact(SQLModel):
             chunk_id=chunk_id,
             content_index=extracted_fact.content_index,
             vault_id=extracted_fact.vault_id,  # Explicitly pass vault_id
+            intent_class=IntentClass(extracted_fact.intent_class),
+            risk_class=RiskClass(extracted_fact.risk_class),
+            claim_type=extracted_fact.claim_type,
+            claim_target=extracted_fact.claim_target,
         )

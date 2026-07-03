@@ -5,7 +5,6 @@ Tests marked @pytest.mark.llm require GOOGLE_API_KEY and use a real LLM.
 Tests without that marker use mocked LLM responses but real DB operations.
 """
 
-import asyncio
 import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -148,9 +147,6 @@ async def test_enrichment_persists_to_database(session: AsyncSession, memex_conf
             memory_index=1, enriched_tags=['eu-regulation'], enriched_keywords=['mandate']
         ),
     ]
-
-    db_lock = asyncio.Lock()
-
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
         return_value=mock_result,
@@ -160,7 +156,6 @@ async def test_enrichment_persists_to_database(session: AsyncSession, memex_conf
             entity_summary='Compliance-driven auth middleware rewrite.',
             final_obs=[obs],
             recent_memories=units,
-            db_lock=db_lock,
         )
 
     # Commit to DB (this is what reflect_batch does)
@@ -221,9 +216,6 @@ async def test_enrichment_accumulates_across_cycles_in_db(session: AsyncSession,
             ),
         ],
     )
-
-    db_lock = asyncio.Lock()
-
     # Cycle 1: add 'compliance' tag
     mock_result_1 = MagicMock()
     mock_result_1.enrichments = [
@@ -239,7 +231,6 @@ async def test_enrichment_accumulates_across_cycles_in_db(session: AsyncSession,
             entity_summary='Compliance.',
             final_obs=[obs],
             recent_memories=units,
-            db_lock=db_lock,
         )
 
     await session.commit()
@@ -266,7 +257,6 @@ async def test_enrichment_accumulates_across_cycles_in_db(session: AsyncSession,
             entity_summary='Compliance + security audit.',
             final_obs=[obs],
             recent_memories=units,
-            db_lock=db_lock,
         )
 
     await session.commit()
@@ -325,9 +315,6 @@ async def test_enrichment_loads_missing_units_from_db(session: AsyncSession, mem
             ),
         ],
     )
-
-    db_lock = asyncio.Lock()
-
     mock_result = MagicMock()
     mock_result.enrichments = [
         EnrichedTagSet(memory_index=0, enriched_tags=['tag-alpha'], enriched_keywords=[]),
@@ -343,7 +330,6 @@ async def test_enrichment_loads_missing_units_from_db(session: AsyncSession, mem
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[units[0]],  # Only first unit in memory
-            db_lock=db_lock,
         )
 
     await session.commit()
@@ -603,8 +589,6 @@ async def test_enrichment_disabled_no_metadata_written(session: AsyncSession, me
 
     mock_result = MagicMock()
     mock_result.enrichments = []  # LLM returns nothing
-
-    db_lock = asyncio.Lock()
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
         return_value=mock_result,
@@ -614,7 +598,6 @@ async def test_enrichment_disabled_no_metadata_written(session: AsyncSession, me
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=units,
-            db_lock=db_lock,
         )
 
     await session.commit()

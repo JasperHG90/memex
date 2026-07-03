@@ -4,12 +4,12 @@ import asyncio
 import importlib
 import json
 import logging
+from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
+from typing import Annotated, Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-import click
 import httpx
 import typer
 from box import Box
@@ -25,6 +25,60 @@ logger = logging.getLogger('memex_cli')
 
 T = TypeVar('T')
 
+VaultOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+]
+
+VaultFilterOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Filter to one vault by name or UUID. Omit for all scopes.'),
+]
+
+VaultScopeOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Vault scope (name or UUID). Omit for the global scope.'),
+]
+
+
+class ListFormat(str, Enum):
+    """How a list/search command renders its results — one axis, four views.
+
+    This replaces the old pile of overlapping boolean flags (``--minimal``,
+    ``--compact``, ``--json``) which modelled a single choice as several
+    independent switches. ``--slim`` is a SEPARATE axis (it controls how much
+    is fetched, not how it is printed) and stays its own option.
+    """
+
+    table = 'table'  # rich table — human default
+    ids = 'ids'  # one id per line — pipe-friendly
+    line = 'line'  # one compact line per item
+    json = 'json'  # structured JSON for downstream tooling
+
+
+ListFormatOption = Annotated[
+    ListFormat,
+    typer.Option(
+        '--format',
+        '-f',
+        help=(
+            'Output view: table (default, human), ids (one id per line), '
+            'line (one line per item), json (structured).'
+        ),
+    ),
+]
+
+
+def resolve_list_format(output_format: ListFormat, json_flag: bool) -> ListFormat:
+    """Resolve the effective list format.
+
+    ``--json`` is kept as a documented shorthand for ``--format json`` (it is
+    the universal flag across every other command in the CLI); when set it
+    wins over ``--format``.
+    """
+    return ListFormat.json if json_flag else output_format
+
+
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {
     'vault': 'memex_cli.vaults:app',
@@ -32,14 +86,18 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'entity': 'memex_cli.entities:app',
     'note': 'memex_cli.notes:app',
     'kv': 'memex_cli.kv:app',
-    'system': 'memex_cli.stats:app',
+    'lint': 'memex_cli.lint:app',
+    'stats': 'memex_cli.stats:app',
     'config': 'memex_cli.config:app',
     'server': 'memex_cli.server:app',
     'database': 'memex_cli.db:app',
     'mcp': 'memex_cli.mcp:app',
     'briefing': 'memex_cli.session:app',
-    'setup': 'memex_cli.setup_claude_code:app',
     'report-bug': 'memex_cli.report_bug:app',
+    'diagnostics': 'memex_cli.diagnose:app',
+    'agent-surface': 'memex_cli.agent_surface:app',
+    'procedure': 'memex_cli.procedural:app',
+    'case': 'memex_cli.procedural:case_app',
 }
 
 
@@ -68,12 +126,12 @@ class LazyTyperGroup(TyperGroup):
     Adapted from memex_core.
     """
 
-    def list_commands(self, ctx: click.Context) -> list[str]:
+    def list_commands(self, ctx: Any) -> list[str]:
         """List available commands, including lazy-loaded ones."""
         base = super().list_commands(ctx)
         return list(sorted(base + list(LAZY_SUBCOMMANDS.keys())))
 
-    def get_command(self, ctx: click.Context, cmd_name: str) -> Any | None:
+    def get_command(self, ctx: Any, cmd_name: str) -> Any | None:
         """Get a command, loading it if it's in the lazy map."""
         if cmd_name in LAZY_SUBCOMMANDS:
             return self._lazy_load(cmd_name)
@@ -91,12 +149,13 @@ class LazyTyperGroup(TyperGroup):
             # Check if this is due to missing optional dependencies
             if cmd_name == 'server':
                 console.print('[bold red]Error:[/bold red] Missing dependency for server.')
-                console.print('Install with: [cyan]uv add memex-cli[server][/cyan]')
+                console.print("Install with: [cyan]uv pip install 'memex-cli\\[server]'[/cyan]")
                 raise typer.Exit(code=1)
             elif cmd_name == 'mcp':
                 console.print('[bold red]Error:[/bold red] Missing dependency for MCP.')
-                console.print('Install with: [cyan]uv add memex-cli[mcp][/cyan]')
+                console.print("Install with: [cyan]uv pip install 'memex-cli\\[mcp]'[/cyan]")
                 raise typer.Exit(code=1)
+            console.print(f"[bold red]Error:[/bold red] Failed to load command '{cmd_name}': {e}")
             logger.error(f"Failed to load command '{cmd_name}': {e}")
             raise typer.Exit(code=1) from e
 
@@ -114,10 +173,47 @@ def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., A
     return wrapper
 
 
+async def resolve_active_vault(api: RemoteMemexAPI, config: MemexConfig, vault: str | None) -> UUID:
+    """Resolve a --vault value (or the configured active vault) to a vault UUID."""
+    effective_vault = vault if vault is not None else config.write_vault
+    return await api.resolve_vault_identifier(effective_vault)
+
+
+def normalize_project_id(value: str | None) -> str | None:
+    """Normalize a project-id argument for scoping surfaces.
+
+    The canonical project id is the raw id (e.g. `github.com/owner/repo`).
+    Callers sometimes pass the full scope form (`project:github.com/owner/repo`)
+    because that is how it appears in pin contexts and KV namespaces. Strip
+    a leading `project:` prefix so both forms resolve to the same value and
+    avoid a doubled prefix like `project:project:...`.
+    """
+    if value is None:
+        return None
+    return value.removeprefix('project:') or None
+
+
+def emit_json(data: Any) -> None:
+    """Print data as formatted JSON, serializing non-JSON types via str()."""
+    console.print_json(json.dumps(data, default=str))
+
+
 def handle_api_error(e: Exception) -> NoReturn:
     """
     Handle exceptions from RemoteMemexAPI and provide helpful feedback.
     """
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+        console.print('[bold red]Error:[/bold red] Could not reach the Memex server.')
+        console.print(
+            '  - Is it running? Start it with: [bold cyan]memex server start --daemon[/bold cyan]'
+        )
+        console.print('  - Check the configured URL: [bold cyan]memex config show[/bold cyan]')
+        raise typer.Exit(1)
+    if isinstance(e, (httpx.ReadTimeout, httpx.PoolTimeout)):
+        console.print('[bold red]Error:[/bold red] The Memex server did not respond in time.')
+        console.print('  - The operation may still be running on the server; retry shortly.')
+        console.print('  - Check server health: [bold cyan]memex server status[/bold cyan]')
+        raise typer.Exit(1)
     if isinstance(e, httpx.HTTPStatusError):
         try:
             detail = e.response.json().get('detail', str(e))
@@ -155,7 +251,7 @@ def parse_uuid(value: str, label: str = 'ID') -> UUID:
         return UUID(value)
     except ValueError:
         console.print(f'[red]Invalid UUID for {label}: {value}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
 
 def merge_overrides(config_data: dict[str, Any], overrides: list[str]) -> dict[str, Any]:

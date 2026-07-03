@@ -4,6 +4,186 @@ import httpx
 from unittest.mock import MagicMock
 
 
+def test_vault_list_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """vault list --format ids prints one vault name per line."""
+    v = MagicMock()
+    v.name = 'personal'
+    mock_api.list_vaults.return_value = [v]
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['list', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'personal' in result.stdout
+
+
+def test_vault_list_format_line(runner, mock_api, mock_config, monkeypatch):
+    """vault list --format line renders the markdown table with note counts."""
+    v = MagicMock()
+    v.name = 'personal'
+    v.access = None
+    v.is_active = True
+    v.mw_mode = 'stationary'
+    v.description = 'my vault'
+    mock_api.list_vaults_with_counts.return_value = [
+        {'vault': v, 'note_count': 3, 'last_note_added_at': None}
+    ]
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['list', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'personal' in result.stdout
+    assert '3' in result.stdout
+    # The markdown-counts path must be used, not the rich table.
+    mock_api.list_vaults_with_counts.assert_called_once()
+
+
+def test_create_vault_passes_name_and_description_positionally(
+    runner, mock_api, strip_ansi, monkeypatch
+):
+    """Unit pin: CLI calls `api.create_vault(name, description)` with positional
+    args matching `MemexAPI.create_vault(self, name: str, description: str | None = None)`.
+    Regression guard against the V4 signature-drift bug fixed in 2af755b4."""
+    vault_uuid = uuid4()
+    vault = MagicMock()
+    vault.id = vault_uuid
+    mock_api.create_vault.return_value = vault
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['create', 'my-vault', '--description', 'docs'])
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with('my-vault', 'docs', kind='content', policy=None)
+
+    clean_stdout = strip_ansi(result.stdout)
+    assert 'Creating vault: my-vault' in clean_stdout
+    assert str(vault_uuid) in clean_stdout
+
+
+def test_create_vault_with_default_description(runner, mock_api, monkeypatch):
+    """When --description is omitted, the CLI must pass None (not a missing arg)."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['create', 'bare-vault'])
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with('bare-vault', None, kind='content', policy=None)
+
+
+def test_create_vault_positive_reflect_and_summarize_flags(runner, mock_api, monkeypatch):
+    """--reflect and --summarize must produce a policy dict with True values.
+
+    Regression guard for the V11 review finding: a system vault that wants
+    synthesis on had no positive CLI flag, so the policy stayed empty and
+    the kind default (False) won.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with(
+        'case-vault',
+        None,
+        kind='system',
+        policy={'reflect': True, 'summarize': True},
+    )
+
+
+def test_create_vault_mutually_exclusive_reflect_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--reflect and --no-reflect must not both be accepted (silent policy)."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
+def test_create_vault_mutually_exclusive_summarize_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--summarize and --no-summarize must not both be accepted."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--summarize',
+            '--no-summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--summarize and --no-summarize' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
+def test_create_vault_mutex_check_runs_before_kind_confirmation(
+    runner, mock_api, monkeypatch, strip_ansi
+):
+    """Regression guard: conflicting policy flags must be rejected BEFORE the
+    [y/N] confirmation prompt for ``--kind system`` (V11 L3 review).
+
+    Without ``--force``, a system-vault creation with conflicting flags used
+    to ask for confirmation first, then bail with a different error — leaving
+    a user who typed 'y' wondering why nothing happened. The mutex check now
+    runs first; no confirmation is ever requested.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    # typer.confirm will explode if it's called — we want to assert it isn't.
+    def _explode(*_a, **_kw):
+        raise AssertionError(
+            'typer.confirm was called — mutex check must run before kind confirmation'
+        )
+
+    monkeypatch.setattr('memex_cli.vaults.typer.confirm', _explode)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            # NOTE: no --force on purpose; without the order fix this would
+            # reach typer.confirm and raise AssertionError.
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
     vault_uuid = uuid4()
     vault_name = 'test-vault'
@@ -65,10 +245,10 @@ def test_truncate_vault_with_force(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
-    assert 'Vault truncated' in clean
+    assert 'Vault cleared' in clean
     mock_api.truncate_vault.assert_called_once_with(vault_uuid)
 
 
@@ -82,7 +262,7 @@ def test_truncate_vault_shows_stats(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert '12' in clean  # notes count shown
@@ -97,7 +277,7 @@ def test_truncate_vault_aborted_without_force(runner, mock_api, strip_ansi, monk
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', 'test-vault'], input='n\n')
+    result = runner.invoke(app, ['clear', 'test-vault'], input='n\n')
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert 'Aborted' in clean
@@ -114,7 +294,7 @@ def test_truncate_empty_vault(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', 'empty-vault', '--force'])
+    result = runner.invoke(app, ['clear', 'empty-vault', '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert 'already empty' in clean
@@ -131,7 +311,7 @@ def test_truncate_vault_not_found(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 1
     clean = strip_ansi(result.stdout)
     assert f"Vault '{vault_name}' not found" in clean
@@ -157,7 +337,8 @@ def test_create_vault(runner, mock_api, strip_ansi, monkeypatch):
     clean_stdout = strip_ansi(result.stdout)
     assert f'Vault created successfully! ID: {vault_uuid}' in clean_stdout
 
-    # Verify arguments
-    call_args = mock_api.create_vault.call_args[0][0]
-    assert call_args.name == vault_name
-    assert call_args.description == vault_desc
+    # Verify arguments — CLI passes (name, description) positionally to
+    # match MemexAPI.create_vault, plus the kind/policy kwargs (default content).
+    mock_api.create_vault.assert_called_once_with(
+        vault_name, vault_desc, kind='content', policy=None
+    )

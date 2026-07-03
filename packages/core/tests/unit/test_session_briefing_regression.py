@@ -206,6 +206,7 @@ class TestOverflowDegradation:
         sections = [
             ('header', '# Session Briefing\n'),
             ('kv', ''),
+            ('procedures', ''),
             ('vault_overview', svc._build_vault_overview(summary, compact=False)),
             ('mental_models', ''),
             ('vaults', ''),

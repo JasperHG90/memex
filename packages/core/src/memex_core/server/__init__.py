@@ -27,6 +27,9 @@ except ImportError:
 from memex_core.logging_config import configure_logging
 from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import auth_middleware, setup_auth
+from memex_core.server.consolidation import router as consolidation_router
+from memex_core.server.diagnostics import router as diagnostics_router
+from memex_core.server.lint import router as lint_router
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.services.audit import AuditService
 from memex_core.server.kv import router as kv_router
@@ -34,6 +37,9 @@ from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
 from memex_core.server.memories import router as memories_router
+from memex_core.server.outcomes import router as outcomes_router
+from memex_core.server.cases import router as cases_router
+from memex_core.server.procedural import router as procedural_router
 from memex_core.server.reflection import router as reflection_router
 from memex_core.server.resources import router as resources_router
 from memex_core.server.retrieval import router as retrieval_router
@@ -41,6 +47,7 @@ from memex_core.server.stats import router as stats_router
 from memex_core.server.health import router as health_router
 from memex_core.server.summary import router as summary_router
 from memex_core.server.survey import router as survey_router
+from memex_core.server.system_routes import router as system_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
@@ -48,6 +55,7 @@ from memex_core.memory.retrieval._offload import (
     configure_offload_semaphores,
     get_embedding_semaphore,
     get_ner_semaphore,
+    get_nli_semaphore,
     get_reranker_semaphore,
 )
 from memex_core.scheduler import run_scheduler_with_leader_election
@@ -56,10 +64,11 @@ from memex_core.storage.metastore import get_metastore
 from memex_core.instrument import _instrument
 from memex_core.wedge_watchdog import configure_from_settings, shutdown_watchdog
 from memex_core.memory.models import (
-    get_embedding_model,
-    get_reranking_model,
-    get_ner_model,
     configure_cache_dir,
+    get_embedding_model,
+    get_ner_model,
+    get_nli_model,
+    get_reranking_model,
 )
 
 logger = logging.getLogger('memex.core.server')
@@ -67,7 +76,8 @@ logger = logging.getLogger('memex.core.server')
 # Parse CORS config at module level (middleware must be added before app starts).
 # The full config is re-parsed in lifespan() so test fixtures can set env vars
 # before the server starts.
-_cors_config = parse_memex_config().server.cors
+_module_config = parse_memex_config()
+_cors_config = _module_config.server.cors
 
 
 @asynccontextmanager
@@ -144,6 +154,27 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
     async with get_ner_semaphore(), _instrument('ner'):
         await asyncio.to_thread(ner_model.predict, _warmup_text[0])
+
+    # P11.2: NLI lazy-loaded by default — fires on first lint_llm tick.
+    # Eager-load when polarity gate is enabled so the on-demand
+    # /lint/llm/run endpoint and the first scheduler tick both have NLI
+    # ready immediately. Failure is non-fatal: lazy-load remains the
+    # fallback, and get_nli_model invalidates partial cache state on
+    # construction failure (see nli.py:74-97).
+    if config.server.memory.lint_llm.polarity.enabled:
+        try:
+            nli_model = await get_nli_model(config.server.memory.lint_llm.polarity)
+            if nli_model is not None:
+                async with get_nli_semaphore(), _instrument('nli'):
+                    await nli_model.classify('warmup premise', 'warmup hypothesis')
+                logger.info('NLI model warmed.')
+            else:
+                logger.info(
+                    'NLI polarity enabled but backend returned None '
+                    '(e.g. DisabledBackend); skipping warmup.'
+                )
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
+            logger.warning('NLI warmup failed (will lazy-load on first lint_llm tick): %s', e)
     logger.info('ONNX model arenas warmed.')
 
     # Validate embedding dimensions match the database schema.
@@ -232,6 +263,13 @@ async def lifespan(app: FastAPI):
         pass
 
     shutdown_watchdog()
+
+    # Release service-owned async resources (asyncpg pools, etc.) before
+    # disposing the SQLAlchemy engine so connections drain cleanly.
+    try:
+        await api.aclose()
+    except Exception:
+        logger.exception('MemexAPI.aclose failed during server shutdown')
 
     await metastore.close()
 
@@ -333,6 +371,7 @@ app.include_router(notes_router)
 app.include_router(stats_router)
 app.include_router(entities_router)
 app.include_router(memories_router)
+app.include_router(outcomes_router)
 app.include_router(resources_router)
 app.include_router(health_router)
 app.include_router(summary_router)
@@ -341,3 +380,9 @@ app.include_router(kv_router)
 app.include_router(survey_router)
 app.include_router(vault_summary_router)
 app.include_router(session_briefing_router)
+app.include_router(diagnostics_router)
+app.include_router(lint_router)
+app.include_router(consolidation_router)
+app.include_router(system_router)
+app.include_router(procedural_router)
+app.include_router(cases_router)

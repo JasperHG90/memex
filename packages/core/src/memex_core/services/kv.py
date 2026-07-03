@@ -1,4 +1,19 @@
-"""Key-value store service — CRUD and semantic search for KV entries."""
+"""Key-value store service — CRUD and semantic search for KV entries.
+
+KV namespaces
+-------------
+
+Keys must start with one of the valid namespace prefixes:
+
+- ``global:`` — vault-default operational state
+- ``user:`` — per-user preferences
+- ``project:`` — per-project bindings
+- ``app:`` — per-application configuration
+
+Procedures and strategies do NOT live in KV — they live in the
+procedural plane (``procedural_entries``). KV stores only the simple
+namespaced key→value entries above.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +25,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import col, or_, select
 
+from memex_common.exceptions import KVKeyValidationError
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
 
@@ -17,7 +33,12 @@ logger = logging.getLogger('memex.core.services.kv')
 
 _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
-VALID_NAMESPACES = ('global', 'user', 'project', 'app')
+# Re-exported from the cross-package SSOT in memex_common.kv_utils so
+# this module's VALID_NAMESPACES can't drift from the SSOT.
+# noqa: E402 is intentional — these imports sit mid-file (rather than at
+# top) so the surrounding back-compat re-exports stay grouped with the
+# explanatory comments, keeping the SSOT story readable.
+from memex_common.kv_utils import VALID_NAMESPACES  # noqa: E402
 
 
 def _pattern_to_prefix(pattern: str) -> str | None:
@@ -37,7 +58,10 @@ def _normalize_key(key: str) -> str:
 def _validate_namespace(key: str) -> None:
     """Ensure key starts with a valid namespace prefix."""
     if not any(key.startswith(f'{ns}:') for ns in VALID_NAMESPACES):
-        raise ValueError(
+        # NB: procedures are NOT a KV namespace — they live in the
+        # procedural plane (procedural_entries). A `procedure:*` key
+        # simply fails this check like any other unknown namespace.
+        raise KVKeyValidationError(
             f'KV key must start with a namespace prefix: '
             f'{", ".join(f"{ns}:" for ns in VALID_NAMESPACES)}'
         )
@@ -63,7 +87,7 @@ class KVService(BaseService):
         embedding: list[float] | None = None,
         ttl_seconds: int | None = None,
     ) -> Any:
-        """Upsert a KV entry. Uses INSERT ... ON CONFLICT DO UPDATE."""
+        """Upsert a KV entry via INSERT ... ON CONFLICT DO UPDATE."""
         from sqlalchemy.dialects.postgresql import insert
 
         from memex_core.memory.sql_models import KVEntry
@@ -107,7 +131,10 @@ class KVService(BaseService):
             audit_event(self._audit_service, 'kv.written', 'kv', key)
             return entry
 
-    async def get(self, key: str) -> Any | None:
+    async def get(
+        self,
+        key: str,
+    ) -> Any | None:
         """Exact key lookup. Expired entries are deleted on read."""
         from memex_core.memory.sql_models import KVEntry
 

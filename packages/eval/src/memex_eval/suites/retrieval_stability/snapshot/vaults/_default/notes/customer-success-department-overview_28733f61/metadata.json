@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "d0e1b97f2cb5c914eea817b381aab5b0",
+  "created_at": "2026-06-12T19:47:35.961025+00:00",
+  "description": "TechCo Global Customer Success Operations and Initiatives",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "d0e1b97f2cb5c914eea817b381aab5b0",
+      "filestore_path": null,
+      "note_description": "Overview of the Customer Success department at TechCo Global.",
+      "note_name": "Customer Success Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "customer-success",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "28733f61bb0d6d6fc38002116c114929"
+    },
+    "tags": [
+      "department",
+      "customer-success",
+      "techco",
+      "customer success",
+      "techco global",
+      "departmental structure",
+      "churn prevention",
+      "health monitoring",
+      "software stack"
+    ]
+  },
+  "filestore_path": null,
+  "id": "28733f61-bb0d-6d6f-c380-02116c114929",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Customer Success Operations and Initiatives",
+      "publish_date": "2026-06-12 19:47:35.960108+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "customer-success",
+        "techco",
+        "customer success",
+        "techco global",
+        "departmental structure",
+        "churn prevention",
+        "health monitoring",
+        "software stack"
+      ],
+      "title": "Customer Success Department Overview",
+      "total_tokens": 96
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "2c571d5e57f2878402e34279a4391e26",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "2c571d5e57f2878402e34279a4391e26",
+            "children": [],
+            "end_index": 250,
+            "id": "523102036cc80f83b8341c5610386804",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 153,
+            "subtree_tokens": 16,
+            "summary": {
+              "how": "By implementing a health score system with automated churn alerts.",
+              "what": "Development of a proactive customer health monitoring initiative.",
+              "when": "Current / Ongoing",
+              "where": "Internal business operations",
+              "who": "The organization / Customer Success team"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 16
+          },
+          {
+            "assets": [],
+            "block_id": "2c571d5e57f2878402e34279a4391e26",
+            "children": [],
+            "end_index": 463,
+            "id": "31026f8473097deda9d75e89e4ecb199",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 250,
+            "subtree_tokens": 42,
+            "summary": {
+              "how": "By managing all customer success-related activities",
+              "what": "Departmental responsibilities and reporting structure",
+              "when": "Current",
+              "where": "TechCo Global",
+              "who": "Aisha Johnson and a team of 28 employees"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 42
+          }
+        ],
+        "end_index": 463,
+        "id": "551fb45ddd82d154a64da3c497d406f9",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 96,
+        "summary": {
+          "how": "Utilizing core tools including Zendesk, Gainsight, and Slack.",
+          "what": "Departmental overview and administration.",
+          "when": "Current",
+          "where": "TechCo Global",
+          "who": "Aisha Johnson and 28 employees."
+        },
+        "title": "Customer Success Department — TechCo Global",
+        "token_estimate": 38
+      }
+    ]
+  },
+  "publish_date": "2026-06-12T19:47:35.960108+00:00",
+  "session_id": "e0a1e892-a17d-41a4-959e-d70be2178364",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Customer Success Department Overview",
+  "updated_at": "2026-06-12T19:47:35.961025+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

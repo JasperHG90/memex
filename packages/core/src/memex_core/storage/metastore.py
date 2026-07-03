@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlmodel import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_common.exceptions import MemexError
 from memex_core.config import PostgresMetaStoreConfig
 
 T = TypeVar('T', bound=BaseModel)
@@ -69,7 +70,15 @@ class AsyncBaseMetaStoreEngine(Generic[T], metaclass=ABCMeta):
                 yield session
                 # NB: user should commit/rollback explicitly
             except Exception as e:
-                self._logger.error(f'Session error: {e}.')
+                # MemexError + subclasses (business-class signals) re-raise
+                # silently — the HTTP caller's _handle_error logs at the
+                # right level (404s demote to INFO; 5xx stays ERROR).
+                # Everything else — SQLAlchemyError, DBAPIError, RuntimeError,
+                # TypeError, asyncio.CancelledError — logs at ERROR here so
+                # non-HTTP callers (CLI, background tasks, scripts) don't
+                # swallow unexpected errors without a trace.
+                if not isinstance(e, MemexError):
+                    self._logger.error(f'Session error: {e}.')
                 raise
 
     @property

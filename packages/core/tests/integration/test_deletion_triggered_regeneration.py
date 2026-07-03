@@ -229,24 +229,41 @@ async def test_delete_note_triggers_all_mechanisms(api, metastore, session: Asyn
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_set_note_status_archived_triggers_all_mechanisms(
+async def test_set_note_status_archived_deprioritizes_units_and_flags_summary(
     api, metastore, session: AsyncSession
 ):
-    """AC-013: set_note_status('archived') prunes evidence, queues entities, flags summary."""
+    """``set_note_status('archived')`` runs the FSFM-archive cascade:
+    units stay ``status='active'`` and are flipped to
+    ``is_deprioritized=true``; ``Note.archived_at`` is recorded; the
+    vault summary is marked for regeneration. Evidence pruning and
+    entity-reflection queueing are NOT triggered (those remain
+    supersession-specific)."""
     vault_id = GLOBAL_VAULT_ID
     ids = await _seed_two_notes_with_shared_entity(session, vault_id)
 
     await api.set_note_status(ids['note_a_id'], 'archived')
     await await_notes_bg()
 
-    await _assert_all_three_mechanisms(
-        metastore,
-        ids['entity_id'],
-        vault_id,
-        ids['unit_b_id'],
-        ids['obs_shared_id'],
-        ids['obs_only_a_id'],
-    )
+    async with metastore.session() as s:
+        note = await s.get(Note, ids['note_a_id'])
+        assert note is not None
+        assert note.status == 'active'
+        assert note.archived_at is not None
+        units = (
+            await s.exec(select(MemoryUnit).where(col(MemoryUnit.note_id) == ids['note_a_id']))
+        ).all()
+        assert units, 'expected memory units for the archived note'
+        for unit in units:
+            assert unit.status == 'active'
+            assert unit.is_deprioritized is True
+
+        summary = (
+            await s.exec(select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id))
+        ).first()
+        assert summary is not None, 'VaultSummary should exist'
+        assert summary.needs_regeneration is True, (
+            'VaultSummary.needs_regeneration should be True after archive'
+        )
 
 
 @pytest.mark.integration

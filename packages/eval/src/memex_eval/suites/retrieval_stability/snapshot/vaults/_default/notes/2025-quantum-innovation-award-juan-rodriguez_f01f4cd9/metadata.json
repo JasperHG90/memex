@@ -1,0 +1,153 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "07540bc85d2a223bac3e432a2b234f37",
+  "created_at": "2026-06-12T19:48:07.290835+00:00",
+  "description": "2025 Quantum Innovation Award and Technical Breakthroughs by Dr. Juan Rodriguez",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "07540bc85d2a223bac3e432a2b234f37",
+      "filestore_path": null,
+      "note_description": "Juan Rodriguez receives the Quantum Innovation Award.",
+      "note_name": "2025 Quantum Innovation Award — Juan Rodriguez",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "award",
+        "research"
+      ],
+      "template": null,
+      "uuid": "f01f4cd94b39e7a3f463cd32c11fe014"
+    },
+    "tags": [
+      "quantum",
+      "award",
+      "research",
+      "quantum computing",
+      "topological qubits",
+      "error correction",
+      "gate fidelity",
+      "quantum hardware",
+      "innovation award",
+      "quantumtech labs"
+    ]
+  },
+  "filestore_path": null,
+  "id": "f01f4cd9-4b39-e7a3-f463-cd32c11fe014",
+  "page_index": {
+    "metadata": {
+      "description": "2025 Quantum Innovation Award and Technical Breakthroughs by Dr. Juan Rodriguez",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "award",
+        "research",
+        "quantum computing",
+        "topological qubits",
+        "error correction",
+        "gate fidelity",
+        "quantum hardware",
+        "innovation award",
+        "quantumtech labs"
+      ],
+      "title": "2025 Quantum Innovation Award — Juan Rodriguez",
+      "total_tokens": 175
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "ea37271f4c1a30348c4f82a29e95214b",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "ea37271f4c1a30348c4f82a29e95214b",
+            "children": [],
+            "end_index": 419,
+            "id": "b18d99c1933640e31608c43238f7743f",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 139,
+            "subtree_tokens": 56,
+            "summary": {
+              "how": "Through research and publications on topological quantum error correction and qubits.",
+              "what": "Received the 2025 Quantum Innovation Award.",
+              "when": "2025",
+              "where": "QuantumTech Labs",
+              "who": "Juan Rodriguez"
+            },
+            "title": "Award Citation",
+            "token_estimate": 56
+          },
+          {
+            "assets": [],
+            "block_id": "ea37271f4c1a30348c4f82a29e95214b",
+            "children": [],
+            "end_index": 675,
+            "id": "c91687d3d48e0fa5bb9ac6de41725344",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 419,
+            "subtree_tokens": 48,
+            "summary": {
+              "how": "By achieving a 99.7% gate fidelity breakthrough in topological qubit architecture.",
+              "what": "Development of a foundational commercial quantum processor roadmap.",
+              "when": "Current/Annual (highlighted as the year's most significant advance).",
+              "where": "QuantumTech Labs.",
+              "who": "A researcher and QuantumTech Labs."
+            },
+            "title": "Research Impact",
+            "token_estimate": 48
+          },
+          {
+            "assets": [],
+            "block_id": "ea37271f4c1a30348c4f82a29e95214b",
+            "children": [],
+            "end_index": 857,
+            "id": "6c8d12e96e8adf13dee0577b914aab49",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 675,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "By completing a PhD at MIT and joining the company to lead a research team",
+              "what": "Professional background and current role as lead of the Quantum Hardware division",
+              "when": "2019 to present",
+              "where": "QuantumTech Labs and MIT",
+              "who": "Rodriguez, Professor Sarah Kim, and a team of 8 researchers"
+            },
+            "title": "Background",
+            "token_estimate": 40
+          }
+        ],
+        "end_index": 857,
+        "id": "b0d354a3c9befda9c014f08c27864c83",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 175,
+        "summary": {
+          "how": null,
+          "what": "The 2025 Quantum Innovation Award recipient announcement.",
+          "when": "2025",
+          "where": "QuantumTech Labs",
+          "who": "Juan Rodriguez, PhD"
+        },
+        "title": "2025 Quantum Innovation Award",
+        "token_estimate": 31
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "004e99fb-57a0-4c76-8f9d-17af1de25d17",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "2025 Quantum Innovation Award — Juan Rodriguez",
+  "updated_at": "2026-06-12T19:48:07.290835+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

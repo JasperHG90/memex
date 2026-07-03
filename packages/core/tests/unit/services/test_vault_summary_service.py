@@ -21,10 +21,13 @@ def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryServi
     """Create a VaultSummaryService with mock dependencies."""
     metastore = MagicMock()
     lm = MagicMock()
+    embedding_model = MagicMock()
+    embedding_model.encode.return_value = [MagicMock(tolist=lambda: [0.1] * 384)]
     return VaultSummaryService(
         metastore=metastore,
         lm=lm,
         config=config or VaultSummaryConfig(),
+        embedding_model=embedding_model,
     )
 
 

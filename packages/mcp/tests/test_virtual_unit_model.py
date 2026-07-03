@@ -8,9 +8,11 @@ avoid point-lookups on synthetic ids.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+from memex_mcp.models import Staleness
 from memex_mcp.server import _build_memory_unit_model
 
 
@@ -60,3 +62,40 @@ def test_build_memory_unit_model_defaults_for_real_units():
     assert model.mental_model_id is None
     assert model.evidence_ids == []
     assert model.note_id is not None
+
+
+def test_build_memory_unit_model_surfaces_created_at_and_event_date():
+    created = datetime(2026, 6, 30, 18, 5, tzinfo=timezone.utc)
+    event = datetime(2026, 5, 24, tzinfo=timezone.utc)
+    dto = _dto(virtual=False)
+    dto.created_at = created
+    dto.event_date = event
+
+    model = _build_memory_unit_model(dto)
+
+    assert model.created_at == created
+    assert model.event_date == event
+
+
+def test_build_memory_unit_model_timestamps_default_none():
+    """DTOs without the new fields (e.g. old namespaces) stay None, not error."""
+    model = _build_memory_unit_model(_dto(virtual=False))
+    assert model.created_at is None
+    assert model.event_date is None
+
+
+def test_event_date_does_not_drive_staleness_when_mentioned_at_set():
+    """Surfacing event_date must not change staleness anchoring: mentioned_at
+    still wins the fallback chain. An ancient event_date with a recent
+    mentioned_at must read FRESH, not STALE."""
+    now = datetime.now(timezone.utc)
+    dto = _dto(virtual=False)
+    dto.mentioned_at = now - timedelta(days=2)
+    dto.event_date = now - timedelta(days=400)
+
+    model = _build_memory_unit_model(dto)
+
+    # Driven by the 2-day-old mentioned_at (confidence 1.0), not the 400-day
+    # event_date that is now also surfaced on the DTO.
+    assert model.staleness == Staleness.FRESH
+    assert model.event_date == dto.event_date

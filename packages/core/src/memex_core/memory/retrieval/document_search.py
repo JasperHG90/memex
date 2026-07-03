@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import extract, func, literal, union_all, text, Integer
 from sqlalchemy import cast as sql_cast, String
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -70,6 +71,17 @@ class AnswerFromSections(dspy.Signature):
 logger = logging.getLogger('memex.core.memory.retrieval.document_search')
 
 
+def _is_statement_timeout(exc: DBAPIError) -> bool:
+    """True if the DBAPIError is a Postgres statement_timeout.
+
+    The asyncpg dialect wraps the underlying QueryCanceledError in a generic
+    adapter ``Error`` whose type name is NOT 'QueryCanceledError', so we match on
+    the SQLSTATE instead: 57014 == query_canceled (set by statement_timeout).
+    """
+    orig = getattr(exc, 'orig', None)
+    return getattr(orig, 'sqlstate', None) == '57014'
+
+
 @dataclass
 class ReasoningOutput:
     """Intermediate result from skeleton-tree section identification."""
@@ -107,9 +119,16 @@ class NoteSearchEngine:
         self.reranker = reranker
         _config = retrieval_config or RetrievalConfig()
         self._relation_config = _config.relations
+        # max_neighbors is specific to the entity_cooccurrence strategy; the
+        # causal / link_expansion strategies don't accept it, so only forward it
+        # for that type (the factory passes **kwargs straight to the constructor).
+        graph_kwargs: dict[str, Any] = {}
+        if _config.graph_retriever_type == 'entity_cooccurrence':
+            graph_kwargs['max_neighbors'] = _config.graph_max_neighbors
         self.graph_strategy = get_note_graph_strategy(
             type=_config.graph_retriever_type,
             ner_model=ner_model,
+            **graph_kwargs,
         )
         self.expander = QueryExpander(lm=lm) if lm else None
 
@@ -149,11 +168,14 @@ class NoteSearchEngine:
         else:
             pool_size = max(limit * 2, CANDIDATE_POOL_SIZE)
 
-        # 3. Run search per query and collect scored chunks
+        # 3. Run search per query and collect scored chunks. `dropped` accumulates
+        # any strategies a per-query timeout fallback removed, surfaced below as
+        # NoteSearchResult.degraded so the caller/agent knows the result is partial.
         all_chunk_batches: list[tuple[list[Any], float]] = []
+        dropped: set[str] = set()
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
-            chunk_results = await self._search_single_query(
-                session, q, q_emb.tolist(), pool_size, request
+            chunk_results = await self._search_single_query_with_fallback(
+                session, q, q_emb.tolist(), pool_size, request, dropped
             )
             if chunk_results:
                 all_chunk_batches.append((chunk_results, q_weight))
@@ -230,6 +252,13 @@ class NoteSearchEngine:
             for r in results:
                 r.related_notes = related_map.get(r.note_id, [])
                 r.links = links_map.get(r.note_id, [])
+
+        if dropped:
+            # A timeout fallback ran without the graph/keyword signal — flag every
+            # result so the caller/agent treats the set as incomplete.
+            for r in results:
+                r.degraded = True
+                r.dropped_strategies = sorted(dropped)
 
         return results
 
@@ -396,6 +425,58 @@ class NoteSearchEngine:
 
         return results
 
+    async def _search_single_query_with_fallback(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        pool_size: int,
+        request: NoteSearchRequest,
+        dropped: set[str],
+    ) -> list[Any]:
+        """Run the full hybrid query; on statement_timeout degrade to the cheap
+        signals (semantic + temporal) instead of failing the whole request.
+
+        The graph and keyword CTEs dominate the cost; dropping them lets a slow
+        query still return semantic results. A cancelled statement aborts the
+        transaction, so we roll back before retrying. If the fallback also times
+        out this query contributes nothing — sibling queries may still succeed.
+        ``dropped`` is a caller-owned accumulator of the strategies removed on
+        degradation, surfaced as ``NoteSearchResult.degraded`` so the agent knows.
+        """
+        try:
+            return await self._search_single_query(
+                session, query, query_embedding, pool_size, request
+            )
+        except DBAPIError as exc:
+            if not _is_statement_timeout(exc):
+                raise
+            await session.rollback()
+            # Record the degradation for the response signal regardless of branch.
+            dropped.update({'graph', 'keyword'} & set(request.strategies))
+            fallback = {'semantic', 'temporal'} & set(request.strategies)
+            if not fallback:
+                logger.error(
+                    'Hybrid note-search hit statement_timeout and no cheap signal is enabled; '
+                    'this query returns NOTHING (incomplete results).'
+                )
+                return []
+            logger.error(
+                'Hybrid note-search hit statement_timeout — retrying WITHOUT the graph + keyword '
+                'strategies (degraded to %s). Results for this query are INCOMPLETE.',
+                sorted(fallback),
+            )
+            try:
+                return await self._search_single_query(
+                    session, query, query_embedding, pool_size, request, active_override=fallback
+                )
+            except DBAPIError as exc2:
+                if not _is_statement_timeout(exc2):
+                    raise
+                await session.rollback()
+                logger.error('Semantic fallback ALSO timed out; this query returns nothing.')
+                return []
+
     async def _search_single_query(
         self,
         session: AsyncSession,
@@ -403,9 +484,14 @@ class NoteSearchEngine:
         query_embedding: list[float],
         pool_size: int,
         request: NoteSearchRequest,
+        active_override: set[str] | None = None,
     ) -> list[Any]:
-        """Run all active strategies for a single query and fuse via RRF."""
-        active = set(request.strategies)
+        """Run all active strategies for a single query and fuse via RRF.
+
+        ``active_override`` lets the timeout fallback re-run with a reduced
+        strategy set (e.g. semantic-only) after the full hybrid times out.
+        """
+        active = active_override if active_override is not None else set(request.strategies)
         weights = request.strategy_weights or {}
 
         cte_selects = []
@@ -441,16 +527,29 @@ class NoteSearchEngine:
         weight = weights.get('semantic', 1.0)
         distance = cast(Any, col(Chunk.embedding)).cosine_distance(query_embedding)
 
-        stmt = select(
-            Chunk.id,
-            func.rank().over(order_by=distance.asc()).label('rnk'),
-            literal(weight).label('weight'),
-        ).select_from(Chunk)
-
+        # B.3: previous shape was `rank() OVER (ORDER BY distance) ... LIMIT k`
+        # — the window function wrapping prevented the planner from pushing
+        # LIMIT into the HNSW index scan, forcing an exact KNN over the
+        # entire chunks table. Canonical pgvector HNSW pattern is plain
+        # `ORDER BY distance LIMIT k` in the inner subquery, with the rank
+        # assigned in an outer SELECT via `row_number() OVER ()` (no
+        # ORDER BY in the window spec — explicit `order_by=inner_cte.c.distance`
+        # so the rank is well-defined even if a future planner choice changes
+        # the inner CTE's materialisation order. Postgres preserves CTE
+        # output order in practice, but it isn't SQL-standard guaranteed.
+        # Gate validated via EXPLAIN ANALYZE per the tech report —
+        # planner is fickle on HNSW + filters.
+        inner = select(Chunk.id, distance.label('distance')).select_from(Chunk)
         if request.vault_ids:
-            stmt = stmt.where(col(Chunk.vault_id).in_(request.vault_ids))
+            inner = inner.where(col(Chunk.vault_id).in_(request.vault_ids))
+        inner = inner.order_by(distance.asc()).limit(pool_size)
+        inner_cte = inner.cte('chunk_semantic_inner')
 
-        cte = stmt.limit(pool_size).cte('chunk_semantic')
+        cte = select(
+            inner_cte.c.id,
+            func.row_number().over(order_by=inner_cte.c.distance.asc()).label('rnk'),
+            literal(weight).label('weight'),
+        ).cte('chunk_semantic')
         return select(cte.c.id, cte.c.rnk, cte.c.weight)
 
     def _keyword_cte(
@@ -466,8 +565,10 @@ class NoteSearchEngine:
         permissive_query_str = func.regexp_replace(sql_cast(ts_query_base, String), '&', '|', 'g')
         ts_query = func.to_tsquery('english', permissive_query_str)
 
-        # Search on nodes.text and map to block IDs (chunks) via nodes.block_id
-        ts_vector_node = func.to_tsvector('english', Node.text)
+        # Search on nodes and map to block IDs (chunks) via nodes.block_id.
+        # Use the stored search_tsvector column (GIN-indexed) instead of
+        # to_tsvector('english', text) recomputed per row on recheck + ranking.
+        ts_vector_node = col(Node.search_tsvector)
         rank_node = func.ts_rank_cd(ts_vector_node, ts_query)
 
         node_stmt = (
@@ -485,8 +586,9 @@ class NoteSearchEngine:
         if request.vault_ids:
             node_stmt = node_stmt.where(col(Node.vault_id).in_(request.vault_ids))
 
-        # Also search on chunks.text for backward compat (simple strategy docs)
-        ts_vector_chunk = func.to_tsvector('english', Chunk.text)
+        # Also search on chunks for backward compat (simple strategy docs).
+        # Stored search_tsvector column (GIN-indexed), same as nodes above.
+        ts_vector_chunk = col(Chunk.search_tsvector)
         rank_chunk = func.ts_rank_cd(ts_vector_chunk, ts_query)
 
         chunk_stmt = (
@@ -596,6 +698,14 @@ class NoteSearchEngine:
             .limit(pool_size)
         )
 
+        # Pin the pg_trgm similarity threshold for this query's seed-entity `%`
+        # matching (build_seed_entity_cte). set_limit() mutates a SESSION-scoped
+        # GUC that the connection pool does NOT reset, so without this the seed
+        # cutoff would non-deterministically inherit whatever an earlier query on
+        # the same pooled connection set (e.g. find_notes_by_title's 0.5). 0.3
+        # matches RetrievalConfig.similarity_threshold and entity_resolver.
+        await session.exec(text('SELECT set_limit(0.3)'))
+
         result = await session.exec(final_stmt)
         return list(result.all())
 
@@ -625,9 +735,17 @@ class NoteSearchEngine:
             date_col_b = func.coalesce(Note.publish_date, Note.created_at)
             doc_stmt = doc_stmt.where(date_col_b <= before)
         if tags:
-            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'
+            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'.
+            # The RHS MUST be wrapped ``literal(json.dumps(tags)).cast(JSONB)``:
+            # a bare ``json.dumps(tags)`` python-str makes ``.contains`` emit a
+            # ``jsonb @> character varying`` comparison, which Postgres rejects at
+            # runtime ("operator does not exist") — every tag-filtered doc search
+            # would 500. ``literal(...).cast(JSONB)`` gives the RHS a JSONB type.
+            # Mirrors services/notes.py search_notes.
             doc_stmt = doc_stmt.where(
-                col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+                col(Note.doc_metadata)['tags']
+                .astext.cast(JSONB)
+                .contains(literal(json.dumps(tags)).cast(JSONB))
             )
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}
@@ -696,6 +814,12 @@ class NoteSearchEngine:
                 for key in ('description', 'tags', 'publish_date', 'source_uri'):
                     if key in pi_meta and pi_meta[key]:
                         metadata.setdefault(key, pi_meta[key])
+            # Authoritative timestamps from the note row so callers can rank by
+            # recency without a follow-up metadata lookup. The note column wins
+            # over any publish_date carried in page_index metadata.
+            metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+            if doc.publish_date:
+                metadata['publish_date'] = doc.publish_date.isoformat()
             metadata.setdefault('has_assets', bool(doc.assets))
             metadata['vault_id'] = str(doc.vault_id)
 
@@ -757,10 +881,17 @@ class NoteSearchEngine:
                 else:
                     status_map[nid] = 'active'
             for result in final_results:
-                # Prefer persisted note status over confidence-based derivation
+                # Prefer persisted note status over confidence-based derivation.
+                # ``archived_at IS NOT NULL`` is a separate suppression signal
+                # from ``status``; surface it as the logical ``'archived'`` so
+                # downstream consumers can tell archived notes apart from
+                # plain-active ones.
                 doc = docs.get(result.note_id)
                 persisted = getattr(doc, 'status', None) if doc else None
-                if persisted and persisted != 'active':
+                archived_at = getattr(doc, 'archived_at', None) if doc else None
+                if archived_at is not None:
+                    result.note_status = 'archived'
+                elif persisted and persisted != 'active':
                     result.note_status = persisted
                 else:
                     result.note_status = status_map.get(result.note_id, 'active')

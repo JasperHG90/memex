@@ -1,0 +1,91 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "c53ad53c5edab50c2dc403a722b5e601",
+  "created_at": "2026-06-12T19:47:38.268556+00:00",
+  "description": "Engineering Leadership and Departmental Growth at TechCo Global",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "c53ad53c5edab50c2dc403a722b5e601",
+      "filestore_path": null,
+      "note_description": "Former leadership of the Engineering department at TechCo Global.",
+      "note_name": "Engineering Department Historical Leadership",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "engineering",
+        "techco",
+        "historical"
+      ],
+      "template": null,
+      "uuid": "2512b2ce17744fab7b798d945fc7bdda"
+    },
+    "tags": [
+      "department",
+      "engineering",
+      "techco",
+      "historical",
+      "leadership transition",
+      "cloud migration",
+      "team scaling",
+      "engineering management",
+      "techco global"
+    ]
+  },
+  "filestore_path": null,
+  "id": "2512b2ce-1774-4fab-7b79-8d945fc7bdda",
+  "page_index": {
+    "metadata": {
+      "description": "Engineering Leadership and Departmental Growth at TechCo Global",
+      "publish_date": "2023-12-31 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "engineering",
+        "techco",
+        "historical",
+        "leadership transition",
+        "cloud migration",
+        "team scaling",
+        "engineering management",
+        "techco global"
+      ],
+      "title": "Engineering Department Historical Leadership",
+      "total_tokens": 110
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "808c18be6a6f595ff548018f3424b0fd",
+        "children": [],
+        "end_index": 515,
+        "id": "02d6f98870b94f57d19c94140ba6e074",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 34,
+        "subtree_tokens": 110,
+        "summary": {
+          "how": "By overseeing cloud migration and scaling the engineering team from 12 to 35 members.",
+          "what": "Historical leadership and departmental growth.",
+          "when": "January 2020 to December 2023.",
+          "where": "Engineering Department at TechCo Global.",
+          "who": "Alex Chen (Former Head) and Ruby Martinez (Successor)."
+        },
+        "title": "Engineering Department — TechCo Global (Historical Leadership)",
+        "token_estimate": 110
+      }
+    ]
+  },
+  "publish_date": "2023-12-31T00:00:00+00:00",
+  "session_id": "bb3fe5db-ff9e-442c-8375-bd855f55c3d6",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Engineering Department Historical Leadership",
+  "updated_at": "2026-06-12T19:47:38.268556+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

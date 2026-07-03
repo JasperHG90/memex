@@ -1,5 +1,6 @@
-"""Tests for cross-encoder recency and temporal proximity boosts (T6)."""
+"""Tests for cross-encoder recency, temporal proximity, and MW boosts."""
 
+import math
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -14,6 +15,8 @@ from memex_core.memory.sql_models import MemoryUnit
 def _make_unit(
     event_date: datetime | None = None,
     temporal_proximity: float | None = None,
+    success_co_count: int = 0,
+    failure_co_count: int = 0,
     text: str = 'test fact',
 ) -> MemoryUnit:
     """Create a minimal MemoryUnit for reranking tests."""
@@ -22,9 +25,15 @@ def _make_unit(
         text=text,
         fact_type='fact',
         event_date=event_date,
+        # The recency boost keys on ``occurred_start`` (the real authored
+        # date), so mirror the test's date there — these tests use the date
+        # purely to drive the recency factor.
+        occurred_start=event_date,
         vault_id=uuid4(),
         note_id=uuid4(),
         embedding=[],
+        success_co_count=success_co_count,
+        failure_co_count=failure_co_count,
     )
     if temporal_proximity is not None:
         object.__setattr__(unit, 'temporal_proximity', temporal_proximity)
@@ -35,6 +44,7 @@ def _make_engine(
     scores: list[float],
     recency_alpha: float = 0.2,
     temporal_alpha: float = 0.2,
+    mw_alpha: float = 0.3,
 ) -> RetrievalEngine:
     """Create engine with mock reranker returning given raw scores."""
     reranker = MagicMock()
@@ -42,6 +52,7 @@ def _make_engine(
     config = RetrievalConfig(
         reranking_recency_alpha=recency_alpha,
         reranking_temporal_alpha=temporal_alpha,
+        reranking_mw_alpha=mw_alpha,
     )
     return RetrievalEngine(
         embedder=MagicMock(),
@@ -194,12 +205,94 @@ class TestAlphaZeroDisablesBoosts:
         assert result[1] is unit_b
 
 
+class TestMwBoost:
+    """Tests for Memory Worth boost in reranking composition."""
+
+    @pytest.mark.asyncio
+    async def test_cold_start_mw_is_neutral(self) -> None:
+        """Units with 0/0 counters (cold-start) get mw_boost=1.0, no rank change."""
+        unit = _make_unit(success_co_count=0, failure_co_count=0)
+        engine = _make_engine([0.0], mw_alpha=0.3)
+        result = await engine._rerank_results('query', [unit])
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_high_mw_unit_ranks_above_low_mw(self) -> None:
+        """A unit with high MW should rank above low MW with same CE score."""
+        now = datetime.now(timezone.utc)
+        # Both units same recency/temporal (neutral), same CE score
+        # But different MW: 9/1 vs 1/9
+        unit_high_mw = _make_unit(
+            event_date=now,
+            success_co_count=9,
+            failure_co_count=1,
+            text='high MW',
+        )
+        unit_low_mw = _make_unit(
+            event_date=now,
+            success_co_count=1,
+            failure_co_count=9,
+            text='low MW',
+        )
+
+        # Same CE score for both
+        engine = _make_engine([0.0, 0.0], mw_alpha=0.3)
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_high_mw
+        assert result[1] is unit_low_mw
+
+    @pytest.mark.asyncio
+    async def test_mw_alpha_zero_means_no_mw_influence(self) -> None:
+        """With mw_alpha=0, MW counters have no effect on ranking."""
+        now = datetime.now(timezone.utc)
+        unit_high_mw = _make_unit(
+            event_date=now,
+            success_co_count=10,
+            failure_co_count=0,
+            text='high MW',
+        )
+        unit_low_mw = _make_unit(
+            event_date=now,
+            success_co_count=0,
+            failure_co_count=10,
+            text='low MW',
+        )
+
+        # High CE for low-MW unit to make it rank first without MW influence
+        engine = _make_engine([0.5, 2.0], mw_alpha=0.0)
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_low_mw
+
+    @pytest.mark.asyncio
+    async def test_mw_composes_multiplicatively(self) -> None:
+        """MW boost composes multiplicatively with recency and temporal."""
+        now = datetime.now(timezone.utc)
+        # Two identical units except MW counters — high MW should outrank low MW
+        unit_high_mw = _make_unit(
+            event_date=now,
+            temporal_proximity=1.0,
+            success_co_count=9,
+            failure_co_count=1,
+        )
+        unit_low_mw = _make_unit(
+            event_date=now,
+            temporal_proximity=1.0,
+            success_co_count=0,
+            failure_co_count=10,
+            text='low MW',
+        )
+        engine = _make_engine([0.0, 0.0], recency_alpha=0.2, temporal_alpha=0.2, mw_alpha=0.3)
+
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_high_mw  # high MW unit ranks first
+
+
 class TestCombinedBoosts:
-    """Tests for combined recency * temporal * CE interaction."""
+    """Tests for combined recency * temporal * MW * CE interaction."""
 
     @pytest.mark.asyncio
     async def test_combined_formula(self) -> None:
-        """Verify boosted = ce_score * recency_boost * temporal_boost."""
+        """Verify boosted = ce_score * recency_boost * temporal_boost * mw_boost."""
         now = datetime.now(timezone.utc)
         unit = _make_unit(event_date=now, temporal_proximity=1.0)
         # CE raw score = 0 -> sigmoid = 0.5
@@ -207,7 +300,8 @@ class TestCombinedBoosts:
 
         # recency = 1.0, recency_boost = 1 + 0.2*(1.0 - 0.5) = 1.1
         # temporal = 1.0, temporal_boost = 1 + 0.2*(1.0 - 0.5) = 1.1
-        # boosted = 0.5 * 1.1 * 1.1 = 0.605
+        # mw_boost = 1.0 (cold-start 0/0 -> neutral)
+        # boosted = 0.5 * 1.1 * 1.1 * 1.0 = 0.605
         result = await engine._rerank_results('query', [unit])
         assert len(result) == 1
 
@@ -225,9 +319,9 @@ class TestCombinedBoosts:
         # sigmoid(0.5) ~= 0.622, sigmoid(0.3) ~= 0.574
         # Old recency: max(0.1, 1-350/365)=0.041 -> clamped 0.1
         #   boost = 1 + 0.2*(0.1-0.5) = 0.92
-        #   boosted = 0.622 * 0.92 * 1.0 = 0.572
+        #   boosted = 0.622 * 0.92 * 1.0 * 1.0 = 0.572
         # New recency: 1.0 -> boost = 1 + 0.2*(1.0-0.5) = 1.1
-        #   boosted = 0.574 * 1.1 * 1.0 = 0.631
+        #   boosted = 0.574 * 1.1 * 1.0 * 1.0 = 0.631
         # New should beat Old despite lower CE score
         engine = _make_engine([0.5, 0.3], recency_alpha=0.2, temporal_alpha=0.0)
 
@@ -324,9 +418,9 @@ class TestExtremeAlphaValues:
         # sigmoid(3.0) ~= 0.953, sigmoid(0.0) = 0.5
         # With alpha=1.0:
         #   old recency ~ 0.1, boost = 1 + 1.0*(0.1 - 0.5) = 0.6
-        #   boosted_old = 0.953 * 0.6 = 0.572
+        #   boosted_old = 0.953 * 0.6 * 1.0 * 1.0 = 0.572
         #   new recency = 1.0, boost = 1 + 1.0*(1.0 - 0.5) = 1.5
-        #   boosted_new = 0.5 * 1.5 = 0.75
+        #   boosted_new = 0.5 * 1.5 * 1.0 * 1.0 = 0.75
         # New beats old despite much lower CE score
         engine = _make_engine([3.0, 0.0], recency_alpha=1.0, temporal_alpha=0.0)
 
@@ -372,3 +466,201 @@ class TestSingleUnit:
         result = await engine._rerank_results('query', [unit])
         assert len(result) == 1
         assert result[0] is unit
+
+
+def _make_engine_with_clip(
+    scores: list[float],
+    log_clip: float,
+    recency_alpha: float = 1.0,
+) -> RetrievalEngine:
+    reranker = MagicMock()
+    reranker.score.return_value = scores
+    config = RetrievalConfig(
+        reranking_recency_alpha=recency_alpha,
+        reranking_temporal_alpha=0.0,
+        reranking_mw_alpha=0.0,
+        composite_boost_log_clip=log_clip,
+    )
+    return RetrievalEngine(
+        embedder=MagicMock(),
+        reranker=reranker,
+        retrieval_config=config,
+    )
+
+
+class TestCompositeLogClipIntegration:
+    """Drive the full `_rerank_results` entry point with finite and inf clips."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('log_clip', [0.0, 0.7, 1.0, 1.5, math.inf])
+    async def test_clip_does_not_invert_ce_score_order(self, log_clip: float) -> None:
+        """At any log_clip, two equally-aged units with strictly higher ce_score
+        sort first. Floor of clip = 0 collapses metadata; no metadata signal
+        should ever invert ce_score ordering."""
+        now = datetime.now(timezone.utc)
+        unit_high = _make_unit(event_date=now, text='high')
+        unit_low = _make_unit(event_date=now, text='low')
+        engine = _make_engine_with_clip([2.0, -2.0], log_clip=log_clip)
+        result = await engine._rerank_results('q', [unit_high, unit_low])
+        assert result == [unit_high, unit_low]
+
+    @pytest.mark.asyncio
+    async def test_clip_at_zero_collapses_metadata_so_ce_score_decides(self) -> None:
+        """L = 0 ⇒ exp(clip(*, 0, 0)) = 1 ⇒ ranking by ce_score alone.
+
+        This test is a *discriminator* between L=0 and L=inf: the chosen ce
+        and recency setup produces opposite orderings under the two regimes,
+        so it actually exercises the clip path rather than passing under both.
+        - recent_low_ce has logit -0.5 (σ ≈ 0.378), event_date=now,
+          so recency=1.0 ⇒ recency_boost = 1.0 + 2.0*(1.0-0.5) = 2.0.
+        - old_high_ce has logit 0.5 (σ ≈ 0.622), event_date=now-300d,
+          so recency ≈ 0.178 ⇒ recency_boost ≈ 0.356.
+        At L=inf the product is 0.378*2.0=0.756 vs 0.622*0.356=0.221 →
+        metadata flips the order to [recent, old]. At L=0 the aggregate
+        multiplier collapses to 1.0 → ce alone decides → [old, recent].
+        """
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=300)
+        unit_recent_low_ce = _make_unit(event_date=now, text='recent-low-ce')
+        unit_old_high_ce = _make_unit(event_date=old, text='old-high-ce')
+        engine_clip0 = _make_engine_with_clip(
+            [-0.5, 0.5],
+            log_clip=0.0,
+            recency_alpha=2.0,
+        )
+        result_clip0 = await engine_clip0._rerank_results(
+            'q', [unit_recent_low_ce, unit_old_high_ce]
+        )
+        assert result_clip0 == [unit_old_high_ce, unit_recent_low_ce]
+        engine_clip_inf = _make_engine_with_clip(
+            [-0.5, 0.5],
+            log_clip=math.inf,
+            recency_alpha=2.0,
+        )
+        result_clip_inf = await engine_clip_inf._rerank_results(
+            'q', [unit_recent_low_ce, unit_old_high_ce]
+        )
+        assert result_clip_inf == [unit_recent_low_ce, unit_old_high_ce]
+
+    @pytest.mark.asyncio
+    async def test_clip_inf_default_preserves_product_ranking(self) -> None:
+        """L = math.inf ⇒ math identical to prior multiplicative product."""
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=300)
+        unit_recent = _make_unit(event_date=now, text='recent')
+        unit_old = _make_unit(event_date=old, text='old')
+        engine = _make_engine_with_clip(
+            [0.0, 0.0],
+            log_clip=math.inf,
+            recency_alpha=2.0,
+        )
+        result = await engine._rerank_results('q', [unit_old, unit_recent])
+        assert result == [unit_recent, unit_old]
+
+    @pytest.mark.asyncio
+    async def test_default_config_uses_inf_clip(self) -> None:
+        """RetrievalConfig() ships with composite_boost_log_clip = math.inf."""
+        config = RetrievalConfig()
+        assert config.composite_boost_log_clip == math.inf
+
+
+def test_temporal_proximity_populated_from_query_window() -> None:
+    """``_apply_temporal_proximity`` activates the (formerly inert) rerank
+    temporal boost: fills ``temporal_proximity`` from the query's date window,
+    leaves date-less units neutral, and is a no-op when there is no window."""
+    engine = _make_engine([0.0])
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 31, tzinfo=timezone.utc)  # midpoint = 2026-01-16
+
+    at_mid = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    at_edge = _make_unit(event_date=datetime(2026, 1, 31, tzinfo=timezone.utc))
+    beyond = _make_unit(event_date=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    undated = _make_unit(event_date=None)
+
+    engine._apply_temporal_proximity([at_mid, at_edge, beyond, undated], start, end)
+
+    assert at_mid.temporal_proximity > 0.99  # at the window midpoint
+    assert at_edge.temporal_proximity == 0.0  # a full half-width away
+    assert beyond.temporal_proximity == 0.0  # clamped beyond the window
+    assert getattr(undated, 'temporal_proximity', None) is None  # left neutral
+
+    # No window -> no-op (proximity never set).
+    again = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    engine._apply_temporal_proximity([again], None, None)
+    assert getattr(again, 'temporal_proximity', None) is None
+
+
+def test_recency_anchor_selects_latest_authored_date() -> None:
+    """``_recency_anchor`` = max(occurred_start, authored mentioned_at); an
+    ingest-default mentioned_at (== created_at) is excluded; truly-undated -> None."""
+    from memex_core.memory.retrieval.engine import _recency_anchor
+
+    now = datetime.now(timezone.utc)
+    d2024 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    d2026 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='f',
+            fact_type='fact',
+            event_date=men or created or now,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    assert _recency_anchor(mk(d2024, None, now)) == d2024  # occurred_start only
+    assert _recency_anchor(mk(None, d2026, now)) == d2026  # authored mentioned_at only
+    assert _recency_anchor(mk(d2024, d2026, now)) == d2026  # max of both (ongoing fact)
+    assert (
+        _recency_anchor(mk(None, now, now)) is None
+    )  # mentioned_at == created_at -> ingest default
+    assert _recency_anchor(mk(None, None, now)) is None  # truly undated
+
+
+@pytest.mark.asyncio
+async def test_recency_falls_back_to_real_mentioned_at() -> None:
+    """When ``occurred_start`` is absent, recency uses a REAL ``mentioned_at``
+    (one that differs from ``created_at``) so a present-state fact dated only
+    in ``mentioned_at`` keeps its recency edge — while a truly-undated unit
+    (``mentioned_at == created_at``, the ingest default) stays neutral."""
+    now = datetime.now(timezone.utc)
+
+    def _mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='fact',
+            fact_type='fact',
+            event_date=men or created,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    recent_real = _mk(None, now - timedelta(days=10), now)  # real recent date in mentioned_at
+    old_real = _mk(None, now - timedelta(days=300), now)  # real old date in mentioned_at
+    undated = _mk(None, now, now)  # mentioned_at == created_at -> ingest default -> neutral
+    # Ongoing fact: OLD occurred_start but RECENT mentioned_at -> max() keeps it
+    # recent (anchored to the latest real date, not the old start).
+    ongoing = _mk(now - timedelta(days=300), now - timedelta(days=5), now)
+
+    engine = _make_engine([0.0, 0.0, 0.0, 0.0], recency_alpha=2.0)
+    out = await engine._rerank_results('q', [old_real, undated, recent_real, ongoing])
+
+    # Recent real-mentioned date outranks the old real-mentioned date...
+    assert out.index(recent_real) < out.index(old_real)
+    # ...the undated unit (neutral 0.5) sits between them, not max-fresh...
+    assert out.index(recent_real) < out.index(undated) < out.index(old_real)
+    # ...and the ongoing fact (old start, recent mention) ranks with the
+    # recent units, NOT down with its old occurred_start.
+    assert out.index(ongoing) < out.index(undated)
+    assert out.index(ongoing) < out.index(old_real)

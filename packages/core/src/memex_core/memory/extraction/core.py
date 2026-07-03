@@ -57,9 +57,41 @@ logger = logging.getLogger('memex.core.memory.extraction.core')
 
 class ExtractSemanticFacts(dspy.Signature):
     """
-    Extract semantic facts from text chunks.
-    LANGUAGE RULE: Output extracted facts in ENGLISH. Translate if necessary.
-    TEMPORAL HANDLING: Use 'event_date_ref' as the anchor for relative dates.
+    Extract semantic facts from text chunks. Output in ENGLISH.
+    Use 'event_date_ref' for relative dates. Each fact needs intent_class
+    and risk_class.
+
+    intent_class — durability (not importance). Decide by asking:
+    will this fact still be true / relevant in 4+ weeks?
+      - 'permanent': identity, long-standing preferences, values.
+        Signals: "I am", "I prefer", "I always", "I never", "my goal".
+      - 'durable' (DEFAULT): decisions, ongoing project state, role
+        assignments, relationships. Signals: "we decided", "the team
+        owns", "we use", "the lead is", "today we announced".
+      - 'ephemeral': short-lived tasks, deadlines, transient blockers
+        whose CONTENT decays (a one-day blocker). Signals: "by EOD",
+        "blocked by", "right now", "this sprint".
+    Never classify identity / preference / decision facts as ephemeral
+    just because a transient prefix like "today" appears in the
+    surrounding text.
+
+    risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
+
+    claim_type — explicit corrective-claim signal. DEFAULT is null/absent.
+    Only set when the fact EXPLICITLY negates / supersedes / resolves a
+    PRIOR claim that exists elsewhere in memory. Do NOT set on general
+    statements, first-time observations, or descriptive facts.
+      - 'resolution': the fact resolves or decides a prior open question
+        or issue. Signals: "the X problem is solved", "we figured out
+        that X", "X is no longer an issue".
+      - 'contradiction': the fact directly disagrees with a prior claim.
+        Signals: "X is NOT true", "we no longer use X", "we changed our
+        mind about X".
+    When claim_type is set, also populate claim_target.target_topic with
+    a short noun-phrase paraphrase of what is being resolved/contradicted
+    (e.g. "the note-search bug", "the Postgres decision"). Leave
+    claim_target.target_entity_ids empty — entity IDs are populated
+    downstream by the extraction engine.
     """
 
     chunk_text: str = dspy.InputField(
@@ -88,6 +120,27 @@ class ExtractFrontmatterMetadata(dspy.Signature):
     3. Any other structured metadata as factual statements
 
     LANGUAGE RULE: Output extracted facts in ENGLISH.
+
+    PER-FACT CLASSIFICATION (F25b — folded into the same call as extraction):
+
+    Each extracted fact MUST carry an ``intent_class`` and a ``risk_class``.
+
+    Intent describes how durable the fact is, NOT how important it feels:
+      - permanent: identity, preferences, key facts that should never decay.
+      - durable: project decisions, relationship state, multi-week relevance.
+        DEFAULT for unclear cases.
+      - ephemeral: task context, session details, days-to-weeks relevance only.
+
+    Frontmatter often carries durable document metadata (author, publish_date,
+    title); prefer ``durable`` unless the content suggests otherwise.
+
+    Risk classifies sensitivity:
+      - none: default, public-safe content.
+      - sensitive: flagged for linter review; still retrievable in default scope.
+      - private: excluded from default retrieval (passwords, financial details,
+        medical specifics).
+      - safety: blocked entirely (Memex refuses to ingest). Use ONLY for content
+        that would cause real-world harm. Be conservative.
     """
 
     frontmatter_text: str = dspy.InputField(

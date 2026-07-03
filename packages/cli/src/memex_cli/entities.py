@@ -3,7 +3,6 @@ Entity Management Commands.
 """
 
 import asyncio
-import json
 import logging
 from typing import Annotated, Any
 from uuid import UUID
@@ -16,7 +15,13 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 from memex_common.schemas import EntityDTO
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import (
+    VaultOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+)
 
 console = Console()
 
@@ -109,15 +114,14 @@ async def delete_entity(
 async def delete_mental_model(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    vault_id: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Vault UUID. Defaults to active vault.')
-    ] = None,
+    vault: VaultOption = None,
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
     Delete the mental model for an entity in a specific vault. Does NOT delete the entity itself.
     """
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
@@ -128,15 +132,22 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        parsed_vault_id = parse_uuid(vault_id, 'vault') if vault_id else None
-        vault_label = vault_id or 'active vault'
+        try:
+            resolved_vault_id = (
+                await api.resolve_vault_identifier(effective_vault) if effective_vault else None
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+        vault_label = effective_vault or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
         try:
-            success = await api.delete_mental_model(entity.id, vault_id=parsed_vault_id)
+            success = await api.delete_mental_model(entity.id, vault_id=resolved_vault_id)
         except Exception as e:
             handle_api_error(e)
             return
@@ -151,7 +162,9 @@ async def delete_mental_model(
 @async_command
 async def list_entities(
     ctx: typer.Context,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of entities.')] = 50,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to return.')
+    ] = 50,
     query: Annotated[str | None, typer.Option('--query', '-q', help='Search query.')] = None,
     entity_type: Annotated[
         str | None,
@@ -163,6 +176,14 @@ async def list_entities(
         ),
     ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim',
+            '-s',
+            help='Drop entity descriptions from the response (only affects --json output).',
+        ),
+    ] = False,
 ):
     """
     List or search entities.
@@ -177,13 +198,15 @@ async def list_entities(
                     query=query, limit=limit, entity_type=entity_type
                 )
             else:
-                async for ent in api.list_entities_ranked(limit=limit, entity_type=entity_type):
+                async for ent in api.list_entities_ranked(
+                    limit=limit, entity_type=entity_type, slim=slim
+                ):
                     entities.append(ent)
         except Exception as exc:
             handle_api_error(exc)
 
     if json_output:
-        console.print_json(json.dumps([e.model_dump() for e in entities], default=str))
+        emit_json([e.model_dump() for e in entities])
         return
 
     table = Table(title=f'Entities (Top {limit})')
@@ -246,9 +269,9 @@ async def view_entity(
 
     if json_output:
         if len(identifiers) == 1:
-            console.print_json(json.dumps(entities[0].model_dump(), default=str))
+            emit_json(entities[0].model_dump())
         else:
-            console.print_json(json.dumps([e.model_dump() for e in entities], default=str))
+            emit_json([e.model_dump() for e in entities])
         return
 
     for i, entity in enumerate(entities):
@@ -262,8 +285,22 @@ async def view_entity(
 async def list_mentions(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    limit: int = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of mentions to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    include_stale: Annotated[
+        bool,
+        typer.Option('--include-stale', help='Include archived/deleted units.'),
+    ] = False,
+    include_superseded: Annotated[
+        bool,
+        typer.Option('--include-superseded', help='Include confidence-decayed units.'),
+    ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        typer.Option('--include-deprioritized', help='Include deprioritized units.'),
+    ] = False,
 ):
     """
     Show memories and notes mentioning this entity.
@@ -273,7 +310,13 @@ async def list_mentions(
     async with get_api_context(config) as api:
         try:
             entity = await _resolve_entity(api, identifier)
-            results = await api.get_entity_mentions(entity.id, limit=limit)
+            results = await api.get_entity_mentions(
+                entity.id,
+                limit=limit,
+                include_stale=include_stale,
+                include_superseded=include_superseded,
+                include_deprioritized=include_deprioritized,
+            )
         except Exception as e:
             if isinstance(e, typer.Exit):
                 raise
@@ -285,7 +328,7 @@ async def list_mentions(
         return
 
     if json_output:
-        console.print_json(json.dumps(results, default=str))
+        emit_json(results)
         return
 
     table = Table(title=f'Mentions for {entity.name}')
@@ -359,7 +402,7 @@ async def list_related(
         return
 
     if json_output:
-        console.print_json(json.dumps(edges, default=str))
+        emit_json(edges)
         return
 
     table = Table(title=f'Related to: {entity.name}')
@@ -379,3 +422,91 @@ async def list_related(
         table.add_row(name, str(count), str(other_id))
 
     console.print(table)
+
+
+@app.command('scan-merges')
+@async_command
+async def scan_merges_cmd(
+    ctx: typer.Context,
+    top_n: Annotated[
+        int | None,
+        typer.Option(
+            '--limit',
+            '-l',
+            min=2,
+            max=10_000,
+            help='Override the config default for how many entities to scan.',
+        ),
+    ] = None,
+    scan_cooldown_days: Annotated[
+        int | None,
+        typer.Option(
+            '--cooldown-days',
+            min=0,
+            help='Override per-entity cooldown in days.',
+        ),
+    ] = None,
+    pair_threshold: Annotated[
+        float | None,
+        typer.Option(
+            '--pair-threshold',
+            min=0.0,
+            max=1.0,
+            help='Override minimum pairwise similarity to graph-link two entities.',
+        ),
+    ] = None,
+    cluster_min_threshold: Annotated[
+        float | None,
+        typer.Option(
+            '--cluster-min',
+            min=0.0,
+            max=1.0,
+            help=(
+                'Override min-pairwise cohesion threshold (must be '
+                '<= --pair-threshold; rope-drift guard).'
+            ),
+        ),
+    ] = None,
+    entity: Annotated[
+        str | None,
+        typer.Option(
+            '--entity',
+            '-e',
+            help=(
+                'Scan only entities whose name contains this string '
+                '(case-insensitive), ignoring the cooldown — e.g. '
+                '`--entity Marc` to re-scan the Marc cluster on demand.'
+            ),
+        ),
+    ] = None,
+):
+    """Run an on-demand cross-batch entity-cluster collapse scan.
+
+    Emits one MaintenanceProposal per surviving cluster. The merge itself is
+    NOT applied — review the proposals with ``memex lint findings`` and
+    approve via ``memex lint resolve <id> --winner <member>``. The collapse
+    affects every vault listed in ``evidence.vaults_affected``.
+
+    Pass ``--entity <name>`` to target a specific cluster (e.g. "Marc") without
+    waiting out the per-entity cooldown.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            summary = await api.scan_entity_merges(
+                top_n=top_n,
+                scan_cooldown_days=scan_cooldown_days,
+                pair_threshold=pair_threshold,
+                cluster_min_threshold=cluster_min_threshold,
+                focus=entity,
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(
+        f'[green]scan complete[/green]: scanned={summary.get("scanned", 0)}, '
+        f'emitted={summary.get("clusters_emitted", 0)}, '
+        f'rejected_cohesion={summary.get("clusters_rejected_cohesion", 0)}, '
+        f'rescan_updated={summary.get("rescan_updated", 0)}'
+    )

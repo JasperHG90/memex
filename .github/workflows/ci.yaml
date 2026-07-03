@@ -4,9 +4,12 @@ on:
   pull_request:
     branches:
       - main
+      - release/tier-a-cognitive-memory
+      - memory_augmentation
   push:
     branches:
       - main
+      - memory_augmentation
 
 permissions:
   contents: read
@@ -18,7 +21,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.12'
-  UV_VERSION: '0.10.x'
+  UV_VERSION: '0.11.x'
 
 jobs:
   changes:
@@ -31,6 +34,7 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       ci-config: ${{ steps.filter.outputs.ci-config }}
       hermes-runner: ${{ steps.filter.outputs.hermes-runner }}
+      hermes-plugin: ${{ steps.filter.outputs.hermes-plugin }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -46,6 +50,7 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.pre-commit-config.yaml'
+              - 'scripts/ci/**'
             firefox-extension:
               - 'packages/firefox-extension/**'
             docker:
@@ -56,6 +61,12 @@ jobs:
               - '.github/workflows/ci.yaml'
             hermes-runner:
               - '.github/actions/hermes/**'
+            hermes-plugin:
+              - 'packages/hermes-plugin/**'
+              - 'packages/common/**'
+              - 'packages/core/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
 
   pre-commit:
     needs: changes
@@ -63,6 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
       - name: Run pre-commit checks
         uses: JasperHG90/toiminnot/actions/prek@main
         with:
@@ -94,6 +106,44 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
+      # packages/core has its own unit + integration suites (incl. the alembic
+      # migration round-trip tests) that previously ran in NO CI job — a broken
+      # 055 migration shipped green because of it. Run them here. Target the
+      # unit/ and integration/ subdirs directly: the integration conftest spins
+      # a Postgres testcontainer at import, so the unit step must not collect it.
+      - name: Run core package unit tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/core/tests/unit
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not llm"
+      - name: Run core package integration tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/core/tests/integration
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "integration and not llm"
+
+  mcp-import-check:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Sync workspace
+        run: uv sync --all-extras --all-packages
+      - name: Collect MCP tests (import-time gate)
+        run: uv run pytest packages/mcp/tests --collect-only -q
 
   firefox-extension-lint-test:
     needs: changes
@@ -167,8 +217,34 @@ jobs:
         run: uv run pytest
         working-directory: .github/actions/hermes/runner
 
+  # Hermes plugin integration tests (packages/hermes-plugin/tests/integration/)
+  # Requirements:
+  #   - Docker daemon (testcontainers spins up pgvector Postgres)
+  #   - hermes-agent installed via the `hermes-integration` dependency group
+  # Tests are gated by the `hermes_integration` pytest marker; the suite
+  # skips itself if Docker or hermes-agent is unavailable, so this job is
+  # safe even on runners that lack one of those prerequisites.
+  hermes-integration:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.hermes-plugin == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Sync workspace with hermes-integration group
+        run: uv sync --all-extras --all-packages --group hermes-integration
+      - name: Run hermes-plugin integration tests
+        run: uv run pytest packages/hermes-plugin/tests/integration/ -v --tb=short -m hermes_integration
+
   build-python:
-    needs: [changes, pre-commit, python-tests]
+    needs: [changes, pre-commit, python-tests, mcp-import-check]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -184,7 +260,7 @@ jobs:
           package: ${{ matrix.package }}
 
   docker-build-memex:
-    needs: [changes, pre-commit, python-tests]
+    needs: [changes, pre-commit, python-tests, mcp-import-check]
     if: >-
       always() && !failure() && !cancelled() &&
       (github.event_name == 'push' ||

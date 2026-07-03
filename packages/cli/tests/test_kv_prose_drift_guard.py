@@ -84,7 +84,7 @@ def test_hermes_tools_py_no_kv_fact_muddle():
     # in the file doesn't flag.
     text = _read('packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py')
     _assert_no_banned_in(
-        _kv_section(text, 'KV_WRITE_SCHEMA'), where='hermes-plugin tools.py KV section'
+        _kv_section(text, 'KV_PUT_SCHEMA'), where='hermes-plugin tools.py KV section'
     )
 
 
@@ -98,18 +98,17 @@ def test_hermes_briefing_py_no_kv_fact_muddle():
 def test_mcp_server_py_no_kv_fact_muddle():
     # server.py is large; scope to the KV tool definitions onward.
     text = _read('packages/mcp/src/memex_mcp/server.py')
-    _assert_no_banned_in(
-        _kv_section(text, "name='memex_kv_write'"), where='mcp server.py KV section'
-    )
+    _assert_no_banned_in(_kv_section(text, "name='memex_kv_put'"), where='mcp server.py KV section')
 
 
-def test_mcp_server_py_kv_routing_block_is_clean():
-    # Also scope-check the KV IF/THEN routing block in the system prompt.
-    text = _read('packages/mcp/src/memex_mcp/server.py')
-    routing_idx = text.index('→ KV STORE')
-    # Take a generous window past the start marker — the bullet runs ~10 lines.
-    routing_block = text[routing_idx : routing_idx + 1200]
-    _assert_no_banned_in(routing_block, where='mcp server.py KV routing block')
+def test_agent_surface_kv_namespace_block_is_clean():
+    # KV routing/intent guidance moved out of MCP `instructions=` into
+    # ``memex_common.agent_surface.KV_NAMESPACE`` after the 2026-05-14
+    # three-tier refactor. Scope-check the new home.
+    text = _read('packages/common/src/memex_common/agent_surface.py')
+    kv_idx = text.index('KV_NAMESPACE = ')
+    kv_block = text[kv_idx : kv_idx + 3000]
+    _assert_no_banned_in(kv_block, where='agent_surface KV_NAMESPACE section')
 
 
 def test_cli_kv_py_no_kv_fact_muddle():
@@ -119,38 +118,14 @@ def test_cli_kv_py_no_kv_fact_muddle():
     _assert_no_banned_in(text, where='cli kv.py')
 
 
-def test_storage_layer_terminology_is_consistent_in_hermes_briefing():
-    """Hermes briefing must teach the three-layer storage model up front."""
-    text = _read('packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py')
-    assert '_STORAGE_MODEL_PRIMER' in text
-    # Primer must contain the three layers and the append-only invariant.
-    for marker in (
-        '**Notes**',
-        '**Memory units**',
-        '**KV store**',
-        'Append-only',
-    ):
-        assert marker in text, f'{marker!r} missing from Hermes storage primer'
+def test_storage_layer_terminology_is_consistent_in_agent_surface():
+    """The three-layer storage model lives in ``memex_common.agent_surface``
+    after the 2026-05-14 refactor. MCP `instructions=` no longer carries it
+    (that surface is now Tier 1a transport-only)."""
+    from memex_common.agent_surface import STORAGE_MODEL
 
-
-def test_storage_layer_terminology_is_consistent_in_mcp_instructions():
-    """MCP instructions must teach the three-layer storage model up front."""
-    text = _read('packages/mcp/src/memex_mcp/server.py')
-    assert 'STORAGE MODEL' in text
-    # Scope to the STORAGE MODEL section so an unrelated ``**KV store**`` /
-    # ``**Notes**`` heading appearing elsewhere in the file (e.g. a future
-    # KV tool docstring) cannot satisfy the markers on its own. The section
-    # ends at the next top-level marker (``ROUTING``).
-    section_start = text.index('STORAGE MODEL')
-    assert 'ROUTING' in text[section_start:], (
-        "'ROUTING' marker missing after STORAGE MODEL — section boundary drifted"
+    for marker in ('**Notes**', '**Memory units**', '**KV store**'):
+        assert marker in STORAGE_MODEL, f'{marker!r} missing from agent_surface.STORAGE_MODEL'
+    assert 'append-only' in STORAGE_MODEL.lower(), (
+        "'append-only' invariant missing from agent_surface.STORAGE_MODEL"
     )
-    section_end = text.index('ROUTING', section_start)
-    section = text[section_start:section_end]
-    for marker in (
-        '**Notes**',
-        '**Memory units**',
-        '**KV store**',
-        'Append-only',
-    ):
-        assert marker in section, f'{marker!r} missing from MCP storage model section'

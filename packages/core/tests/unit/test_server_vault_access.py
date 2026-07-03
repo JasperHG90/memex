@@ -42,17 +42,23 @@ def mock_api():
     api.resolve_vault_identifier = AsyncMock(side_effect=_resolve)
     api.list_vaults_with_counts.return_value = [
         {
-            'vault': SimpleNamespace(id=VAULT_A_ID, name='vault-a', description='Vault A'),
+            'vault': SimpleNamespace(
+                id=VAULT_A_ID, name='vault-a', description='Vault A', mw_mode='stationary'
+            ),
             'note_count': 10,
             'last_note_added_at': None,
         },
         {
-            'vault': SimpleNamespace(id=VAULT_B_ID, name='vault-b', description='Vault B'),
+            'vault': SimpleNamespace(
+                id=VAULT_B_ID, name='vault-b', description='Vault B', mw_mode='stationary'
+            ),
             'note_count': 5,
             'last_note_added_at': None,
         },
         {
-            'vault': SimpleNamespace(id=VAULT_C_ID, name='vault-c', description='Vault C'),
+            'vault': SimpleNamespace(
+                id=VAULT_C_ID, name='vault-c', description='Vault C', mw_mode='stationary'
+            ),
             'note_count': 0,
             'last_note_added_at': None,
         },

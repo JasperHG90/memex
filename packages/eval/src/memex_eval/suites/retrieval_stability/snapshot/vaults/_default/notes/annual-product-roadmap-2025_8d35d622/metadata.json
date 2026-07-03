@@ -1,0 +1,133 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "703731256b7ceb586de918dd9e4dbdff",
+  "created_at": "2026-06-12T19:47:24.118233+00:00",
+  "description": "2025 Strategic Product Roadmap and Deliverables",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "703731256b7ceb586de918dd9e4dbdff",
+      "filestore_path": null,
+      "note_description": "Product roadmap for 2025, valid through December.",
+      "note_name": "Annual Product Roadmap 2025",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "roadmap",
+        "2025",
+        "durable"
+      ],
+      "template": null,
+      "uuid": "8d35d6225781f8497aa97db786113fa3"
+    },
+    "tags": [
+      "roadmap",
+      "2025",
+      "durable",
+      "product roadmap",
+      "strategic planning",
+      "software launch",
+      "market expansion",
+      "ai integration",
+      "usage-based pricing",
+      "enterprise strategy"
+    ]
+  },
+  "filestore_path": null,
+  "id": "8d35d622-5781-f849-7aa9-7db786113fa3",
+  "page_index": {
+    "metadata": {
+      "description": "2025 Strategic Product Roadmap and Deliverables",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "roadmap",
+        "2025",
+        "durable",
+        "product roadmap",
+        "strategic planning",
+        "software launch",
+        "market expansion",
+        "ai integration",
+        "usage-based pricing",
+        "enterprise strategy"
+      ],
+      "title": "Annual Product Roadmap 2025",
+      "total_tokens": 121
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "5816bb260186a697bc1f5d18f8a5dcf5",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "5816bb260186a697bc1f5d18f8a5dcf5",
+            "children": [],
+            "end_index": 266,
+            "id": "8fa214f3fd8c0d74a2bb8be21e562a42",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 117,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "By launching updated software, entering new markets, and completing a security audit.",
+              "what": "Strategic deliverables including Widget Pro v2.0 launch and market expansion.",
+              "when": "Q1 and Q2 (First half of the year).",
+              "where": "3 new geographic markets.",
+              "who": "The organization's product and compliance teams."
+            },
+            "title": "Q1-Q2 Deliverables",
+            "token_estimate": 40
+          },
+          {
+            "assets": [],
+            "block_id": "5816bb260186a697bc1f5d18f8a5dcf5",
+            "children": [],
+            "end_index": 482,
+            "id": "bc7f94b6f02410d40e11abf4f6a16c82",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 266,
+            "subtree_tokens": 50,
+            "summary": {
+              "how": "By launching an AI recommendation engine and transitioning to usage-based pricing.",
+              "what": "Completion of Q3-Q4 deliverables and growth targets.",
+              "when": "During Q3 and Q4 of the 2025 calendar year.",
+              "where": "Within the company's enterprise market and product ecosystem.",
+              "who": "The organization and its 1,000 targeted enterprise customers."
+            },
+            "title": "Q3-Q4 Deliverables",
+            "token_estimate": 50
+          }
+        ],
+        "end_index": 482,
+        "id": "d7e83dbeb19b4b9146b97d20607e3d83",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 121,
+        "summary": {
+          "how": "By organizing deliverables into two major biannual phases (Q1-Q2 and Q3-Q4).",
+          "what": "The Annual Product Roadmap document outlining strategic deliverables.",
+          "when": "January through December 2025.",
+          "where": "Internal product planning environment.",
+          "who": "Product development and management teams."
+        },
+        "title": "Annual Product Roadmap 2025",
+        "token_estimate": 31
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "65c572f6-a125-4db7-9543-5dc9c7548dc0",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Annual Product Roadmap 2025",
+  "updated_at": "2026-06-12T19:47:24.118233+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

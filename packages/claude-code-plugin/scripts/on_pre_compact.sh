@@ -1,85 +1,161 @@
 #!/usr/bin/env bash
-# Memex Claude Code Plugin — PreCompact
-# Data-driven nudge: reads session stats (writes, edit spirals, commits)
-# to produce an actionable compaction reminder.
-set -euo pipefail
+# Memex Claude Code Plugin — PreCompact.
+#
+# Captures transcript-since-last-compact to the session note BEFORE compaction
+# discards messages. The first capture creates the note; subsequent captures
+# append deltas. The session note's note_key matches the SessionEnd hook so
+# all events land in one note.
+set -uo pipefail
+trap 'echo "{}"; exit 0' ERR
 
-# --- Dependency check ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+_payload=""
+if [ ! -t 0 ]; then
+    _payload=$(cat)
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
-    echo '{}'
+    echo "{}"
     exit 0
 fi
 
-# --- Read session stats ---
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Total writes
+_session_note_key=""
+[ -f "$STATE_DIR/session_note_key" ] && _session_note_key=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+
+if [ -z "$_session_note_key" ]; then
+    jq -n '{
+        hookSpecificOutput: {
+            hookEventName: "PreCompact",
+            additionalContext: "Memex pre-compact capture skipped — session note key is missing. The plugin will recover on the next session."
+        }
+    }'
+    exit 0
+fi
+
+# Lightweight session stats (kept from prior version)
 writes=0
 COUNTER_FILE="${STATE_DIR}/write_count"
 [ -f "$COUNTER_FILE" ] && writes=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
 
-# Recent commits
 commits=0
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     commits=$(git log --oneline --since="4 hours ago" 2>/dev/null | wc -l | tr -d ' ') || commits=0
 fi
 
-# Edit spirals: files edited 3+ times
-FILE_EDITS_DIR="${STATE_DIR}/file_edits"
-spirals=""
-spiral_count=0
-most_edited_file=""
-most_edited_count=0
+source "$SCRIPT_DIR/resolve_config.sh"
 
-if [ -d "$FILE_EDITS_DIR" ]; then
-    for edit_file in "$FILE_EDITS_DIR"/*; do
-        [ -f "$edit_file" ] || continue
-        line=$(head -1 "$edit_file" 2>/dev/null) || continue
-        count=$(echo "$line" | cut -d' ' -f1 2>/dev/null) || continue
-        filepath=$(echo "$line" | cut -d' ' -f2- 2>/dev/null) || continue
-        basename_part=$(basename "$filepath" 2>/dev/null) || continue
+# Get transcript_path and CC session id
+_transcript_path=""
+_cc_session_id=""
+if [ -n "$_payload" ]; then
+    _transcript_path=$(printf '%s' "$_payload" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+    _cc_session_id=$(printf '%s' "$_payload" | jq -r '.session_id // empty' 2>/dev/null || true)
+fi
+[ -z "$_cc_session_id" ] && _cc_session_id="default"
+_safe_session_id=$(printf '%s' "$_cc_session_id" | tr -c 'A-Za-z0-9._-' '_')
 
-        if [ "$count" -ge 3 ] 2>/dev/null; then
-            spiral_count=$((spiral_count + 1))
-            if [ -n "$spirals" ]; then
-                spirals="${spirals}, ${basename_part} ${count}x"
+_offset_file="${STATE_DIR}/session_note_offset_${_safe_session_id}"
+_prev_offset=0
+[ -f "$_offset_file" ] && _prev_offset=$(cat "$_offset_file" 2>/dev/null || echo 0)
+case "$_prev_offset" in
+    ''|*[!0-9]*) _prev_offset=0 ;;
+esac
+
+_capture_status="skipped"
+_capture_reason=""
+
+# Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled bypasses the capture
+# but still emits the existing skipped-path output shape (additionalContext + stats
+# appendix). Offset file is NOT advanced — re-enabling resumes from prior offset.
+case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
+    off|0|false|no|disabled)
+        _capture_reason="disabled via MEMEX_CC_TRANSCRIPT_CAPTURE"
+        ;;
+esac
+
+if [ -n "$_capture_reason" ]; then
+    :  # toggle handled above; fall through to the output assembly below
+elif [ -z "$_transcript_path" ] || [ ! -f "$_transcript_path" ]; then
+    _capture_reason="transcript_path missing or not a file"
+elif [ ! -r "$_transcript_path" ]; then
+    _capture_reason="transcript_path is not readable (permissions?)"
+else
+    _total_lines=$(wc -l < "$_transcript_path" 2>/dev/null | tr -d ' ' || echo 0)
+    case "$_total_lines" in
+        ''|*[!0-9]*) _total_lines=0 ;;
+    esac
+
+    # Detect transcript shrinkage (rotation, truncation): if the file shrunk
+    # below the recorded offset, reset offset and re-capture from scratch
+    # rather than silently dropping content.
+    if [ "$_total_lines" -lt "$_prev_offset" ]; then
+        _prev_offset=0
+    fi
+
+    if [ "$_total_lines" -le "$_prev_offset" ]; then
+        _capture_reason="no new turns since last compaction"
+    else
+        _new_lines_md=$(tail -n +"$((_prev_offset + 1))" "$_transcript_path" 2>/dev/null \
+            | jq -nRr -f "$SCRIPT_DIR/_transcript_to_md.jq" 2>/dev/null || true)
+
+        if [ -z "$_new_lines_md" ]; then
+            _capture_reason="no extractable text in new turns"
+        else
+            _vault=$(memex_resolve_active_vault)
+
+            _timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            _delta=$(printf '## Pre-compaction snapshot — %s\n\n%s' "$_timestamp" "$_new_lines_md")
+
+            _project_id=""
+            [ -f "$STATE_DIR/project_id" ] && _project_id=$(cat "$STATE_DIR/project_id" 2>/dev/null || true)
+
+            # Tag set for the (possibly-first) note creation.
+            _tags=(
+                "surface:claude-code"
+                "auto-capture"
+                "session-transcript"
+                "$_session_note_key"
+            )
+            [ -n "$_project_id" ] && _tags+=("project:$_project_id")
+
+            _title="Session transcript: ${_session_note_key}"
+            _description="Auto-captured CC session transcript (pre-compact + final)."
+
+            if memex_persist_session_delta \
+                "$STATE_DIR" \
+                "$_cc_session_id" \
+                "$_session_note_key" \
+                "$_vault" \
+                "$_title" \
+                "$_description" \
+                "$_delta" \
+                "${_tags[@]}"; then
+                _capture_status="ok"
+                printf '%s' "$_total_lines" > "$_offset_file"
             else
-                spirals="${basename_part} ${count}x"
-            fi
-            if [ "$count" -gt "$most_edited_count" ] 2>/dev/null; then
-                most_edited_count=$count
-                most_edited_file=$basename_part
+                _capture_reason="memex CLI failed (server unreachable?)"
             fi
         fi
-    done
+    fi
 fi
 
-# --- Build data-driven nudge ---
-nudge="Context compaction is imminent — conversation history will be compressed."
-nudge="${nudge}\n\nThis session: ${writes} writes, ${spiral_count} edit spirals"
-if [ "$spiral_count" -gt 0 ]; then
-    nudge="${nudge} (${spirals})"
-fi
-nudge="${nudge}, ${commits} commits."
-
-if [ "$spiral_count" -gt 0 ] && [ -n "$most_edited_file" ]; then
-    nudge="${nudge}\n\nThe \`${most_edited_file}\` struggle suggests a debugging insight worth capturing."
+if [ "$_capture_status" = "ok" ]; then
+    msg="Memex pre-compact capture ✓ — appended new turns to \`${_session_note_key}\`."
+else
+    msg="Memex pre-compact capture skipped (${_capture_reason})."
 fi
 
-# Session note key
-SESSION_NOTE_KEY=""
-[ -f "${STATE_DIR}/session_note_key" ] && SESSION_NOTE_KEY=$(cat "${STATE_DIR}/session_note_key" 2>/dev/null || true)
+msg="${msg}\n\nSession stats: ${writes} writes, ${commits} commits in the last 4h."
 
-nudge="${nudge}\n\nBefore continuing, review this session for anything worth persisting to long-term memory via \`memex_add_note\` (background: true). Save if: (1) you diagnosed a bug root cause, (2) made or discovered an architectural decision, (3) learned a user preference or workflow pattern, (4) completed a multi-step task with reusable insights. Skip if nothing notable happened."
-
-if [ -n "$SESSION_NOTE_KEY" ]; then
-    nudge="${nudge}\n\nUpdate the running session note via \`memex_add_note(note_key='${SESSION_NOTE_KEY}')\` with what you've learned."
+if [ "$writes" -gt 5 ] || [ "$commits" -gt 0 ]; then
+    msg="${msg}\n\nIf you discovered a non-obvious decision, root cause, or workflow learning during this session, consider an explicit \`memex_add_note(background=true)\` to capture it before continuing — the auto-capture preserves the transcript, but a curated note is more discoverable."
 fi
 
-nudge="${nudge}\n\nConsider running \`/retro\` to record a structured session postmortem before context is lost."
-
-# --- Output ---
-jq -n --arg ctx "$nudge" '{
+jq -n --arg ctx "$msg" '{
     hookSpecificOutput: {
         hookEventName: "PreCompact",
         additionalContext: $ctx

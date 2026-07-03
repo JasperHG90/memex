@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy import update
+from sqlalchemy import func as sa_func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -27,12 +27,43 @@ from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
 logger = logging.getLogger('memex.core.memory.contradiction')
 
 
+def _extract_target_entity_ids(unit: MemoryUnit) -> list[UUID]:
+    """Pull ``target_entity_ids`` from ``unit.unit_metadata['claim_target']``.
+
+    Returns an empty list when the unit has no claim_target or stores
+    invalid UUID strings. Tolerant of malformed JSONB; downstream callers
+    treat an empty list as "no narrowing — use the generic candidate pool".
+    """
+    if not unit.unit_metadata:
+        return []
+    claim_target = unit.unit_metadata.get('claim_target')
+    if not isinstance(claim_target, dict):
+        return []
+    raw_ids = claim_target.get('target_entity_ids') or []
+    if not isinstance(raw_ids, list):
+        return []
+    result: list[UUID] = []
+    for rid in raw_ids:
+        try:
+            result.append(UUID(str(rid)))
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
 class ContradictionEngine:
     """Detects and records contradictions between memory units."""
 
-    def __init__(self, lm: dspy.LM, config: ContradictionConfig):
+    def __init__(
+        self,
+        lm: dspy.LM,
+        config: ContradictionConfig,
+        *,
+        failure_co_count_weight: float = 0.5,
+    ):
         self.lm = lm
         self.config = config
+        self.failure_co_count_weight = failure_co_count_weight
         self.triage_predictor = dspy.Predict(TriageNewUnits)
         self.classify_predictor = dspy.Predict(ClassifyRelationships)
 
@@ -68,7 +99,7 @@ class ContradictionEngine:
                 'contradiction.vault_id': str(vault_id),
                 'contradiction.unit_count': str(len(unit_ids)),
             },
-        ):
+        ) as span:
             new_units = await self._load_units(session, unit_ids)
             if not new_units:
                 logger.info('No units found for IDs %s — already deleted?', unit_ids)
@@ -85,9 +116,22 @@ class ContradictionEngine:
                 len(flagged_units),
                 len(new_units),
             )
+            explicit_claim_count = sum(1 for u in flagged_units if u.claim_type is not None)
+            if span is not None:
+                try:
+                    span.set_attribute(
+                        'contradiction.explicit_claim_count', str(explicit_claim_count)
+                    )
+                except Exception:
+                    pass
 
             all_links: list[MemoryLink] = []
-            confidence_updates: dict[UUID, float] = {}
+            # Accumulate signed alpha-step deltas per target; apply via
+            # SQL-level ``clamp(confidence + :delta, 0, 1)`` so concurrent
+            # batches on overlapping units stay in sync with the atomic
+            # ``confidence_evidence_count`` increment.
+            confidence_deltas: dict[UUID, float] = {}
+            evidence_bumps: dict[UUID, int] = {}
 
             tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -96,9 +140,12 @@ class ContradictionEngine:
                 if isinstance(result, BaseException):
                     logger.error('Error processing flagged unit: %s', result)
                     continue
-                links, updates = result
+                links, deltas, bumps = result
                 all_links.extend(links)
-                confidence_updates.update(updates)
+                for unit_id, delta in deltas.items():
+                    confidence_deltas[unit_id] = confidence_deltas.get(unit_id, 0.0) + delta
+                for unit_id, bump in bumps.items():
+                    evidence_bumps[unit_id] = evidence_bumps.get(unit_id, 0) + bump
 
             if all_links:
                 deduped: dict[tuple[UUID, UUID, str], MemoryLink] = {}
@@ -127,18 +174,54 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            for unit_id, new_confidence in confidence_updates.items():
-                stmt = (
-                    update(MemoryUnit)
-                    .where(MemoryUnit.id == unit_id)
-                    .values(confidence=new_confidence)
-                )
+            explicit_claim_links = sum(
+                1 for lk in all_links if lk.link_metadata.get('claim_type') is not None
+            )
+            if span is not None:
+                try:
+                    span.set_attribute(
+                        'contradiction.explicit_claim_links', str(explicit_claim_links)
+                    )
+                except Exception:
+                    pass
+
+            # Stored failure_co_count is an integer; half-up rounding maps the
+            # configured weight to a per-link bump so 0.0 disables wiring and
+            # >=0.5 yields +1 per negative-evidence link. (Plain round() would
+            # use banker's rounding and silently turn the 0.5 default into 0.)
+            weight = max(0.0, self.failure_co_count_weight)
+            failure_bump_per_link = 1 if weight >= 0.5 else 0
+
+            # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
+            # overlapping units (mirrors application-level max(0, min(1, ...))).
+            for unit_id, delta in confidence_deltas.items():
+                values: dict[str, Any] = {
+                    'confidence': sa_func.greatest(
+                        0.0,
+                        sa_func.least(1.0, MemoryUnit.confidence + delta),
+                    ),
+                }
+                bump = evidence_bumps.get(unit_id, 0)
+                if bump:
+                    # GREATEST(0, ...) guards against future negative deltas
+                    # (always +1 today, so currently a no-op).
+                    values['confidence_evidence_count'] = sa_func.greatest(
+                        0,
+                        MemoryUnit.confidence_evidence_count + bump,
+                    )
+                    if failure_bump_per_link > 0:
+                        values['failure_co_count'] = (
+                            MemoryUnit.failure_co_count + bump * failure_bump_per_link
+                        )
+                stmt = update(MemoryUnit).where(MemoryUnit.id == unit_id).values(**values)
                 await session.execute(stmt)
 
             logger.info(
-                'Contradiction detection: created %d links, updated %d confidences',
+                'Contradiction detection: created %d links, updated %d confidences '
+                '(evidence bumps: %d)',
                 len(all_links),
-                len(confidence_updates),
+                len(confidence_deltas),
+                sum(evidence_bumps.values()),
             )
 
     async def _load_units(self, session: AsyncSession, unit_ids: list[UUID]) -> list[MemoryUnit]:
@@ -168,28 +251,68 @@ class ContradictionEngine:
         session: AsyncSession,
         unit: MemoryUnit,
         vault_id: UUID,
-    ) -> tuple[list[MemoryLink], dict[UUID, float]]:
-        """Process a single flagged unit: get candidates, classify, adjust."""
+    ) -> tuple[list[MemoryLink], dict[UUID, float], dict[UUID, int]]:
+        """Process a single flagged unit: get candidates, classify, adjust.
+
+        Returns (links, confidence_deltas, evidence_bumps). Deltas are signed
+        alpha-steps so the caller can sum per-unit without overwrite races.
+
+        When the unit carries an explicit ``claim_type`` (resolution or
+        contradiction), the candidate retrieval is narrowed by the claim's
+        target entity IDs and uses a looser similarity threshold — the
+        linguistic evidence on the claim itself substitutes for tight
+        semantic matching.
+        """
+        extracted_target_ids = _extract_target_entity_ids(unit)
+        target_entity_ids: list[UUID] | None
+        if extracted_target_ids:
+            target_entity_ids = extracted_target_ids
+        else:
+            target_entity_ids = None
+        if unit.claim_type is not None:
+            threshold = self.config.similarity_threshold_explicit_claim
+        else:
+            threshold = self.config.similarity_threshold
+
+        logger.info(
+            'process_flagged_unit unit_id=%s vault_id=%s claim_type=%s '
+            'target_entity_count=%d threshold=%.2f',
+            unit.id,
+            vault_id,
+            unit.claim_type,
+            len(target_entity_ids) if target_entity_ids else 0,
+            threshold,
+        )
+
         candidates = await get_candidates(
             session,
             unit,
             vault_id,
             k=self.config.max_candidates_per_unit,
-            threshold=self.config.similarity_threshold,
+            threshold=threshold,
+            target_entity_ids=target_entity_ids,
         )
 
         if not candidates:
             logger.info(
-                'Unit %s: no candidates found (threshold=%.2f)',
+                'Unit %s: no candidates found (threshold=%.2f, claim_type=%s)',
                 unit.id,
-                self.config.similarity_threshold,
+                threshold,
+                unit.claim_type,
             )
-            return [], {}
+            return [], {}, {}
 
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
-        confidence_updates: dict[UUID, float] = {}
+        # Per-target confidence deltas (signed alpha steps) and evidence bumps
+        # (+1 per weaken/contradict link). ``evidence_bumps`` counts only
+        # negative-evidence links (weaken = -alpha, contradict = -2*alpha);
+        # reinforces are excluded for backfill/forward symmetry. Both paths
+        # count deduped links, so N weakens + M contradicts yields
+        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha``.
+        confidence_deltas: dict[UUID, float] = {}
+        evidence_bumps: dict[UUID, int] = {}
 
         for rel in relationships:
             relation = rel.relation
@@ -207,42 +330,66 @@ class ContradictionEngine:
             note_title = await self._get_note_title(session, authoritative.note_id)
 
             if relation == 'reinforce':
+                # Symmetric reinforce: both endpoints gain +alpha (no evidence
+                # bump — forward/backfill symmetry).
                 for u in [unit, existing_unit]:
-                    new_conf = min(u.confidence + self.config.alpha, 1.0)
-                    confidence_updates[u.id] = new_conf
+                    confidence_deltas[u.id] = confidence_deltas.get(u.id, 0.0) + self.config.alpha
                 link_type = 'reinforces'
             elif relation == 'weaken':
-                new_conf = max(superseded.confidence - self.config.alpha, 0.0)
-                confidence_updates[superseded.id] = new_conf
+                confidence_deltas[superseded.id] = (
+                    confidence_deltas.get(superseded.id, 0.0) - self.config.alpha
+                )
+                evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'weakens'
             elif relation == 'contradict':
-                new_conf = max(superseded.confidence - 2 * self.config.alpha, 0.0)
-                confidence_updates[superseded.id] = new_conf
+                confidence_deltas[superseded.id] = (
+                    confidence_deltas.get(superseded.id, 0.0) - 2 * self.config.alpha
+                )
+                evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'contradicts'
             else:
                 continue
+
+            link_weight = self._weight_for_relation(relation, unit.claim_type)
+            link_metadata: dict[str, Any] = {
+                'authoritative_unit_id': str(authoritative.id),
+                'superseded_unit_id': str(superseded.id),
+                'reasoning': reasoning,
+                'temporal_basis': (
+                    'llm_override'
+                    if authoritative_hint != self._temporal_default(unit, existing_unit)
+                    else 'timestamp'
+                ),
+                'superseding_note_title': note_title,
+            }
+            if unit.claim_type is not None:
+                link_metadata['claim_type'] = unit.claim_type
 
             link = MemoryLink(
                 from_unit_id=authoritative.id,
                 to_unit_id=superseded.id,
                 link_type=link_type,
                 vault_id=vault_id,
-                weight=1.0,
-                link_metadata={
-                    'authoritative_unit_id': str(authoritative.id),
-                    'superseded_unit_id': str(superseded.id),
-                    'reasoning': reasoning,
-                    'temporal_basis': (
-                        'llm_override'
-                        if authoritative_hint != self._temporal_default(unit, existing_unit)
-                        else 'timestamp'
-                    ),
-                    'superseding_note_title': note_title,
-                },
+                weight=link_weight,
+                link_metadata=link_metadata,
             )
             links.append(link)
 
-        return links, confidence_updates
+        return links, confidence_deltas, evidence_bumps
+
+    @staticmethod
+    def _weight_for_relation(relation: str, claim_type: str | None) -> float:
+        """Weight policy for newly-created MemoryLinks.
+
+        Default contradiction-engine link weight is 1.0. For explicit-claim
+        units, weight depends on the claim_type:
+          - claim_type='resolution' + 'weaken' relation: 0.7
+            (resolution softens the prior but does not negate it).
+          - All other combinations: 1.0 (default).
+        """
+        if claim_type == 'resolution' and relation == 'weaken':
+            return 0.7
+        return 1.0
 
     async def _classify(
         self, unit: MemoryUnit, candidates: list[MemoryUnit]

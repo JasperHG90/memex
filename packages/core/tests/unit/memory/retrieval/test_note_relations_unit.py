@@ -14,6 +14,7 @@ from memex_common.schemas import (
 from memex_mcp.models import (
     McpFact,
     McpMemoryLink,
+    McpNoteMetadata,
     McpNoteSearchResult,
     McpPageIndex,
     McpPageMetadata,
@@ -177,6 +178,42 @@ class TestMcpNoteSearchResultFields:
         result = McpNoteSearchResult(note_id=uuid4(), title='T', score=0.5)
         assert result.related_notes == []
         assert result.links == []
+
+    def test_timestamps_default_none(self):
+        result = McpNoteSearchResult(note_id=uuid4(), title='T', score=0.5)
+        assert result.created_at is None
+        assert result.publish_date is None
+
+    def test_timestamps_parse_iso_strings(self):
+        """The service ships ISO strings in the metadata dict; the model coerces."""
+        result = McpNoteSearchResult(
+            note_id=uuid4(),
+            title='T',
+            score=0.5,
+            created_at='2026-07-01T09:05:58.271213+00:00',
+            publish_date='2026-06-10T00:00:00+00:00',
+        )
+        assert result.created_at == dt.datetime(
+            2026, 7, 1, 9, 5, 58, 271213, tzinfo=dt.timezone.utc
+        )
+        assert result.publish_date == dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
+
+
+class TestMcpNoteMetadataTimestamps:
+    def test_timestamps_default_none(self):
+        m = McpNoteMetadata(note_id=uuid4(), title='T')
+        assert m.created_at is None
+        assert m.publish_date is None
+
+    def test_timestamps_parse_iso_strings(self):
+        m = McpNoteMetadata(
+            note_id=uuid4(),
+            title='T',
+            created_at='2026-07-01T09:05:58+00:00',
+            publish_date='2026-06-10T00:00:00+00:00',
+        )
+        assert m.created_at == dt.datetime(2026, 7, 1, 9, 5, 58, tzinfo=dt.timezone.utc)
+        assert m.publish_date == dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
 
 
 class TestMcpPageIndexRelatedNotes:
@@ -368,6 +405,8 @@ def test_build_memory_unit_model_extracts_contradiction_links_only():
     mock_unit.occurred_start = None
     mock_unit.occurred_end = None
     mock_unit.mentioned_at = None
+    mock_unit.intent_class = 'durable'
+    mock_unit.risk_class = 'none'
 
     result = _build_memory_unit_model(mock_unit)
 
@@ -392,6 +431,8 @@ def test_build_memory_unit_model_no_links():
     mock_unit.status = 'active'
     mock_unit.metadata = {'tags': []}
     mock_unit.superseded_by = []
+    mock_unit.intent_class = 'durable'
+    mock_unit.risk_class = 'none'
 
     result = _build_memory_unit_model(mock_unit)
     assert result.links == []

@@ -1,0 +1,89 @@
+version = 1
+name = "python-base"
+description = "Base template for python projects"
+layout_profile = "claude"
+symlinks = ["CLAUDE.md"]
+
+[archetype]
+qualified_name = "default"
+
+[[repo]]
+alias = "athola"
+url = "https://github.com/athola/claude-night-market"
+
+[[repo]]
+alias = "jasperhg90"
+url = "https://github.com/JasperHG90/skills"
+
+[[repo]]
+alias = "memex"
+url = "https://github.com/JasperHG90/memex"
+
+[[skill]]
+qualified_name = "athola/architecture-diagram"
+sha = "b226e39776d69a4b16faebd78d5d2973679df198"
+
+[[skill]]
+qualified_name = "athola/architecture-review"
+sha = "b226e39776d69a4b16faebd78d5d2973679df198"
+
+[[skill]]
+qualified_name = "jasperhg90/manifesto"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[skill]]
+qualified_name = "jasperhg90/deep-explain"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[skill]]
+qualified_name = "jasperhg90/doc-write"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[skill]]
+qualified_name = "jasperhg90/python-review"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[skill]]
+qualified_name = "jasperhg90/readme-creator"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[skill]]
+qualified_name = "jasperhg90/release"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[subagent]]
+qualified_name = "jasperhg90/adversarial-reviewer"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[subagent]]
+qualified_name = "jasperhg90/feature-planner"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[plugin]]
+qualified_name = "memex/memex"
+flavor = "claude"
+sha = "df13d6b1a7ae5e6f4bcd8b7b0e6c7268dc937494"
+
+[[rule]]
+qualified_name = "athola/slop-scan-for-docs"
+sha = "b226e39776d69a4b16faebd78d5d2973679df198"
+
+[[rule]]
+qualified_name = "jasperhg90/adversarial-reviews"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[rule]]
+qualified_name = "jasperhg90/pre-existing-issues"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[rule]]
+qualified_name = "jasperhg90/prek-code-quality"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[rule]]
+qualified_name = "jasperhg90/python-testing"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+
+[[rule]]
+qualified_name = "jasperhg90/uv-installer"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"

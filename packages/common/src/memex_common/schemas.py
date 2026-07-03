@@ -1,15 +1,17 @@
 """Custom models for Memex used internally for note management and retrieval."""
 
 import datetime as dt
+import logging
 import re
 from enum import Enum
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 from uuid import UUID
 from pydantic import (
     BaseModel,
     Field,
     PrivateAttr,
     field_serializer,
+    field_validator,
     BeforeValidator,
     ConfigDict,
     model_validator,
@@ -18,7 +20,18 @@ import base64
 import binascii
 
 from memex_common.types import MemexTypes, FactTypes
+
+
+_logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
+from memex_common.vault_policy import VaultPolicy  # noqa: E402
+
+
+# Cold-start posterior variance ceiling. Duplicated from
+# ``memex_core.memory.confidence.MAX_VARIANCE`` because common must not
+# import core. Test parity:
+# ``packages/core/tests/unit/memory/test_confidence.py::TestDtoFormulaConsistency``.
+_MAX_VARIANCE: float = 1.0 / 12.0
 
 
 def decode_base64(v: Any) -> bytes:
@@ -50,6 +63,96 @@ class EntityType(str, Enum):
     TECHNOLOGY = 'Technology'
     FILE = 'File'
     MISC = 'Misc'
+
+
+class IntentClass(str, Enum):
+    """Lifecycle class for a memory unit, set at write time.
+
+    permanent — identity / preferences / facts that should never decay.
+    durable   — project decisions, multi-week relevance (default).
+    ephemeral — task context, days-to-weeks relevance only.
+    """
+
+    PERMANENT = 'permanent'
+    DURABLE = 'durable'
+    EPHEMERAL = 'ephemeral'
+
+
+class RiskClass(str, Enum):
+    """Content sensitivity, set at write time.
+
+    none      — public-safe content (default).
+    sensitive — flagged for linter review; still retrievable in default scope.
+    private   — excluded from default retrieval; surfaced only on explicit query.
+    safety    — recorded but passed through (blocking deferred to pre-flight assessment).
+    """
+
+    NONE = 'none'
+    SENSITIVE = 'sensitive'
+    PRIVATE = 'private'
+    SAFETY = 'safety'
+
+
+VALID_INTENT_CLASSES: frozenset[str] = frozenset(c.value for c in IntentClass)
+VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
+
+
+# Canonical ``Literal`` aliases for use as type annotations across packages
+# (MCP tool params, DSPy classifier signatures, etc.). mypy requires
+# ``Literal[...]`` arguments to be compile-time string literals — we cannot
+# unpack a runtime expression like ``Literal[*tuple(c.value for c in IntentClass)]``
+# without losing static-type narrowing — so the values are still hand-listed here.
+# However, divergence between these aliases and the ``IntentClass`` /
+# ``RiskClass`` enums is caught at test time (see
+# ``packages/common/tests/test_enum_literal_parity.py``) which asserts
+# ``typing.get_args(IntentLiteral) == tuple(c.value for c in IntentClass)``.
+# This collapses three+ duplicate definitions (MCP server, DSPy classifier,
+# plugin JSON schema) into ONE canonical definition; downstream importers
+# reference these names instead of re-typing the value tuple.
+IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
+RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
+ClaimTypeLiteral = Literal['resolution', 'contradiction']
+
+
+VALID_CLAIM_TYPES: frozenset[str] = frozenset({'resolution', 'contradiction'})
+
+
+# Shared default-on-fail coercion. Both ``RawFact`` (LLM output) and
+# ``ExtractedFact`` (downstream pipeline) absorb LLM-produced strings that
+# may be malformed (omitted fields, unknown values, non-string garbage like
+# None / int / list / dict). The "extraction must never be blocked by a
+# classification mishap" invariant means we always coerce to the schema
+# default rather than raise. Keep the coercion logic in
+# one place so a future addition to ``IntentClass`` / ``RiskClass`` cannot
+# silently desync the two pydantic ``@field_validator``s on the fact models.
+
+
+def coerce_intent_class(v: object) -> str:
+    """Coerce ``v`` to a valid ``IntentLiteral`` string, defaulting to ``durable``."""
+    if isinstance(v, str) and v in {c.value for c in IntentClass}:
+        return v
+    return IntentClass.DURABLE.value
+
+
+def coerce_risk_class(v: object) -> str:
+    """Coerce ``v`` to a valid ``RiskLiteral`` string, defaulting to ``none``."""
+    if isinstance(v, str) and v in {c.value for c in RiskClass}:
+        return v
+    return RiskClass.NONE.value
+
+
+def coerce_claim_type(v: object) -> str | None:
+    """Coerce ``v`` to a valid ``ClaimTypeLiteral`` string, or ``None``.
+
+    Unlike ``coerce_intent_class`` / ``coerce_risk_class``, the default for
+    invalid / absent input is ``None`` — most facts do not carry an explicit
+    resolution / contradiction claim, and silently downgrading garbage to
+    ``None`` is correct (the contradiction engine falls through to the
+    generic path).
+    """
+    if isinstance(v, str) and v in VALID_CLAIM_TYPES:
+        return v
+    return None
 
 
 class LineageDirection(str, Enum):
@@ -164,8 +267,12 @@ class RetainContent(VaultMixin):
 
 
 class RetrievalRequest(BaseModel):
-    """
-    Unified request object for memory retrieval.
+    """Unified request for memory retrieval.
+
+    Wire/protocol model — the internal SQLModel variant is in
+    ``memex_core.memory.retrieval.models``. Add or rename class values in
+    ``IntentClass``/``RiskClass`` here; both the frozensets and the core
+    model validator derive from those enums.
     """
 
     query: str = Field(..., description='The search query or context string.')
@@ -179,6 +286,10 @@ class RetrievalRequest(BaseModel):
     vault_ids: list[UUID | str] | None = Field(
         default=None,
         description='List of specific vault IDs or names to search. If None or empty, searches ALL vaults.',
+    )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
     )
     filters: dict[str, Any] = Field(
         default_factory=dict, description='Optional key-value filters (e.g. fact_type).'
@@ -215,6 +326,16 @@ class RetrievalRequest(BaseModel):
         ),
     )
 
+    # Intent / risk class filtering (write-time classifier)
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description='Filter by intent: permanent | durable | ephemeral. None disables filter.',
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description='Filter by risk: none | sensitive | private | safety. None disables filter.',
+    )
+
     # Query expansion
     expand_query: bool = Field(
         default=False,
@@ -233,27 +354,25 @@ class RetrievalRequest(BaseModel):
     )
     strategies: list[str] | None = Field(
         default=None,
-        description=(
-            'Inclusion list of strategies to run. '
-            'Valid values: semantic, keyword, graph, temporal, mental_model. '
-            'If None, all strategies are used.'
-        ),
+        description='Strategies to run. None = all.',
+        examples=[['semantic', 'keyword', 'graph', 'temporal', 'mental_model']],
     )
-    include_vectors: bool = Field(
-        default=False, description='Whether to include embeddings in the result (slower).'
-    )
-    include_stale: bool = Field(
-        default=False, description='Whether to include stale memory units in results.'
-    )
+    include_stale: bool = Field(default=False, description='Include stale memory units.')
     include_superseded: bool = Field(
         default=False,
-        description='Whether to include superseded (low-confidence) memory units in results.',
+        description='Include superseded (low-confidence) memory units.',
+    )
+    include_deprioritized: bool = Field(
+        default=False,
+        description='Include deprioritized memory units.',
+    )
+    apply_pre_filter: bool = Field(
+        default=True,
+        description='Pre-reranker Memory Worth/FSFM filter. Default True drops low-quality candidates. Set False for audit or lineage queries.',
     )
     debug: bool = Field(
         default=False,
-        description=(
-            'When True, include per-result strategy attribution (name, rank, RRF score, timing).'
-        ),
+        description='Include per-result strategy attribution (name, rank, RRF score, timing).',
     )
 
 
@@ -277,8 +396,11 @@ class ReflectionRequest(VaultMixin):
     """
 
     entity_id: UUID = Field(description='The UUID of the entity to reflect upon.')
-    limit_recent_memories: int = Field(
-        default=20, description='Number of recent memories to consider.'
+    limit_recent_memories: int | None = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description='Recent memories to consider. None = no cap.',
     )
 
 
@@ -319,6 +441,45 @@ class CreateVaultRequest(BaseModel):
 
     description: str | None = Field(default=None, description='Optional description.')
 
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure). Permanent.',
+    )
+
+    policy: dict[str, Any] | None = Field(
+        default=None,
+        description='Optional per-vault synthesis policy (e.g. {"reflect": false}).',
+    )
+
+    @field_validator('kind')
+    @classmethod
+    def _validate_kind(cls, v: str) -> str:
+        # The DB has a CHECK constraint; we'd rather fail at the API
+        # boundary with a clean 422 than let the INSERT raise a 500
+        # IntegrityError. Keep the literal set in sync with VaultKind.
+        if v not in ('content', 'system'):
+            raise ValueError(f'kind must be "content" or "system", got {v!r}')
+        return v
+
+    @field_validator('policy')
+    @classmethod
+    def _validate_policy(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Validate at the API boundary so unknown keys surface as 422 (this
+        # validator's ValueError) rather than as a 500 IntegrityError or a
+        # raw pydantic.ValidationError leaking through. VaultPolicy itself
+        # has extra='forbid' and uses ``reflect: bool | None`` etc., so a
+        # stringly-typed {"reflect": "true"} also fails here instead of
+        # silently applying ``bool("true") == True`` downstream.
+        #
+        # Return the normalized form (canonical bools, None fields stripped
+        # via exclude_none) so any code reading ``request.policy`` between
+        # the API boundary and the service call sees coerced types — not
+        # the lax-mode-coerced pydantic internals (``{'reflect': 1}``) which
+        # the service layer would have to re-coerce.
+        if v is None:
+            return v
+        return VaultPolicy.model_validate(v).model_dump(exclude_none=True)
+
 
 class MemoryUnitBase(VaultMixin):
     """Base schema for Memory Unit shared between DTOs and SQLModels."""
@@ -331,6 +492,15 @@ class MemoryUnitBase(VaultMixin):
         examples=['active', 'stale'],
     )
 
+    intent_class: IntentClass = Field(
+        default=IntentClass.DURABLE,
+        description='Lifecycle class set at write time (permanent | durable | ephemeral).',
+    )
+    risk_class: RiskClass = Field(
+        default=RiskClass.NONE,
+        description='Content sensitivity set at write time (none | sensitive | private | safety).',
+    )
+
     mentioned_at: dt.datetime | None = Field(
         default=None, description='The datetime when the memory unit was mentioned.'
     )
@@ -339,6 +509,13 @@ class MemoryUnitBase(VaultMixin):
     )
     occurred_end: dt.datetime | None = Field(
         default=None, description='The end datetime of when the fact/event occurred.'
+    )
+    created_at: dt.datetime | None = Field(
+        default=None, description='When the memory unit was captured (row creation time).'
+    )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description='The date when the memory unit was created or is semantically relevant.',
     )
 
 
@@ -352,7 +529,21 @@ class SupersessionInfo(BaseModel):
 
 
 class MemoryUnitDTO(MemoryUnitBase):
-    """DTO for a Memory Unit (Fact/Experience)."""
+    """DTO for a Memory Unit (Fact/Experience).
+
+    PYDANTIC-ONLY: this class deliberately does
+    NOT inherit from ``SQLModel`` and is never used for DDL / table
+    creation. The persistent table definition lives on
+    ``memex_core.memory.sql_models.MemoryUnit``, which carries the
+    ``sa_column=Column(Integer, ...)`` declarations for the
+    ``confidence_evidence_count`` (and friends) columns. The DTO
+    fields here therefore use plain ``Field(..., default=...)`` —
+    omitting ``sa_column`` is correct, not a bug. If a future change
+    promotes this DTO to a SQLModel ``table=True`` class, every
+    column-bearing field MUST gain a corresponding ``sa_column``
+    declaration to avoid Pydantic-type-inference creating a VARCHAR
+    where INTEGER is required.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -395,20 +586,97 @@ class MemoryUnitDTO(MemoryUnitBase):
         examples=[0.95],
     )
 
+    embedding: list[float] | None = Field(
+        default=None,
+        description='Stored vector for the unit text; populated only when include_vectors=true.',
+    )
+
     debug_info: list[StrategyDebugInfo] | None = Field(
         default=None,
         description='Per-strategy attribution when debug=True. None when debug is off.',
     )
 
+    degraded: bool = Field(
+        default=False,
+        description='True when this result set is INCOMPLETE: a statement_timeout forced '
+        'retrieval to drop the graph/keyword signals (see dropped_strategies). The caller '
+        'should treat results as partial and may re-query.',
+    )
+    dropped_strategies: list[str] = Field(
+        default_factory=list,
+        description='Retrieval strategies dropped due to a timeout fallback (e.g. graph, keyword). '
+        'Empty unless degraded is True.',
+    )
+
     confidence: float = Field(
         default=1.0,
-        description='Confidence score (0.0-1.0).',
+        description='Confidence score (0.0-1.0). Clamped by model validator.',
+    )
+
+    confidence_evidence_count: int = Field(
+        default=0,
+        ge=0,
+        description='Negative-evidence count (contradicts/weakens links). Cold-start = 0.',
+    )
+
+    confidence_variance: float = Field(
+        default=_MAX_VARIANCE,
+        ge=0.0,
+        le=_MAX_VARIANCE,
+        description='Computed-only Beta posterior variance. Do not set manually.',
     )
 
     superseded_by: list[SupersessionInfo] | None = Field(
         default=None,
         description='Units that supersede this one.',
     )
+
+    success_co_count: int = Field(
+        default=0,
+        description='Memory Worth success co-occurrence counter.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        description='Memory Worth failure co-occurrence counter.',
+    )
+
+    is_deprioritized: bool = Field(
+        default=False,
+        description='Unit deprioritized (non-destructive retrieval downweight).',
+    )
+
+    @model_validator(mode='after')
+    def _compute_confidence_variance(self) -> 'MemoryUnitDTO':
+        """Derive confidence_variance from (confidence, evidence_count).
+
+        Closed-form Beta(1,1) posterior variance. Kept inline to avoid
+        memex_common depending on memex_core. Must stay in lockstep with
+        ``memex_core.memory.confidence.mean_and_variance`` (guarded by
+        cross-reference test).
+        """
+        # Clamp to [0,1] — mirrors SQL GREATEST(0, LEAST(1, …)) on writes.
+        confidence_clamped = max(0.0, min(1.0, self.confidence))
+        if confidence_clamped != self.confidence:
+            _logger.debug(
+                'DTO clamp engaged: confidence %r → %r (likely upstream write bug)',
+                self.confidence,
+                confidence_clamped,
+            )
+            object.__setattr__(self, 'confidence', confidence_clamped)
+        alpha = 1.0 + confidence_clamped * self.confidence_evidence_count
+        beta = 1.0 + (1.0 - confidence_clamped) * self.confidence_evidence_count
+        n = alpha + beta
+        variance = (alpha * beta) / (n * n * (n + 1.0))
+        if not (0.0 <= variance <= _MAX_VARIANCE):
+            raise ValueError(
+                f'Invariant violated: computed confidence_variance={variance!r} '
+                f'is outside [0, 1/12] (confidence={self.confidence!r}, '
+                f'evidence_count={self.confidence_evidence_count!r}).'
+            )
+        # object.__setattr__ bypasses Pydantic field validation.
+        object.__setattr__(self, 'confidence_variance', variance)
+        return self
 
     @property
     def enriched_text(self) -> str:
@@ -505,6 +773,21 @@ class VaultDTO(BaseModel):
         examples=['My personal memories and notes.'],
     )
 
+    mw_mode: str = Field(
+        default='stationary',
+        description='Memory Worth mode for the vault: "stationary" or "ema".',
+    )
+
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure).',
+    )
+
+    policy: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Per-vault synthesis policy overrides (reflect / summarize).',
+    )
+
     is_active: bool = Field(
         default=False,
         description='Whether this vault is the currently active (writer) vault.',
@@ -599,6 +882,31 @@ class NoteCreateDTO(BaseModel):
         'When present and the extension is not .md, the server converts '
         'the content to Markdown before ingestion using FileContentProcessor.',
         examples=['report.pdf', 'slides.pptx', 'meeting-notes.md'],
+    )
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description=(
+            'Optional intent override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier when set. Use "ephemeral" for transient '
+            'context, "durable" for default-lived facts, "permanent" for enduring '
+            'preferences/conventions.'
+        ),
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description=(
+            'Optional risk override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier. Set "safety" to refuse persistence; '
+            '"sensitive"/"private" for restricted handling; "none" for default.'
+        ),
+    )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Optional event-date override applied to facts extracted from the note. '
+            'Stored as the unit `event_date` / `mentioned_at` anchor. Omit to use the '
+            "note's authored/publication date."
+        ),
     )
 
     @property
@@ -804,6 +1112,16 @@ class SystemStatsCountsDTO(BaseModel):
     reflection_queue: int = Field(description='Number of items in the reflection queue.')
 
 
+class SectionAssetDTO(BaseModel):
+    """An image reference embedded in a single note section (node)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    path: str
+    alt_text: str | None = None
+    filename: str
+
+
 class NodeDTO(BaseModel):
     """DTO for a note node (section produced by PageIndex)."""
 
@@ -813,12 +1131,14 @@ class NodeDTO(BaseModel):
     note_id: UUID
     vault_id: UUID
     node_hash: str | None = None
+    block_id: UUID | None = None
     title: str
     text: str
     level: int
     seq: int
     status: str
     created_at: dt.datetime
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
 
 
 class NoteDTO(BaseModel):
@@ -838,6 +1158,8 @@ class NoteDTO(BaseModel):
     assets: list[str] = Field(default_factory=list)
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
     template: str | None = None
+    status: str = 'active'
+    archived_at: dt.datetime | None = None
 
 
 class BlockSummaryDTO(BaseModel):
@@ -864,6 +1186,8 @@ class NoteListItemDTO(BaseModel):
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
     template: str | None = None
     summaries: list[BlockSummaryDTO] = Field(default_factory=list)
+    status: str = 'active'
+    archived_at: dt.datetime | None = None
 
 
 class MemoryLinkDTO(BaseModel):
@@ -885,6 +1209,59 @@ class RelatedNoteDTO(BaseModel):
     title: str | None = None
     shared_entities: list[str] = Field(default_factory=list)
     strength: float = 0.0
+
+
+class UnitHistoryNodeDTO(BaseModel):
+    """A node in a memory unit's contradiction-graph timeline.
+
+    The tree is rooted at the queried unit (depth=0); each predecessor
+    represents an older unit that the current node supersedes via a
+    ``contradicts`` or ``weakens`` link. Walked backward in time.
+    """
+
+    unit_id: UUID = Field(description='Memory unit at this depth.')
+    text: str = Field(description='Memory unit text content.')
+    note_id: UUID | None = Field(
+        default=None,
+        description='Source note ID (null when the unit has no source note).',
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description='Current confidence on the unit (0.0-1.0).',
+    )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description='When the unit was originally observed (event_date / mentioned_at fallback).',
+    )
+    link_type: str | None = Field(
+        default=None,
+        description=(
+            'Type of supersession edge from this node to its parent (the newer '
+            "unit that supersedes it): 'contradicts' or 'weakens'. None for the "
+            'starting unit (root).'
+        ),
+    )
+    link_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Metadata on the link (e.g., reasoning, temporal_basis).',
+    )
+    depth: int = Field(
+        description='0 for the starting unit, 1 for direct predecessors, etc.',
+    )
+    predecessors: list['UnitHistoryNodeDTO'] = Field(
+        default_factory=list,
+        description='Older units this one supersedes (branching for multi-predecessor cases).',
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            'True when further predecessors exist but were not expanded — '
+            'either because ``max_depth`` was reached or the node was already '
+            'visited via another path.'
+        ),
+    )
 
 
 class NoteSearchResult(BaseModel):
@@ -910,6 +1287,17 @@ class NoteSearchResult(BaseModel):
     )
     related_notes: list[RelatedNoteDTO] = Field(default_factory=list)
     links: list[MemoryLinkDTO] = Field(default_factory=list)
+    degraded: bool = Field(
+        default=False,
+        description='True when this result set is INCOMPLETE: a statement_timeout forced '
+        'retrieval to drop the graph/keyword signals (see dropped_strategies). The caller '
+        'should treat results as partial and may re-query.',
+    )
+    dropped_strategies: list[str] = Field(
+        default_factory=list,
+        description='Retrieval strategies dropped due to a timeout fallback (e.g. graph, keyword). '
+        'Empty unless degraded is True.',
+    )
 
 
 class NoteSearchRequest(BaseModel):
@@ -918,6 +1306,7 @@ class NoteSearchRequest(BaseModel):
     query: str
     limit: int = 10
     vault_ids: list[UUID | str] | None = None
+    include_system_vaults: bool = False
     expand_query: bool = False
     fusion_strategy: str = 'rrf'
     strategies: list[str] = Field(default=['semantic', 'keyword', 'graph', 'temporal'])
@@ -1008,6 +1397,14 @@ class VaultSummaryDTO(BaseModel):
     key_entities: list[dict[str, Any]] = Field(
         description='Top entities by mention count: [{name, type, mention_count}].'
     )
+    embedding: list[float] | None = Field(
+        default=None,
+        description=(
+            'Stored vector of the narrative; populated only when include_vectors=true. '
+            'Null when the summary has never been (re)generated since the column landed, '
+            'the vault is empty, or the encode step failed.'
+        ),
+    )
     version: int = Field(description='Summary version number.')
     notes_incorporated: int = Field(description='Number of notes incorporated.')
     created_at: dt.datetime = Field(description='When the summary was created.')
@@ -1047,6 +1444,7 @@ class TOCNodeDTO(BaseModel):
     summary: SectionSummaryDTO | None = None
     token_estimate: int | None = None
     subtree_tokens: int | None = None
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
     children: list['TOCNodeDTO'] = Field(default_factory=list)
 
 
@@ -1064,6 +1462,10 @@ class KVEntryDTO(BaseModel):
     id: UUID
     key: str
     value: str
+    embedding: list[float] | None = Field(
+        default=None,
+        description='Stored value vector; populated only when include_vectors=true.',
+    )
     expires_at: dt.datetime | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -1079,11 +1481,38 @@ class KVPutRequest(BaseModel):
 
 
 class KVSearchRequest(BaseModel):
-    """Request to semantically search key-value entries."""
+    """Request to semantically search key-value entries.
 
-    query: str
+    Exactly one of ``query`` (text — server embeds) or ``query_embedding``
+    (pre-computed vector — sized to the embedding-model dimension) must be
+    provided. Passing both is rejected.
+    """
+
+    query: str | None = Field(
+        default=None,
+        description='Text query; the server runs it through the embedding model.',
+    )
+    query_embedding: list[float] | None = Field(
+        default=None,
+        description=(
+            'Pre-computed query embedding; bypasses the server-side encode '
+            'step. Sized to the embedding-model dimension.'
+        ),
+    )
     namespaces: list[str] | None = None
     limit: int = Field(5, ge=1, le=500)
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each entry's stored value vector in the results.",
+    )
+
+    @model_validator(mode='after')
+    def _exactly_one(self) -> 'KVSearchRequest':
+        if (self.query is None) == (self.query_embedding is None):
+            raise ValueError(
+                'Provide exactly one of `query` or `query_embedding` (not both, not neither).'
+            )
+        return self
 
 
 class FindNoteResult(BaseModel):
@@ -1111,12 +1540,29 @@ class SurveyRequest(BaseModel):
         default=None,
         description='Vault UUIDs or names to search. If None, uses default reader vault.',
     )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
+    )
     limit_per_query: int = Field(
         default=10, ge=1, le=50, description='Max results per sub-question.'
     )
     token_budget: int | None = Field(
         default=None,
         description='Max token budget for all results. Greedy packing: truncates when exceeded.',
+    )
+    after: dt.datetime | None = Field(
+        default=None, description='Only results on/after this date (ISO 8601).'
+    )
+    before: dt.datetime | None = Field(
+        default=None, description='Only results on/before this date (ISO 8601).'
+    )
+    reference_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Relative dates in the query (e.g. "last week") resolve against '
+            'this anchor instead of now().'
+        ),
     )
 
 

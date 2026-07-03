@@ -17,6 +17,7 @@ Full regeneration is available on demand via ``regenerate_summary()``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -32,6 +33,7 @@ from sqlmodel import col, func, select
 
 from memex_common.config import VaultSummaryConfig
 from memex_core.llm import run_dspy_operation
+from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.sql_models import (
     Chunk,
     ContentStatus,
@@ -140,10 +142,12 @@ class VaultSummaryService:
         metastore: AsyncBaseMetaStoreEngine,
         lm: dspy.LM,
         config: VaultSummaryConfig,
+        embedding_model: EmbeddingsModel,
     ) -> None:
         self.metastore = metastore
         self.lm = lm
         self.config = config
+        self.embedding_model = embedding_model
 
     async def get_summary(self, vault_id: UUID) -> VaultSummary | None:
         """Fetch the current vault summary, or None if none exists.
@@ -237,6 +241,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).one_or_none()
 
@@ -245,6 +250,7 @@ class VaultSummaryService:
                     select(func.max(Note.created_at), func.max(Note.publish_date))
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).one_or_none()
 
@@ -309,6 +315,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
                 count = (await session.execute(count_stmt)).scalar() or 0
                 return count > 0
@@ -321,6 +328,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(
                     (col(Note.summary_version_incorporated).is_(None))
                     | (col(Note.summary_version_incorporated) < summary.version)
@@ -363,6 +371,7 @@ class VaultSummaryService:
                         sa_update(Note)
                         .where(col(Note.vault_id) == vault_id)
                         .where(col(Note.status) == 'active')
+                        .where(col(Note.archived_at).is_(None))
                         .where(
                             (col(Note.summary_version_incorporated).is_(None))
                             | (col(Note.summary_version_incorporated) < current_version)
@@ -378,6 +387,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
@@ -418,6 +428,8 @@ class VaultSummaryService:
             running_narrative = prediction.updated_narrative
             running_themes = prediction.updated_themes
 
+        narrative_embedding = await self._embed_narrative(running_narrative, vault_id)
+
         # Phase 4: Persist with SELECT FOR UPDATE to prevent concurrent overwrites
         async with self.metastore.session() as session:
             stmt = (
@@ -437,6 +449,7 @@ class VaultSummaryService:
                 return summary
 
             summary.narrative = running_narrative
+            summary.embedding = narrative_embedding
             summary.themes = _themes_to_dicts(running_themes)
             summary.inventory = inventory
             summary.key_entities = key_entities
@@ -465,6 +478,7 @@ class VaultSummaryService:
                 sa_update(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .values(summary_version_incorporated=summary.version)
             )
             await session.execute(mark_all_stmt)
@@ -507,6 +521,8 @@ class VaultSummaryService:
         else:
             narrative, themes = await self._tier3_hierarchical(notes_data, note_count, current_time)
 
+        narrative_embedding = await self._embed_narrative(narrative, vault_id)
+
         # Persist
         async with self.metastore.session() as session:
             stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
@@ -518,6 +534,7 @@ class VaultSummaryService:
                 session.add(summary)
 
             summary.narrative = narrative
+            summary.embedding = narrative_embedding
             summary.themes = themes
             summary.inventory = inventory
             summary.key_entities = key_entities
@@ -531,6 +548,7 @@ class VaultSummaryService:
                 sa_update(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .values(summary_version_incorporated=summary.version)
             )
             await session.execute(mark_all_stmt)
@@ -538,6 +556,30 @@ class VaultSummaryService:
             await session.commit()
             await session.refresh(summary)
             return summary
+
+    async def _embed_narrative(self, narrative: str, vault_id: UUID) -> list[float] | None:
+        """Encode the narrative; non-fatal — a summary without a vector beats no summary."""
+        from memex_core.memory.retrieval._offload import (
+            get_embedding_call_timeout,
+            get_embedding_semaphore,
+        )
+
+        try:
+            async with get_embedding_semaphore():
+                vectors = await asyncio.wait_for(
+                    asyncio.to_thread(self.embedding_model.encode, [narrative]),
+                    timeout=get_embedding_call_timeout(),
+                )
+            return list(vectors[0].tolist())
+        except Exception as e:
+            logger.warning(
+                'Vault summary narrative embedding failed for vault %s (%s); '
+                'persisting without vector',
+                vault_id,
+                type(e).__name__,
+                exc_info=True,
+            )
+            return None
 
     # ------------------------------------------------------------------ #
     # Computed fields (no LLM)
@@ -561,6 +603,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
@@ -575,6 +618,7 @@ class VaultSummaryService:
                 select(func.min(Note.publish_date), func.max(Note.publish_date))
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(col(Note.publish_date).isnot(None))
             )
             date_row = (await session.execute(date_range_stmt)).one_or_none()
@@ -590,6 +634,7 @@ class VaultSummaryService:
                 select(Note.doc_metadata)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(col(Note.doc_metadata).isnot(None))
             )
             meta_rows = (await session.execute(meta_stmt)).all()
@@ -625,6 +670,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                     .where(col(Note.created_at) >= now - timedelta(days=7))
                 )
             ).scalar() or 0
@@ -635,6 +681,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                     .where(col(Note.created_at) >= now - timedelta(days=30))
                 )
             ).scalar() or 0
@@ -644,6 +691,7 @@ class VaultSummaryService:
                     select(func.max(Note.created_at))
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).scalar()
 
@@ -713,6 +761,7 @@ class VaultSummaryService:
             select(Note.id, Note.title, Note.description, Note.publish_date, Note.doc_metadata)
             .where(col(Note.vault_id) == vault_id)
             .where(col(Note.status) == 'active')
+            .where(col(Note.archived_at).is_(None))
             .order_by(col(Note.created_at))
         )
         if summary_version is not None:
@@ -788,6 +837,9 @@ class VaultSummaryService:
                 session.add(summary)
 
             summary.narrative = 'This vault is empty.'
+            # A vault can be EMPTIED (all notes deleted) — a previous narrative's
+            # vector must not survive as a similarity target for the placeholder.
+            summary.embedding = None
             summary.themes = []
             summary.inventory = {'total_notes': 0, 'total_entities': 0}
             summary.key_entities = []

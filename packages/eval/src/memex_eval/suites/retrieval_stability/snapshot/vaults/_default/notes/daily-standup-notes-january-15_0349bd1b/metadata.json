@@ -1,0 +1,153 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "b4e0aba3fca90e1468969efac872a30b",
+  "created_at": "2026-06-12T19:48:12.129212+00:00",
+  "description": "Daily Standup Meeting for Sprint 14",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "b4e0aba3fca90e1468969efac872a30b",
+      "filestore_path": null,
+      "note_description": "Ephemeral daily standup notes from January 15, 2025.",
+      "note_name": "Daily Standup Notes January 15",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "standup",
+        "jan-2025",
+        "ephemeral"
+      ],
+      "template": null,
+      "uuid": "0349bd1b885fa83be53b22b3a03cde8e"
+    },
+    "tags": [
+      "standup",
+      "jan-2025",
+      "ephemeral",
+      "daily standup",
+      "sprint 14",
+      "agile development",
+      "bug tracking",
+      "project management",
+      "api documentation",
+      "code review"
+    ]
+  },
+  "filestore_path": null,
+  "id": "0349bd1b-885f-a83b-e53b-22b3a03cde8e",
+  "page_index": {
+    "metadata": {
+      "description": "Daily Standup Meeting for Sprint 14",
+      "publish_date": "2025-01-15 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "standup",
+        "jan-2025",
+        "ephemeral",
+        "daily standup",
+        "sprint 14",
+        "agile development",
+        "bug tracking",
+        "project management",
+        "api documentation",
+        "code review"
+      ],
+      "title": "Daily Standup Notes January 15",
+      "total_tokens": 119
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "a7de6f30eba6fe69b851163b94e041b5",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "a7de6f30eba6fe69b851163b94e041b5",
+            "children": [],
+            "end_index": 306,
+            "id": "a144fb79b55b2f51c109e5ecb11d5d9a",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 86,
+            "subtree_tokens": 47,
+            "summary": {
+              "how": "By fixing bugs, designing interfaces, and writing migration scripts.",
+              "what": "Project status updates including a login bug fix, dashboard redesign, and database migration.",
+              "when": "Today (for staging deployment) and current work cycle.",
+              "where": "Staging environment and development codebase.",
+              "who": "Alex, Beth, and Carlos."
+            },
+            "title": "Updates",
+            "token_estimate": 47
+          },
+          {
+            "assets": [],
+            "block_id": "a7de6f30eba6fe69b851163b94e041b5",
+            "children": [],
+            "end_index": 386,
+            "id": "87dc78b67cab4d1416926f152f52e329",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 306,
+            "subtree_tokens": 17,
+            "summary": {
+              "how": "By waiting for the delivery of the API specification",
+              "what": "Project blockage due to missing backend documentation",
+              "when": "Current/Immediate",
+              "where": "Development environment/Backend-Frontend interface",
+              "who": "Beth and the backend team"
+            },
+            "title": "Blockers",
+            "token_estimate": 17
+          },
+          {
+            "assets": [],
+            "block_id": "a7de6f30eba6fe69b851163b94e041b5",
+            "children": [],
+            "end_index": 489,
+            "id": "0618f84b72f0864ad626a8ae8814f6ea",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 386,
+            "subtree_tokens": 23,
+            "summary": {
+              "how": "By deploying a software fix and initiating a formal code review process.",
+              "what": "Assignment of technical action items including a login fix and a peer review request.",
+              "when": "By end of day (EOD).",
+              "where": "Development environment/codebase.",
+              "who": "Alex and Carlos"
+            },
+            "title": "Action Items",
+            "token_estimate": 23
+          }
+        ],
+        "end_index": 489,
+        "id": "433250f4ec607db3c7d29bd9969b4287",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 119,
+        "summary": {
+          "how": "Through a structured meeting including updates, blockers, and action items.",
+          "what": "Daily standup meeting for Sprint 14.",
+          "when": "January 15, 2025.",
+          "where": "Project management/Sprint context.",
+          "who": "Project team."
+        },
+        "title": "Daily Standup — January 15, 2025",
+        "token_estimate": 32
+      }
+    ]
+  },
+  "publish_date": "2025-01-15T00:00:00+00:00",
+  "session_id": "ea4789ee-971f-4e33-abc2-40d2f11ffa69",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Daily Standup Notes January 15",
+  "updated_at": "2026-06-12T19:48:12.129212+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

@@ -137,3 +137,223 @@ def test_note_dto_binary_content_serialization():
     dumped = dto.model_dump(mode='json')
     assert dumped['filename'] == 'report.pdf'
     assert isinstance(dumped['content'], str)
+
+
+class TestSharedClassificationCoercers:
+    """F25b — ``coerce_intent_class`` / ``coerce_risk_class`` are the single
+    source of truth for default-on-fail coercion of LLM-emitted intent/risk
+    strings. Both ``RawFact`` and ``ExtractedFact`` validators (in
+    ``memex_core.memory.extraction.models``) delegate to these helpers so
+    they cannot diverge if a future ``IntentClass`` / ``RiskClass`` value is
+    added.
+    """
+
+    def test_intent_passthrough_for_valid_values(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        for c in IntentClass:
+            assert coerce_intent_class(c.value) == c.value
+
+    def test_risk_passthrough_for_valid_values(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        for c in RiskClass:
+            assert coerce_risk_class(c.value) == c.value
+
+    def test_intent_invalid_string_falls_back_to_default(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        for garbage in ('', 'forever', 'unknown', 'critical'):
+            assert coerce_intent_class(garbage) == IntentClass.DURABLE.value
+
+    def test_risk_invalid_string_falls_back_to_default(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        for garbage in ('', 'very-bad', 'redacted'):
+            assert coerce_risk_class(garbage) == RiskClass.NONE.value
+
+    def test_intent_non_string_garbage_falls_back_to_default(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        garbage_inputs: list[object] = [
+            None,
+            42,
+            3.14,
+            ['durable'],
+            {'k': 'durable'},
+            b'durable',
+        ]
+        for garbage in garbage_inputs:
+            assert coerce_intent_class(garbage) == IntentClass.DURABLE.value
+
+    def test_risk_non_string_garbage_falls_back_to_default(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        garbage_inputs: list[object] = [None, 0, [], {}, b'none']
+        for garbage in garbage_inputs:
+            assert coerce_risk_class(garbage) == RiskClass.NONE.value
+
+
+class TestSectionAssetAndNodeDTO:
+    """V5: NodeDTO/TOCNodeDTO carry block_id + per-section assets."""
+
+    def test_section_asset_dto_roundtrip(self) -> None:
+        from memex_common.schemas import SectionAssetDTO
+
+        a = SectionAssetDTO(path='img/x.png', alt_text='a cat', filename='x.png')
+        assert a.model_dump() == {'path': 'img/x.png', 'alt_text': 'a cat', 'filename': 'x.png'}
+
+    def test_section_asset_alt_optional(self) -> None:
+        from memex_common.schemas import SectionAssetDTO
+
+        a = SectionAssetDTO(path='x.png', filename='x.png')
+        assert a.alt_text is None
+
+    def test_node_dto_defaults(self) -> None:
+        import datetime as dt
+        from uuid import uuid4
+
+        from memex_common.schemas import NodeDTO
+
+        node = NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            title='T',
+            text='body',
+            level=1,
+            seq=0,
+            status='active',
+            created_at=dt.datetime.now(dt.timezone.utc),
+        )
+        assert node.block_id is None
+        assert node.assets == []
+
+    def test_node_dto_validates_assets_from_dicts(self) -> None:
+        import datetime as dt
+        from uuid import uuid4
+
+        from memex_common.schemas import NodeDTO, SectionAssetDTO
+
+        block = uuid4()
+        node = NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            block_id=block,
+            title='T',
+            text='body',
+            level=1,
+            seq=0,
+            status='active',
+            created_at=dt.datetime.now(dt.timezone.utc),
+            assets=[{'path': 'a.png', 'alt_text': 'cap', 'filename': 'a.png'}],
+        )
+        assert node.block_id == block
+        assert node.assets == [SectionAssetDTO(path='a.png', alt_text='cap', filename='a.png')]
+
+    def test_toc_node_dto_assets(self) -> None:
+        from memex_common.schemas import TOCNodeDTO
+
+        toc = TOCNodeDTO.model_validate(
+            {
+                'id': 'abc',
+                'title': 'Section',
+                'level': 2,
+                'assets': [{'path': 'p.png', 'alt_text': None, 'filename': 'p.png'}],
+            }
+        )
+        assert toc.assets[0].path == 'p.png'
+        assert TOCNodeDTO(id='x', title='y', level=1).assets == []
+
+
+def test_create_vault_request_kind_validator_accepts_known_values():
+    """CreateVaultRequest must accept both 'content' and 'system' kinds."""
+    from memex_common.schemas import CreateVaultRequest
+
+    assert CreateVaultRequest(name='x').kind == 'content'
+    assert CreateVaultRequest(name='x', kind='system').kind == 'system'
+    assert CreateVaultRequest(name='x', kind='content').kind == 'content'
+
+
+def test_create_vault_request_kind_validator_rejects_unknown():
+    """Unknown kind values must raise ValidationError (422 at the API layer),
+    not propagate to a 500 IntegrityError at the DB layer."""
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVaultRequest(name='x', kind='archive')
+    # The error mentions the field and the bad value so the operator
+    # can act on it without chasing a stack trace.
+    assert 'kind' in str(exc_info.value)
+    assert 'archive' in str(exc_info.value)
+
+
+def test_create_vault_request_policy_validator_accepts_known_keys():
+    """Round-3 review (H1): CreateVaultRequest must accept a policy blob
+    that the underlying VaultPolicy accepts, including empty dict and
+    the known toggle fields."""
+    from memex_common.schemas import CreateVaultRequest
+
+    assert CreateVaultRequest(name='x', policy=None).policy is None
+    assert CreateVaultRequest(name='x', policy={}).policy == {}
+    assert CreateVaultRequest(name='x', policy={'reflect': False}).policy == {'reflect': False}
+    assert CreateVaultRequest(name='x', policy={'summarize': True}).policy == {'summarize': True}
+    # Both toggles together are valid.
+    req = CreateVaultRequest(name='x', policy={'reflect': True, 'summarize': False})
+    assert req.policy == {'reflect': True, 'summarize': False}
+
+
+def test_create_vault_request_policy_validator_rejects_unknown_keys():
+    """Unknown policy keys must surface as 422 at the API boundary, NOT
+    propagate to a 500 from VaultService.coerce_policy's deeper
+    pydantic.ValidationError. Regression: prior to the validator the
+    service layer was the only guard, so the HTTP response code was
+    500 IntegrityError-shaped for what is genuinely a client error.
+    """
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVaultRequest(name='x', policy={'unknown_key': True})
+    assert 'policy' in str(exc_info.value) or 'extra' in str(exc_info.value)
+
+
+def test_create_vault_request_policy_validator_coerces_through_pydantic():
+    """The validator delegates to ``VaultPolicy.model_validate`` and
+    returns the *normalized* dict (canonical bools, ``None`` fields
+    stripped via ``exclude_none``) so any code reading
+    ``request.policy`` between the API boundary and the service call
+    sees coerced types — not pydantic's lax-mode-coerced internals.
+
+    Round-4 review (M): the prior version returned the raw input dict,
+    which let ``{'reflect': 1}`` and ``{'reflect': 'false'}`` survive
+    into downstream consumers. The normalized form is the contract
+    this test pins.
+    """
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    # Canonical bools round-trip unchanged.
+    assert CreateVaultRequest(name='x', policy={'reflect': True}).policy == {'reflect': True}
+    assert CreateVaultRequest(name='x', policy={'reflect': False}).policy == {'reflect': False}
+    # Lax-mode coercion is normalized to canonical bools.
+    assert CreateVaultRequest(name='x', policy={'reflect': 1}).policy == {'reflect': True}
+    # pydantic v2's smart string coercion (NOT Python bool()) — 'false'
+    # becomes False, then we surface the canonical form.
+    assert CreateVaultRequest(name='x', policy={'reflect': 'false'}).policy == {'reflect': False}
+    # None fields are dropped (exclude_none): the service layer
+    # reconstructs VaultPolicy(reflect=None) from an empty dict the
+    # same way as from no key at all.
+    req = CreateVaultRequest(name='x', policy={'reflect': None})
+    assert req.policy == {}
+    # Truly unrepresentable: a nested dict is not bool-coercible and
+    # the validator surfaces a 422 with the offending field named in
+    # the error so an operator can act on it without a stack trace.
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVaultRequest(name='x', policy={'reflect': {'nested': 'obj'}})
+    assert 'reflect' in str(exc_info.value)

@@ -83,13 +83,15 @@ class TestVaultConfigResolution:
 
     @pytest.fixture(autouse=True)
     def _isolate_config(self):
-        """Prevent ambient YAML configs from interfering."""
+        """Prevent ambient YAML configs and env vars from interfering."""
         with patch.dict(
             os.environ,
             {
                 'MEMEX_LOAD_LOCAL_CONFIG': 'false',
                 'MEMEX_LOAD_GLOBAL_CONFIG': 'false',
+                'MEMEX_VAULT': '',
             },
+            clear=False,
         ):
             yield
 
@@ -133,6 +135,104 @@ class TestVaultConfigResolution:
         config = MemexConfig(vault=VaultConfig(search=[]))
         assert config.read_vaults == []
 
+    def test_bare_env_vault_overrides_server_default(self):
+        """MEMEX_VAULT=foo sets vault.active and therefore write/read vault."""
+        with patch.dict(os.environ, {'MEMEX_VAULT': 'playground'}):
+            config = MemexConfig()
+        assert config.write_vault == 'playground'
+        assert config.read_vaults == ['playground']
+
+
+class TestVaultBareStringCoercion:
+    """C.1: MemexConfig.vault accepts bare-string env / YAML shorthand
+    in addition to the nested form. Closes the deployment env-var footgun
+    where MEMEX_VAULT=hermes (per the hermes-plugin README) was crashing
+    the CLI with `ValidationError: error parsing value for field "vault"`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                'MEMEX_LOAD_LOCAL_CONFIG': 'false',
+                'MEMEX_LOAD_GLOBAL_CONFIG': 'false',
+            },
+        ):
+            yield
+
+    def test_bare_string_env_promotes_to_active(self):
+        """`MEMEX_VAULT=hermes` → `vault.active='hermes'`. THE regression test."""
+        with patch.dict(os.environ, {'MEMEX_VAULT': 'hermes'}):
+            cfg = MemexConfig()
+        assert cfg.vault.active == 'hermes'
+        assert cfg.vault.search is None
+
+    def test_nested_env_form_still_works(self):
+        """`MEMEX_VAULT__ACTIVE=memex` keeps working (backwards compat)."""
+        with patch.dict(os.environ, {'MEMEX_VAULT__ACTIVE': 'memex'}):
+            cfg = MemexConfig()
+        assert cfg.vault.active == 'memex'
+
+    def test_dict_kwarg_form_still_works(self):
+        """Direct kwarg with a dict still works."""
+        cfg = MemexConfig(vault={'active': 'kw'})
+        assert cfg.vault.active == 'kw'
+
+    def test_bare_string_kwarg_promotes_to_active(self):
+        """`MemexConfig(vault='kw')` is also accepted as shorthand."""
+        cfg = MemexConfig(vault='kw')
+        assert cfg.vault.active == 'kw'
+
+    def test_vault_search_csv_env_form(self):
+        """`MEMEX_VAULT__SEARCH=a,b,c` → `['a', 'b', 'c']`."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': 'a,b,c'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b', 'c']
+
+    def test_vault_search_csv_strips_whitespace_and_empties(self):
+        """CSV parser drops empty entries (trailing commas, extra whitespace)."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': 'a, b ,, c'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b', 'c']
+
+    def test_vault_search_json_env_form_still_works(self):
+        """JSON list env value `["a","b"]` still parses as a list."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': '["a","b"]'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b']
+
+    def test_vault_search_list_kwarg_passes_through(self):
+        """Direct list kwarg is unchanged."""
+        cfg = MemexConfig(vault=VaultConfig(search=['x', 'y']))
+        assert cfg.vault.search == ['x', 'y']
+
+    def test_bare_and_nested_env_both_set_resolves_to_one(self):
+        """If somehow both MEMEX_VAULT and MEMEX_VAULT__ACTIVE are set,
+        ONE of them resolves and the loader does not raise.
+
+        Pydantic-settings v2 currently resolves the nested form after
+        the bare form, so `nested` wins empirically — but that priority
+        is undocumented and could flip on a minor bump. Asserting the
+        looser invariant keeps the test useful while not pinning us to
+        an upstream implementation detail.
+        """
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT': 'bare', 'MEMEX_VAULT__ACTIVE': 'nested'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.active in ('bare', 'nested')
+
     def test_full_resolution_chain(self):
         """vault.search > vault.active > server defaults."""
         config = MemexConfig(
@@ -144,3 +244,46 @@ class TestVaultConfigResolution:
         )
         assert config.write_vault == 'proj'
         assert config.read_vaults == ['proj', 'shared']
+
+
+# ---------------------------------------------------------------------------
+# EntityMaintenanceConfig
+# ---------------------------------------------------------------------------
+
+
+class TestEntityMaintenanceConfig:
+    """Defaults + validator for the cross-batch entity-cluster collapse loop."""
+
+    def test_defaults_off(self):
+        from memex_common.config import EntityMaintenanceConfig
+
+        cfg = EntityMaintenanceConfig()
+        assert cfg.scan_enabled is False
+        assert cfg.top_n == 100
+        assert cfg.scan_cooldown_days == 7
+        assert cfg.pair_threshold == 0.85
+        assert cfg.cluster_min_threshold == 0.70
+
+    def test_validator_rejects_cluster_min_above_pair_threshold(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from memex_common.config import EntityMaintenanceConfig
+
+        with pytest.raises(ValidationError):
+            EntityMaintenanceConfig(pair_threshold=0.7, cluster_min_threshold=0.8)
+
+    def test_validator_allows_equal_thresholds(self):
+        from memex_common.config import EntityMaintenanceConfig
+
+        cfg = EntityMaintenanceConfig(pair_threshold=0.75, cluster_min_threshold=0.75)
+        assert cfg.cluster_min_threshold == cfg.pair_threshold
+
+    def test_top_n_below_two_rejected_by_config(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from memex_common.config import EntityMaintenanceConfig
+
+        with pytest.raises(ValidationError):
+            EntityMaintenanceConfig(top_n=1)

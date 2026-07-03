@@ -114,7 +114,10 @@ def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | No
             timeout=model_config.timeout,
             num_retries=model_config.num_retries,
         )
-        engine = ContradictionEngine(lm=lm, config=contradiction_config)
+        failure_weight = config.server.memory.outcomes.contradiction_failure_weight
+        engine = ContradictionEngine(
+            lm=lm, config=contradiction_config, failure_co_count_weight=failure_weight
+        )
         logger.info(
             'Contradiction engine created (model=%s, threshold=%.2f, alpha=%.2f)',
             model_config.model,
@@ -175,6 +178,8 @@ class MemoryEngine:
         note_id: str | None = None,
         reflect_after: bool = True,
         agent_name: str = 'memex_agent',
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> dict[str, Any]:
         """
         Ingest and persist content into memory.
@@ -206,6 +211,8 @@ class MemoryEngine:
             contents=contents,
             agent_name=agent_name,
             note_id=note_id,
+            intent_override=intent_override,
+            risk_override=risk_override,
         )
 
         logger.info(f'Retained {len(unit_ids)} units. Touched {len(touched_entities)} entities.')
@@ -249,14 +256,17 @@ class MemoryEngine:
                 f'Triggering immediate reflection on touched entities for vault {vault_id}...'
             )
             reflector = ReflectionEngine(
-                session, self.config, embedder=self.extraction.embedding_model
+                session,
+                self.config,
+                embedder=self.extraction.embedding_model,
+                entity_session_factory=self._session_factory,
             )
 
             # Use optimized batch reflection
             requests = [
                 ReflectionRequest(entity_id=eid, vault_id=vault_id) for eid in touched_entities
             ]
-            results = await reflector.reflect_batch(requests)
+            results, _abandoned, _failed = await reflector.reflect_batch(requests)
 
             logger.info(f'Reflected on {len(results)}/{len(touched_entities)} entities.')
 
@@ -341,7 +351,12 @@ class MemoryEngine:
         Returns:
             The updated MentalModel.
         """
-        reflector = ReflectionEngine(session, self.config, embedder=self.extraction.embedding_model)
+        reflector = ReflectionEngine(
+            session,
+            self.config,
+            embedder=self.extraction.embedding_model,
+            entity_session_factory=self._session_factory,
+        )
         return await reflector.reflect_on_entity(request)
 
     async def process_reflection_queue(
@@ -389,23 +404,48 @@ class MemoryEngine:
         logger.info(f'Processing reflection queue batch: {len(tasks)} tasks')
 
         # 3. Reflect
-        reflector = ReflectionEngine(session, self.config, embedder=self.extraction.embedding_model)
+        reflector = ReflectionEngine(
+            session,
+            self.config,
+            embedder=self.extraction.embedding_model,
+            entity_session_factory=self._session_factory,
+        )
         requests = [ReflectionRequest(entity_id=t.entity_id, vault_id=t.vault_id) for t in tasks]
 
         try:
-            results = await reflector.reflect_batch(requests)
+            results, abandoned_list, failed_list = await reflector.reflect_batch(requests)
+            # Three disjoint outcome buckets:
+            # * succeeded → delete the queue row
+            # * abandoned (CAS lost) → re-enqueue PENDING without bumping
+            #   retry_count so a hot entity does not DEAD_LETTER from
+            #   contention
+            # * failed (real exception) → mark FAILED so retry_count
+            #   increments toward DEAD_LETTER and operators get
+            #   visibility. Routing failures through the abandoned bucket
+            #   would carousel a broken entity between PENDING and
+            #   PROCESSING forever.
+            abandoned_ids = set(abandoned_list)
+            failed_ids = set(failed_list)
 
-            # Map results back to tasks to identify successes
-            # We use (entity_id, vault_id) pair as key
             succeeded_pairs = {(m.entity_id, m.vault_id) for m in results}
 
-            # 4. Cleanup / Update Queue
             for task in tasks:
                 if (task.entity_id, task.vault_id) in succeeded_pairs:
-                    # Success: Remove from queue
                     await session.delete(task)
+                elif task.entity_id in abandoned_ids:
+                    task.status = ReflectionStatus.PENDING
+                    if not task.last_error or 'CAS abandon' in task.last_error:
+                        task.last_error = 'CAS abandon (concurrent refresh won)'
+                    session.add(task)
+                elif task.entity_id in failed_ids:
+                    task.status = ReflectionStatus.FAILED
+                    session.add(task)
                 else:
-                    # Failure: Mark as FAILED
+                    # Engine returned no model for this entity but did
+                    # not classify it as abandoned or failed — treat as
+                    # a real failure (defensive: the engine's contract
+                    # promises one of the three buckets, but bugs there
+                    # should not silently lose work).
                     task.status = ReflectionStatus.FAILED
                     session.add(task)
 

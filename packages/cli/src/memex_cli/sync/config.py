@@ -56,6 +56,15 @@ class ExcludeConfig(BaseModel):
         'For example, with key="agents" and value="skip", a note with '
         '"agents: skip" in its frontmatter will not be synced.',
     )
+    frontmatter_vault_key: str = Field(
+        default='vault',
+        description='Frontmatter key checked to route a note to a different vault. '
+        'If the note has this key set to a vault name or vault ID, the note is '
+        'ingested into that vault instead of the active sync vault. Re-syncing '
+        'after the override is added or changed migrates the note: archive in '
+        'the source vault, ingest in the target. Unknown vaults log a warning '
+        'and fall back to the active sync vault.',
+    )
 
     @property
     def all_patterns(self) -> list[str]:

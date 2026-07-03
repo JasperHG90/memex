@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "3c366ad02d1948329678933b8e03462d",
+  "created_at": "2026-06-12T19:48:22.640657+00:00",
+  "description": "Widget Pro Product Overview and Enterprise Features",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "3c366ad02d1948329678933b8e03462d",
+      "filestore_path": null,
+      "note_description": "Widget Pro active product documentation.",
+      "note_name": "Widget Pro Product Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "product",
+        "widget-pro",
+        "active"
+      ],
+      "template": null,
+      "uuid": "9bdbfbacd88fdd5eccbc725c05a88536"
+    },
+    "tags": [
+      "product",
+      "widget-pro",
+      "active",
+      "widget pro",
+      "real-time analytics",
+      "horizontal scaling",
+      "enterprise software",
+      "data processing",
+      "sso integration"
+    ]
+  },
+  "filestore_path": null,
+  "id": "9bdbfbac-d88f-dd5e-ccbc-725c05a88536",
+  "page_index": {
+    "metadata": {
+      "description": "Widget Pro Product Overview and Enterprise Features",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "product",
+        "widget-pro",
+        "active",
+        "widget pro",
+        "real-time analytics",
+        "horizontal scaling",
+        "enterprise software",
+        "data processing",
+        "sso integration"
+      ],
+      "title": "Widget Pro Product Overview",
+      "total_tokens": 99
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "abff2a56feac8411e6a886192e1159e9",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "abff2a56feac8411e6a886192e1159e9",
+            "children": [],
+            "end_index": 336,
+            "id": "e41e6b55b17ebe2c1ce465ba1d546bc4",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 113,
+            "subtree_tokens": 42,
+            "summary": {
+              "how": "By supporting real-time analytics with sub-millisecond query latency and horizontal scaling to 100 nodes.",
+              "what": "An overview of Widget Pro's advanced data processing capabilities.",
+              "when": null,
+              "where": "As part of the Widget Series product line.",
+              "who": "Widget Pro"
+            },
+            "title": "Overview",
+            "token_estimate": 42
+          },
+          {
+            "assets": [],
+            "block_id": "abff2a56feac8411e6a886192e1159e9",
+            "children": [],
+            "end_index": 475,
+            "id": "1bd84ec34adc281d51ebc1c6bb29023d",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 336,
+            "subtree_tokens": 29,
+            "summary": {
+              "how": "Through horizontal scaling, enterprise SSO integration, and low-latency query architecture.",
+              "what": "Key software features including real-time analytics and high-performance scaling.",
+              "when": null,
+              "where": "Within an enterprise data or analytics environment.",
+              "who": "The software system and its enterprise users."
+            },
+            "title": "Features",
+            "token_estimate": 29
+          }
+        ],
+        "end_index": 475,
+        "id": "c5028d0df1aab23ec23425e7a1a64c82",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 99,
+        "summary": {
+          "how": "Through detailed documentation organized into overview and feature sections.",
+          "what": "Product information and functional specifications for the Widget Pro.",
+          "when": null,
+          "where": "Within the active product documentation system.",
+          "who": "Widget Pro product team and users."
+        },
+        "title": "Widget Pro — Active Product",
+        "token_estimate": 28
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "245befcb-4b8b-4c4b-8cb6-acec8356b73a",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Widget Pro Product Overview",
+  "updated_at": "2026-06-12T19:48:22.640657+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

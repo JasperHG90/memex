@@ -30,6 +30,13 @@ from memex_core.services.vault_summary_signatures import LLMTheme
 # ---------------------------------------------------------------------------
 
 
+def _mock_embedding_model() -> MagicMock:
+    """Encode returns a real 384-vector so persisted writes survive pgvector."""
+    model = MagicMock()
+    model.encode.return_value = [MagicMock(tolist=lambda: [0.1] * 384)]
+    return model
+
+
 async def _create_vault(session, vault_id=None, name=None):
     vault_id = vault_id or uuid4()
     name = name or f'test_vault_{vault_id.hex[:8]}'
@@ -248,6 +255,7 @@ async def test_update_summary_consolidates_sessions(metastore, session):
         metastore=metastore,
         lm=mock_lm,
         config=VaultSummaryConfig(),
+        embedding_model=_mock_embedding_model(),
     )
 
     with patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run:
@@ -298,6 +306,7 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
         metastore=metastore,
         lm=mock_lm,
         config=VaultSummaryConfig(),
+        embedding_model=_mock_embedding_model(),
     )
 
     mock_prediction = MagicMock()
@@ -351,6 +360,7 @@ async def test_update_summary_no_delta_returns_existing(metastore, session):
         metastore=metastore,
         lm=mock_lm,
         config=VaultSummaryConfig(),
+        embedding_model=_mock_embedding_model(),
     )
 
     # No new notes → should return existing without calling LLM

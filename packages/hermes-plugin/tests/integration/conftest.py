@@ -25,7 +25,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator, Iterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -72,6 +72,88 @@ def _require_prerequisites() -> None:
             'testcontainers Postgres.',
             allow_module_level=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# LLM mocking — make the suite hermetic (no LLM API key required)
+# ---------------------------------------------------------------------------
+#
+# These tests exercise plugin <-> server <-> Postgres wiring, not LLM behaviour.
+# Without a mock, ``ingestion._process_chunk`` calls ``self.memory.retain``,
+# which fans out to ``run_dspy_operation`` for fact extraction; with no API
+# key the call raises ``litellm.AuthenticationError``, the AsyncTransaction
+# rolls back, and the note never persists. The CI ``llm-tests`` job is gated
+# off (no key in secrets), so the only sustainable fix is to mock the LLM.
+#
+# Mirrors the unit-test ``MockDspyLM`` pattern (packages/core/tests/unit/conftest.py
+# and packages/core/tests/fixtures/llm_mocks.py): patches ``run_dspy_operation``
+# at the definition site AND at every module that did
+# ``from memex_core.llm import run_dspy_operation`` (the function reference is
+# captured at import time, so patching only the source is not enough).
+
+
+_RUN_DSPY_IMPORT_SITES: tuple[str, ...] = (
+    'memex_core.llm.run_dspy_operation',
+    'memex_core.memory.extraction.core.run_dspy_operation',
+    # Note: as of F25b the classifier no longer issues its own LLM call —
+    # intent_class / risk_class are emitted directly by the extraction
+    # signature, so ``classifier.run_dspy_operation`` no longer exists.
+    'memex_core.memory.reflect.reflection.run_dspy_operation',
+    'memex_core.memory.retrieval.expansion.run_dspy_operation',
+    'memex_core.memory.retrieval.temporal_concretizer.run_dspy_operation',
+    'memex_core.memory.contradiction.engine.run_dspy_operation',
+    'memex_core.processing.titles.run_dspy_operation',
+    'memex_core.processing.dates.run_dspy_operation',
+    'memex_core.services.search.run_dspy_operation',
+    'memex_core.services.vault_summary.run_dspy_operation',
+)
+
+
+def _make_empty_extraction_result() -> MagicMock:
+    """Default mock result: an ``ExtractedOutput`` with zero facts.
+
+    Shape mirrors what ``_extract_facts_from_chunk`` and
+    ``extract_facts_from_frontmatter`` consume::
+
+        result.extracted_facts.extracted_facts -> []
+
+    Other call sites read different attributes (``pred.detected_headers``,
+    ``result.classifier`` etc.); ``MagicMock`` returns child mocks for those
+    by default, which is harmless for the wiring tests we care about — they
+    only hit the simple-strategy extraction path with meaningful titles, so
+    no LLM-derived field is ever asserted on.
+    """
+    result = MagicMock()
+    result.extracted_facts.extracted_facts = []
+    return result
+
+
+async def _mock_run_dspy(*args: Any, **kwargs: Any) -> Any:
+    return _make_empty_extraction_result()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _mock_run_dspy_operation_for_hermes_integration() -> Generator[None, None, None]:
+    """Patch ``run_dspy_operation`` for the entire integration session.
+
+    Session-scoped + autouse so the patch is installed BEFORE the uvicorn
+    server thread starts (the server runs in-process, so module-level
+    patches are visible across threads). Wrapping ``AsyncMock`` per-site
+    keeps each ``patch`` independent — necessary because some of the call
+    sites import the symbol via ``from ... import run_dspy_operation``,
+    binding the reference at import time.
+    """
+    patches = [
+        patch(target, new=AsyncMock(side_effect=_mock_run_dspy))
+        for target in _RUN_DSPY_IMPORT_SITES
+    ]
+    for p in patches:
+        p.start()
+    try:
+        yield
+    finally:
+        for p in patches:
+            p.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +359,26 @@ def installed_plugin(hermes_home: Path) -> Path:
     return plugin_dir
 
 
+def _ensure_quality_gate_disabled(hermes_home: Path) -> None:
+    """Write or merge quality-gate-off config so short test turns pass."""
+    import json
+
+    cfg_path = hermes_home / 'memex' / 'config.json'
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    existing.setdefault('retain', {}).update(
+        {
+            'min_capture_turns': 0,
+            'min_capture_chars': 0,
+        }
+    )
+    cfg_path.write_text(json.dumps(existing))
+
+
 @pytest.fixture(autouse=True)
 def _hermes_env(hermes_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('HERMES_HOME', str(hermes_home))
+    _ensure_quality_gate_disabled(hermes_home)
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +393,7 @@ def vault_name() -> str:
 
 @pytest_asyncio.fixture
 async def live_vault(live_api: Any, vault_name: str) -> UUID:
-    from memex_common.schemas import CreateVaultRequest
-
-    vault = await live_api.create_vault(CreateVaultRequest(name=vault_name))
+    vault = await live_api.create_vault(name=vault_name)
     return UUID(str(vault.id))
 
 

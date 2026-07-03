@@ -26,62 +26,7 @@ These options apply to all commands and must be specified before the subcommand.
 
 ## `memory`
 
-Ingest and search memories.
-
-> **Note:** `memory add` is a legacy alias for `note add`. Both commands accept the same options and produce identical results. Prefer `note add` for new workflows.
-
-### `memory add`
-
-```
-memex memory add [CONTENT] [OPTIONS]
-```
-
-Add a new memory to Memex. Accepts text content directly, a file/directory path, or a URL. Use `--asset` to attach auxiliary files (images, PDFs) to a note.
-
-#### Arguments
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `CONTENT` | No | Text content to add. Required if `--file` and `--url` are not provided. |
-
-#### Options
-
-| Option | Short | Type | Description |
-|--------|-------|------|-------------|
-| `--file PATH` | `-f` | Path | Path to a file or directory to ingest. Directories are scanned recursively. |
-| `--url URL` | `-u` | str | URL to scrape and ingest. |
-| `--asset PATH` | `-a` | Path | Path to an asset file (image, PDF) to attach. Repeatable for multiple assets. |
-| `--vault NAME` | `-v` | str | Target vault for writing (overrides active vault). |
-| `--key KEY` | `-k` | str | Unique stable key for the note (enables idempotent updates). |
-| `--background` | `-b` | bool | Queue ingestion as a background job instead of waiting for completion. |
-| `--user-notes TEXT` | `-n` | str | Your own context or commentary about this note. |
-
-#### Examples
-
-```bash
-# Add text content
-memex memory add "The project uses PostgreSQL with pgvector for storage."
-
-# Ingest a file
-memex memory add --file ./notes/meeting.md
-
-# Ingest a directory recursively
-memex memory add --file ./research-papers/
-
-# Scrape and ingest a URL
-memex memory add --url https://example.com/article
-
-# Add with attached assets
-memex memory add --file ./report.md --asset ./diagram.png --asset ./data.csv
-
-# Background ingestion
-memex memory add --file ./large-dataset/ --background
-```
-
-> [!WARNING]
-> `--asset` cannot be used with a directory `--file`. Point `--file` to a single file when using `--asset`.
-
----
+Ingest and search memories. To create notes, use `note add`.
 
 ### `note add`
 
@@ -217,16 +162,15 @@ Search the knowledge base using TEMPR retrieval strategies.
 |--------|-------|------|---------|-------------|
 | `--vault` | `-v` | str (list) | - | Filter by vault(s). Repeatable. Use `"*"` for all vaults. |
 | `--limit` | | int | `5` | Maximum number of results to return. |
-| `--token-budget` | `-t` | int | - | Token budget for retrieval context. |
+| `--budget` | `-b` | int | - | Token budget for retrieval context. |
 | `--answer` | `-a` | bool | `False` | Generate an AI-synthesized answer from results. |
-| `--json` | | bool | `False` | Output results as JSON. |
-| `--minimal` | | bool | `False` | Output memory unit IDs only (one per line). |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (unit IDs, one per line), `line` (type + truncated text per result), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--no-semantic` | | bool | `False` | Exclude semantic (vector) strategy. |
 | `--no-keyword` | | bool | `False` | Exclude keyword (BM25) strategy. |
 | `--no-graph` | | bool | `False` | Exclude graph (entity) strategy. |
 | `--no-temporal` | | bool | `False` | Exclude temporal strategy. |
 | `--no-mental-model` | | bool | `False` | Exclude mental model strategy. |
-| `--compact` | | bool | `False` | One line per result: type + truncated text. |
 | `--include-stale` | | bool | `False` | Include stale memory units in results. |
 | `--source-context` | | str | - | Filter by source context (e.g. `"user_notes"`). |
 
@@ -270,6 +214,114 @@ Delete a memory unit and all associated data (entity links, memory links).
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+---
+
+### `memory deprioritize`
+
+```
+memex memory deprioritize UNIT_ID [OPTIONS]
+```
+
+Deprioritize a memory unit without deleting it. The unit stays retrievable when `include_deprioritized=true` is passed. Undo with `memory restore`.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `UNIT_ID` | Yes | UUID of the memory unit to deprioritize. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | From config | Vault name or UUID. |
+| `--reason` | `-r` | str | `manual` | Why this unit is being deprioritized. |
+
+---
+
+### `memory restore`
+
+```
+memex memory restore UNIT_ID [OPTIONS]
+```
+
+Restore a deprioritized memory unit, flipping `is_deprioritized` back to false.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `UNIT_ID` | Yes | UUID of the memory unit to restore. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | From config | Vault name or UUID. |
+
+---
+
+### `memory reconsolidate`
+
+```
+memex memory reconsolidate ENTITY_ID [OPTIONS]
+```
+
+Re-evaluate every memory unit linked to one entity: acquire a per-entity advisory lock, run contradiction detection across the entity's units, then trigger a reflection cycle on its mental model. LLM-intensive — use sparingly, scoped to one entity with evidence that its model is wrong.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `ENTITY_ID` | Yes | UUID of the entity to reconsolidate. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | From config | Vault name or UUID. |
+
+---
+
+### `memory consolidate`
+
+```
+memex memory consolidate [OPTIONS]
+```
+
+Vault-wide low-Memory-Worth consolidation. Scans every active unit, computes the FSFM composite deprioritization score, and deprioritizes units below the auto-band threshold. No LLM calls. The scheduler runs the same pass on a timer — use sparingly.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | From config | Vault name or UUID. |
+| `--dry-run` | | bool | `False` | Preview which units would flip without writing. |
+
+---
+
+### `memory links`
+
+```
+memex memory links UNIT_ID [OPTIONS]
+```
+
+List the typed links connecting one memory unit to others (for example, `contradicts`).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `UNIT_ID` | Yes | UUID of the memory unit. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--type` | `-t` | str | All | Filter by link type (for example, `contradicts`). |
+| `--limit` | `-l` | int | From config | Maximum number of links to return. |
+| `--json` | | bool | `False` | Output as JSON. |
 
 ---
 
@@ -377,6 +429,218 @@ memex memory lineage note 550e8400-e29b-41d4-a716-446655440000 --depth 5 --json
 
 ---
 
+## `lint`
+
+Manage the maintenance ledger (rule-based and LLM-driven hygiene findings).
+
+### `lint run`
+
+```
+memex lint run [--vault <name>] [--no-llm]
+```
+
+Run the lint passes and write findings to the ledger. Runs both the SQL rules and the LLM content checks by default; pass `--no-llm` to run the SQL rules only.
+
+### `lint status`
+
+```
+memex lint status [--vault <name>|--global|--all]
+```
+
+Pending finding counts. `--all` totals every vault and the global scope; `--global` shows only global (vault_id NULL) findings.
+
+### `lint findings`
+
+```
+memex lint findings [--vault <name>] [--type <category>] [--status <state>] [--limit <n>]
+```
+
+List maintenance findings. `--limit` defaults to a capped page size.
+
+### `lint actions`
+
+```
+memex lint actions [--json]
+```
+
+List the catalogue of resolution actions a finding can dispatch. Pass `--json` to emit the raw catalogue, including each action's params schema.
+
+### `lint dismiss`
+
+```
+memex lint dismiss <finding_id>
+```
+
+Flip a pending finding to `dismissed`.
+
+### `lint resolve`
+
+```
+memex lint resolve <finding_id>
+```
+
+Flip a pending finding to `resolved`.
+
+### `lint apply`
+
+```
+memex lint apply <finding_id>
+```
+
+Apply the recommended action on a winner-proposal finding
+(`rule_name=propose_contradiction_winner`). Dispatches on the action
+literal in `evidence.action`:
+
+- `mark_loser_stale` — flip the loser `MemoryUnit.status` to `'stale'`.
+- `supersede_loser_note` — set the loser note's `superseded_by` to the
+  winner's note id (falls back to `mark_loser_stale` when both units
+  share the same parent note).
+- `refine_not_contradict` — rewrite the inbound `MemoryLink.link_type`
+  from `'contradicts'` to `'refines'`.
+- `inconclusive` — no-op write; flips the finding to resolved.
+
+Each apply captures `prior_state` under `evidence.resolution` so the
+mutation is reversible via `memex lint reverse`.
+
+### `lint reverse`
+
+```
+memex lint reverse <finding_id>
+```
+
+Reverse a previously applied winner-proposal. Atomically restores the
+row(s) recorded under `evidence.resolution.prior_state` and writes a
+paired audit row (`propose_contradiction_winner_reversal`).
+
+### `lint review`
+
+```
+memex lint review [--vault <name>|--global|--all] [--type <category>] [--limit <n>] [--tui/--no-tui] [--apply]
+```
+
+Walk pending findings interactively. By default this launches the Textual
+cockpit — a two-pane interface with the proposal queue on the left and a
+detail card plus numbered remediation menu on the right. All verdicts go
+through the `/lint/findings/{id}/resolve|dismiss|reverse` endpoints.
+
+Cockpit key bindings:
+
+| Key | Action |
+|-----|--------|
+| `/` | Filter the queue by rule name. |
+| `a` | Select all visible findings. |
+| `Esc` | Deselect all. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str (list) | Active vault | Vault(s) to review. |
+| `--global / --no-global` | | bool | `False` | Review only global (vault_id NULL) findings. |
+| `--all / --no-all` | | bool | `False` | Review pending findings across every scope. |
+| `--type` | `-t` | str | All | Filter by lint type: `structural`, `quality`, `governance`, `schema`, `routing`. |
+| `--limit` | `-l` | int | `200` | Maximum number of findings to load into the cockpit. |
+| `--tui / --no-tui` | | bool | `True` | Launch the Textual cockpit (default). Pass `--no-tui` for the legacy prompt-loop reviewer (headless/CI). |
+| `--apply` | | bool | `False` | Legacy prompt mode only: write resolutions instead of running dry. Ignored under `--tui` (the cockpit always commits). |
+
+### `lint stats refresh`
+
+```
+memex lint stats refresh [--vault <name>]
+```
+
+Recompute the cached lint-finding statistics.
+
+### `lint optimize run`
+
+```
+memex lint optimize run [OPTIONS]
+```
+
+Run a DSPy optimization pass over the LLM-lint signature.
+
+### `lint optimize history`
+
+```
+memex lint optimize history
+```
+
+Show the history of optimization runs.
+
+### `lint optimize rollback`
+
+```
+memex lint optimize rollback
+```
+
+Roll back to the previous optimized signature.
+
+### `lint calibration list`
+
+```
+memex lint calibration list
+```
+
+List the per-rule calibration thresholds.
+
+### `lint calibration run`
+
+```
+memex lint calibration run
+```
+
+Recalibrate the per-rule thresholds from recorded telemetry.
+
+### `lint calibration freeze`
+
+```
+memex lint calibration freeze
+```
+
+Freeze the current calibration so recalibration cannot change it.
+
+### `lint calibration rollback`
+
+```
+memex lint calibration rollback
+```
+
+Roll back to the previous calibration.
+
+### `lint signatures list`
+
+```
+memex lint signatures list
+```
+
+List the stored LLM-lint signatures.
+
+### `lint signatures show`
+
+```
+memex lint signatures show
+```
+
+Show one stored signature in full.
+
+### `lint signatures diff`
+
+```
+memex lint signatures diff
+```
+
+Diff two stored signatures.
+
+### `lint signatures status`
+
+```
+memex lint signatures status
+```
+
+Show which signature is currently active.
+
+---
+
 ## `note`
 
 Manage and view source notes.
@@ -398,10 +662,10 @@ List all notes in the current vault.
 | `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 | `--after` | | str | - | Only notes on/after this date (ISO 8601). |
 | `--before` | | str | - | Only notes on/before this date (ISO 8601). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output one note ID per line. |
-| `--compact` | | bool | `False` | One line per note: title, date, description. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one note ID per line), `line` (one line per note: title, date, description), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--template` | | str | - | Filter by template slug (e.g. `"general_note"`). |
+| `--slim` | `-s` | bool | `False` | Drop per-note summaries from the response (only affects `--format json` output). |
 
 ---
 
@@ -421,9 +685,9 @@ Show most recently created notes.
 | `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 | `--after` | | str | - | Only notes on/after this date (ISO 8601). |
 | `--before` | | str | - | Only notes on/before this date (ISO 8601). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output one note ID per line. |
-| `--compact` | | bool | `False` | One line per note: title, date, description. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one note ID per line), `line` (one line per note: title, date, description), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
+| `--slim` | `-s` | bool | `False` | Drop per-note summaries from the response (only affects `--format json` output). |
 
 ---
 
@@ -451,8 +715,8 @@ Search for notes using multi-channel fusion (Reciprocal Rank Fusion). Results in
 | `--vault` | `-v` | str (list) | - | Vault(s) to search. Repeatable. Use `"*"` for all vaults. |
 | `--reason` | | bool | `False` | Run skeleton-tree identification; shows relevant sections with reasoning. |
 | `--summarize` | | bool | `False` | Synthesize a full answer from matched sections (implies `--reason`). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output note IDs only. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (note IDs only), `line` (score + title + ID per result), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--no-semantic` | | bool | `False` | Exclude semantic (vector) strategy. |
 | `--no-keyword` | | bool | `False` | Exclude keyword (BM25) strategy. |
 | `--no-graph` | | bool | `False` | Exclude graph (entity) strategy. |
@@ -782,6 +1046,30 @@ memex note update-user-notes 550e8400-e29b-41d4-a716-446655440000 --text ""
 
 ---
 
+### `note links`
+
+```
+memex note links NOTE_ID [OPTIONS]
+```
+
+List the typed links connecting one note to others (for example, `contradicts`).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--type` | `-t` | str | All | Filter by link type (for example, `contradicts`). |
+| `--limit` | `-l` | int | From config | Maximum number of links to return. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+---
+
 ## `note assets`
 
 Manage note assets (images, PDFs, and other files attached to notes).
@@ -997,7 +1285,7 @@ Delete a user template. Cannot delete built-in templates.
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--local` | | bool | `False` | Delete from project-local scope instead of global. |
-| `--yes` | `-y` | bool | `False` | Skip the confirmation prompt. |
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
 
 ---
 
@@ -1301,39 +1589,59 @@ Delete the mental model for an entity in a specific vault. Does not delete the e
 
 ---
 
+### `entity scan-merges`
+
+```
+memex entity scan-merges [OPTIONS]
+```
+
+Run an on-demand cross-batch entity-cluster collapse scan. Emits one maintenance proposal per surviving cluster — the merge is not applied. Review the proposals with `lint findings` and approve with `lint resolve`.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-l` | int | From config | How many entities to scan. |
+| `--cooldown-days` | | int | From config | Per-entity cooldown in days. |
+| `--pair-threshold` | | float | From config | Minimum pairwise similarity to graph-link two entities. |
+| `--cluster-min` | | float | From config | Minimum cohesion threshold. Must be `<= --pair-threshold`. |
+| `--entity` | `-e` | str | All | Scan only entities whose name contains this string (case-insensitive), ignoring the cooldown. |
+
+---
+
 ## `kv`
 
 Key-value fact store (lightweight structured memory).
 
-### `kv write`
+### `kv put`
 
 ```
-memex kv write VALUE [OPTIONS]
+memex kv put KEY VALUE [OPTIONS]
 ```
 
-Write a fact to the KV store. Key is required (use MCP tool for auto-generation).
+Put an operational pointer in the KV store. The key must start with one of the namespace prefixes `global:`, `user:`, `project:`, or `app:`.
 
 #### Arguments
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `VALUE` | Yes | The fact/value to store. |
+| `KEY` | Yes | Namespaced key. Must start with `global:`, `user:`, `project:`, or `app:`. |
+| `VALUE` | Yes | The pointer's value (preference, binding, or convention). |
 
 #### Options
 
-| Option | Short | Type | Description |
-|--------|-------|------|-------------|
-| `--key KEY` | `-k` | str | Namespaced key, e.g. `"tool:python:pkg_mgr"`. **Required.** |
-| `--vault NAME` | `-v` | str | Target vault name or UUID. |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--ttl` | int | None | Time-to-live in seconds. Omit for no expiration. |
 
 #### Examples
 
 ```bash
 # Store a preference
-memex kv write "always use uv, never pip" --key "tool:python:pkg_mgr"
+memex kv put "global:tool:python:pkg_mgr" "always use uv, never pip"
 
-# Store a vault-scoped fact
-memex kv write "Staff Engineer" --key "user:role" --vault my-project
+# Store a value that expires after an hour
+memex kv put "project:deploy:window" "Fridays are frozen" --ttl 3600
 ```
 
 ---
@@ -1468,8 +1776,9 @@ List all available vaults. Also displays the currently active (write) vault and 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--json` | bool | `False` | Output as JSON. |
-| `--minimal` | bool | `False` | Output one vault name per line. |
+| `--format` | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one vault name per line), `line` (markdown table with note counts), `json`. |
+| `--json` | bool | `False` | Shorthand for `--format json`. |
+| `--include-system` | bool | `False` | Also list system vaults (inbox, etc.). |
 
 ---
 
@@ -1526,10 +1835,10 @@ Delete a vault by name or UUID.
 
 ---
 
-### `vault truncate`
+### `vault clear`
 
 ```
-memex vault truncate IDENTIFIER [OPTIONS]
+memex vault clear IDENTIFIER [OPTIONS]
 ```
 
 Remove all content from a vault (notes, memories, entities, etc.). The vault itself is preserved.
@@ -1538,7 +1847,7 @@ Remove all content from a vault (notes, memories, entities, etc.). The vault its
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `IDENTIFIER` | Yes | Name or UUID of the vault to truncate. |
+| `IDENTIFIER` | Yes | Name or UUID of the vault to clear. |
 
 #### Options
 
@@ -1549,11 +1858,11 @@ Remove all content from a vault (notes, memories, entities, etc.). The vault its
 #### Examples
 
 ```bash
-# Truncate a vault by name (with confirmation prompt)
-memex vault truncate my-vault
+# Clear a vault by name (with confirmation prompt)
+memex vault clear my-vault
 
-# Truncate without confirmation
-memex vault truncate my-vault --force
+# Clear without confirmation
+memex vault clear my-vault --force
 ```
 
 > [!WARNING]
@@ -1598,6 +1907,28 @@ memex vault summary my-project
 
 ---
 
+### `vault snapshot export`
+
+```
+memex vault snapshot export VAULT --output DIR
+```
+
+Export a vault snapshot to a local directory. Produces a self-describing snapshot (manifest, per-table JSONL, note bodies, assets) for downstream consumption. The output directory is created if missing; existing files inside it may be overwritten. Refuses the global vault. Requires the `memex-cli[server]` extra.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VAULT` | Yes | Vault name or UUID to export. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--output` | `-o` | Path | — (required) | Directory to write the snapshot into. |
+
+---
+
 ## `session`
 
 Session management commands for LLM agent integration.
@@ -1619,6 +1950,7 @@ The briefing includes (in priority order): KV facts, vault summary with topics, 
 | `--vault` | `-v` | TEXT | Active vault | Vault name or UUID to generate briefing for. |
 | `--budget` | `-b` | INT | 2000 | Token budget. Must be 1000 or 2000. At 1000: compact mode (topics only, no prose, no trends). |
 | `--project-id` | `-p` | TEXT | None | Project ID for KV namespace scoping. |
+| `--app` | `-a` | TEXT | None | Consumer identity for the procedural pin chain (`"claude-code"`, `"hermes:<agent_identity>"`). Selects the `app:<id>` pin context layered on global and project. |
 
 #### Examples
 
@@ -1627,6 +1959,7 @@ memex briefing                         # Standard 2000-token briefing
 memex briefing --budget 1000           # Compact 1000-token briefing
 memex briefing --vault research        # Briefing for a specific vault
 memex briefing -b 2000 -p github.com/org/repo  # With project scoping
+memex briefing --app claude-code       # With Claude Code procedural pins
 ```
 
 ---
@@ -1736,14 +2069,12 @@ memex mcp run --transport sse --port 8080
 
 ---
 
-## `system`
+## `stats`
 
 Show overview of system counts (memories, entities, queue).
 
-### `system system`
-
 ```
-memex system system [OPTIONS]
+memex stats [OPTIONS]
 ```
 
 Show an overview of system counts: total memories (documents), entities, and reflection queue size.
@@ -1753,6 +2084,112 @@ Show an overview of system counts: total memories (documents), entities, and ref
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--json` | bool | `False` | Output as JSON. |
+
+---
+
+## `diagnostics`
+
+Operator diagnostics (UMAP manifold, retrieval heatmap, vault summary, lint pivot). Every subcommand emits JSON.
+
+### `diagnostics manifold`
+
+```
+memex diagnostics manifold [OPTIONS]
+```
+
+Print the UMAP manifold JSON for the vault. Returns 202 task info when the cache is cold.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | Active vault | Vault name or UUID. |
+| `--force-refresh` | | bool | `False` | Force recompute, ignoring the cache. |
+
+---
+
+### `diagnostics retrieval`
+
+```
+memex diagnostics retrieval [OPTIONS]
+```
+
+Print the top-N entity outcome heatmap JSON.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | Active vault | Vault name or UUID. |
+| `--limit` | `-l` | int | `50` | Maximum number of entities to return. |
+
+---
+
+### `diagnostics summary`
+
+```
+memex diagnostics summary [OPTIONS]
+```
+
+Print the full diagnostics summary JSON (synchronous, no UMAP block).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | Active vault | Vault name or UUID. |
+
+---
+
+### `diagnostics findings`
+
+```
+memex diagnostics findings [OPTIONS]
+```
+
+Print the lint-finding pivot JSON: the (lint_type, status, source) pivot, the pending-by-type slice, and the most-recent pending findings. This is the dashboard view, distinct from `lint status` (a single count) and `lint findings` (paginated rows).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault NAME` | `-v` | str | Active vault | Vault name or UUID. |
+
+---
+
+## `agent-surface`
+
+```
+memex agent-surface TARGET [OPTIONS]
+```
+
+Emit the system-prompt content for an agent target to stdout. Used by Claude Code's `SessionStart` hook and by Hermes to load the universal agent surface.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `TARGET` | Yes | Composition target: `universal`/`generic`, `hermes`, `claude-code`, or `mcp`. Case-insensitive. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--output-format` | | str | `text` | Output format: `text` (raw markdown) or `json` (Claude Code SessionStart envelope). |
+| `--output-dir` | `-d` | Path | None | Write to `<dir>/memex-agent-surface.md` atomically instead of stdout. Creates the directory if missing; skips the rewrite when content is unchanged. Mutually exclusive with `--output-format=json`. |
+
+#### Examples
+
+```bash
+# Print the universal surface to stdout
+memex agent-surface universal
+
+# Emit the Claude Code SessionStart JSON envelope
+memex agent-surface claude-code --output-format json
+
+# Write the surface to a directory atomically
+memex agent-surface claude-code --output-dir .claude/
+```
 
 ---
 
@@ -1954,72 +2391,19 @@ memex database revision --message "manual data migration" --no-autogenerate
 
 ---
 
-### `database cleanup`
+### `database backfill-section-assets`
 
 ```
-memex database cleanup
+memex database backfill-section-assets [OPTIONS]
 ```
 
-Purge orphaned entities and mental models from the database. Removes entities with no remaining memory unit links and mental models whose entity has no remaining links. Safe to run at any time.
-
-#### Examples
-
-```bash
-memex database cleanup
-```
-
----
-
-## `setup`
-
-Setup integrations with external tools.
-
-### `setup claude-code`
-
-```
-memex setup claude-code [OPTIONS]
-```
-
-Configure Claude Code to use Memex as its long-term memory backend. Generates MCP server config, slash-command skills (`/remember`, `/recall`), lifecycle hooks, and optionally appends memory-integration instructions to `CLAUDE.md`.
+Backfill section-asset associations for notes ingested before asset tracking existed.
 
 #### Options
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `--project-dir` | `-p` | Path | `.` (current directory) | Target project directory. |
-| `--vault` | `-v` | str | From config | Vault name to use. Defaults to the active vault from Memex config. |
-| `--server-url` | | str | From config | Memex server URL override for the health check. |
-| `--force` | `-f` | bool | `False` | Overwrite existing skill files and hooks. |
-| `--no-claude-md` | | bool | `False` | Skip CLAUDE.md modifications. |
-| `--no-hooks` | | bool | `False` | Skip hook generation. |
-| `--with-session-tracking` | | bool | `False` | Include the `SessionEnd` hook for session tracking. |
-
-#### Generated Files
-
-| File | Description |
-|------|-------------|
-| `.mcp.json` | MCP server configuration for Claude Code. |
-| `.claude/skills/remember/SKILL.md` | `/remember` slash command skill. |
-| `.claude/skills/recall/SKILL.md` | `/recall` slash command skill. |
-| `.claude/hooks/memex/*.sh` | Lifecycle hook scripts (SessionStart, PreCompact, PostToolUse, Stop). |
-| `.claude/settings.local.json` | Claude Code settings with hook configuration. |
-| `CLAUDE.md` (appended) | Memex memory integration instructions for the LLM. |
-
-#### Examples
-
-```bash
-# Setup in the current project
-memex setup claude-code
-
-# Setup with a specific vault
-memex setup claude-code --vault my-project
-
-# Force overwrite existing files
-memex setup claude-code --force
-
-# Setup without modifying CLAUDE.md
-memex setup claude-code --no-claude-md
-```
+| `--vault` | `-v` | str | All vaults | Vault UUID or name. Omit to scan all vaults. |
 
 ---
 
@@ -2030,3 +2414,302 @@ memex report-bug
 ```
 
 Open a pre-filled GitHub issue page in the default browser to report a bug. Automatically collects and attaches system information (Memex version, Python version, OS).
+
+---
+
+## `case`
+
+Submit worked episodes as cases. A case is a note (`role='case'`) filed into a hidden system vault — the input side of the procedural plane. See the [procedural-memory explanation](../explanation/how-memex-works/procedural-memory.md) for the model.
+
+### `case submit`
+
+```
+memex case submit [OPTIONS]
+```
+
+Submit a worked episode as a case. The case is filed into the hidden system vault — there is no `--vault` flag; the server owns placement. Without `--case-of`, the server judges which procedure the case instances; contested judgments land in the lint queue.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--file` | `-f` | path | - | Read the case from a markdown file (the `## Trigger` / `## Situation` / `## Actions` / `## Outcome / Lesson` template plus optional YAML frontmatter). Any flag below overrides the parsed value. |
+| `--title` | `-t` | str | - | Case title. Required (flag or file). |
+| `--trigger` | | str | - | What kicked the episode off. Required (flag or file). |
+| `--outcome` | `-o` | str | - | `success`, `failure`, or `mixed`. Required (flag or file). |
+| `--situation` | | str | `""` | Context going in (prior state, constraints). |
+| `--action` | `-a` | str (list) | - | One ordered step per flag. Repeatable. |
+| `--lesson` | | str | `""` | What to do differently / confirm next time. (No short flag.) |
+| `--project-id` | `-p` | str | - | Provenance — recorded in metadata, not a vault binding. |
+| `--case-of` | | str (UUID) | - | UUID of the procedural entry this case instantiates (skips the judge). |
+| `--tag` | | str (list) | - | Repeatable tag. |
+| `--background` | `-b` | bool | `False` | Queue as a tracked job and return a job id (202) instead of waiting. Poll at `GET /api/v1/ingestions/{job_id}`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+# Submit a new episode by flags
+memex case submit \
+  --title "Unstick a hung Nomad deploy" \
+  --trigger "Nomad deploy hangs on stuck allocations" \
+  --action "Drain the job" --action "Wait for allocations to clear" \
+  --action "Re-submit" --outcome success \
+  --lesson "Always drain before re-submitting."
+
+# Submit from a markdown file
+memex case submit --file ./nomad-deploy-case.md
+
+# Attach to a known procedure (skips the judge)
+memex case submit --title "..." --trigger "..." --outcome success \
+  --case-of 7b2e1d4a-0000-0000-0000-000000000000
+
+# Queue as a background job
+memex case submit --file ./case.md --background
+```
+
+---
+
+## `procedural`
+
+Manage procedural-plane entries — procedures (worked how-tos) and strategies (play-books generalising procedures). Identity-anchored on `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)`. Cases are notes — submit them via `memex case submit`.
+
+### `procedure create`
+
+```
+memex procedure create KIND [OPTIONS]
+```
+
+Create a new entry. `KIND` is `procedure` or `strategy`. A procedure requires `--verb` and `--context`; a strategy requires `--verb` and forbids `--context`. `--trigger` is always required (the retrieval key).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `KIND` | Yes | `procedure` or `strategy`. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Identity scope: `global`, `project:<id>`, or `app:<id>`. Required. |
+| `--title` | `-t` | str | - | Entry title. Required. |
+| `--summary` | | str | - | One-paragraph summary. Required. |
+| `--verb` | | str | - | Anchor verb — required for both kinds. |
+| `--context` | `-c` | str | - | Anchor context — required for `procedure`, forbidden for `strategy`. |
+| `--body` | `-b` | str | - | Long-form body (steps, references). |
+| `--trigger` | | str | - | `when_to_use` / `when_to_apply` — the retrieval key. Required. |
+| `--tag` | | str (list) | - | Repeatable tag. |
+| `--vault` | `-v` | str | - | Vault name or UUID. Required. |
+| `--status` | | str | `draft` | `draft`, `published`, or `deprecated`. |
+| `--origin` | | str | `manual` | `manual`, `derived`, `import`, or `seed`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure upsert`
+
+```
+memex procedure upsert KIND [OPTIONS]
+```
+
+Idempotent write on the `(kind, scope, verb, context)` anchor: same anchor updates (and appends a version row); a new anchor inserts. Status is preserved. Same options as `create` minus `--origin`; `--vault` is required.
+
+### `procedure get`
+
+```
+memex procedure get ENTRY_ID [--json]
+```
+
+Fetch a single entry by UUID.
+
+### `procedure get-by-identity`
+
+```
+memex procedure get-by-identity KIND [OPTIONS]
+```
+
+Look up one entry by `(kind, scope, verb, context)`. Exits non-zero on a miss.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Identity scope. |
+| `--verb` | | str | - | Anchor verb. |
+| `--context` | `-c` | str | - | Anchor context. |
+| `--vault` | `-v` | str | - | Vault name or UUID to scope the lookup. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure search`
+
+```
+memex procedure search [QUERY] [OPTIONS]
+```
+
+Hybrid BM25 + vector search across the plane. Omit `QUERY` for a filter-only listing.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--kind` | | str | - | `procedure` or `strategy`. Omit for all. |
+| `--status` | | str | `published` | `draft`, `published`, or `deprecated`. |
+| `--limit` | `-l` | int | `10` | Maximum results. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure list`
+
+```
+memex procedure list [OPTIONS]
+```
+
+List entries by lifecycle status, newest first. Unlike `search`, needs no query — this is how you enumerate the curation queue (e.g. `--status draft`).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--status` | | str | - | `draft`, `published`, or `deprecated`. Omit for all. |
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--kind` | | str | - | `procedure` or `strategy`. Omit for both. |
+| `--vault` | `-v` | str | - | Restrict to a single vault. |
+| `--limit` | `-l` | int | `50` | Maximum entries. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure briefing-cards`
+
+```
+memex procedure briefing-cards [OPTIONS]
+```
+
+Pin-chain briefing cards for the session-briefing surface.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--context-key` | `-c` | str (list) | - | Pin context key. Repeatable. Required. |
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--limit-per-context` | | int | `5` | Cap per-context card count. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure update`
+
+```
+memex procedure update ENTRY_ID [OPTIONS]
+```
+
+Mutate an entry in place (appends a version row). The identity anchor is immutable — for identity changes, create a new entry and deprecate the old one.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--title` | `-t` | str | - | New title. |
+| `--summary` | | str | - | New summary. |
+| `--body` | `-b` | str | - | New body. |
+| `--trigger` | | str | - | New trigger (recomputes the embedding). |
+| `--tag` | | str (list) | - | Replace tags. Repeatable. |
+| `--status` | | str | - | `draft`, `published`, or `deprecated`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure deprecate`
+
+```
+memex procedure deprecate ENTRY_ID [OPTIONS]
+```
+
+Soft-deprecate an entry (status → `deprecated`).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--superseded-by` | | str (UUID) | - | UUID of the entry that supersedes this one. |
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+### `procedure derive`
+
+```
+memex procedure derive [OPTIONS]
+```
+
+Drain the derivation queue once: distil cases → procedures and procedures → strategies. The background scheduler normally does this; run it by hand to materialise drafts now.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-l` | int | `10` | Max pending derivation tasks to drain this pass. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure pin`
+
+```
+memex procedure pin ENTRY_ID [OPTIONS]
+```
+
+Pin an entry into a briefing context chain (cap 10 per context).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--context` | `-c` | str | - | Pin-chain context: `global`, `project:<id>`, or `app:<id>`. Required. |
+| `--position` | | int | append | 0-based chain position. Omit to append. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure unpin`
+
+```
+memex procedure unpin ENTRY_ID --context CONTEXT
+```
+
+Unpin an entry from a context (idempotent). `--context`/`-c` is required.
+
+### `procedure pins`
+
+```
+memex procedure pins --context CONTEXT [--json]
+```
+
+List pins for a context, position ascending. `--context`/`-c` is required.
+
+### `procedure versions`
+
+```
+memex procedure versions ENTRY_ID [--json]
+```
+
+List the entry's uncapped version ledger, newest first.
+
+### `procedure diff`
+
+```
+memex procedure diff ENTRY_ID --from FROM [--to TO]
+```
+
+Unified diff between two ledger versions (body + trigger + title). `--from` is the older version number; `--to` defaults to the newest.
+
+### `procedure rollback`
+
+```
+memex procedure rollback ENTRY_ID --to VERSION [--json]
+```
+
+Non-destructive rollback: the requested snapshot is re-applied as a new version. `--to` names the version number to restore.
+
+### `procedure review`
+
+```
+memex procedure review [OPTIONS]
+```
+
+Launch the procedural-plane curation TUI — browse and search entries, pin/unpin them into the briefing chain, preview the assembled briefing, and diff/rollback the version ledger.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--project-id` | `-p` | str | - | `project:<id>` context for the briefing chain. |
+| `--app` | `-a` | str | - | `app:<id>` context for the briefing chain. |

@@ -10,6 +10,24 @@ Requires a running Memex server (default: `http://localhost:8000/api/v1/`).
 
 For LLM-judged checks, set `GOOGLE_API_KEY` in your environment (uses Gemini via dspy).
 
+### Hermes integration suite
+
+The `agent_integration` suite drives the Nous Hermes Agent against the
+`memex-hermes-plugin` to verify the integration end-to-end. It needs
+both `hermes-agent` (a Python library) and `memex-hermes-plugin`
+(workspace package), neither of which ships in the default sync:
+
+```bash
+uv sync --extra hermes --group hermes-integration
+```
+
+Plus an LLM API key for the Hermes agent itself. The backend routes by
+model prefix — `GOOGLE_API_KEY` for `gemini/*` (default),
+`ANTHROPIC_API_KEY` for `anthropic/*`, `OPENAI_API_KEY` for `openai/*`,
+`OPENROUTER_API_KEY` for `openrouter/*`. See
+`packages/eval/src/memex_eval/suites/agent_integration/README.md` for
+details.
+
 ## Usage
 
 ### Internal benchmark
@@ -42,6 +60,35 @@ Or via justfile:
 just benchmark-internal       # full benchmark
 just benchmark-internal-fast  # deterministic only (no LLM judge)
 ```
+
+### Suite framework
+
+The Suite framework (`memex-eval suite ...`) bundles sources, scenarios, and metadata per benchmark area (`basic_extraction`, `contradiction`, `entity_resolution`, `temporal`, `agent_integration`). Full surface: [`docs/how-to/evaluation-suite.md`](../../docs/how-to/evaluation-suite.md).
+
+```bash
+# Run one suite end-to-end
+memex-eval suite run basic_extraction
+
+# Sweep a knob across a grid
+memex-eval suite sweep basic_extraction --param server.memory.retrieval.reranking_mw_alpha=0.0,0.5,1.0
+```
+
+#### Snapshot cache — skip extraction on reruns
+
+Every suite run normally re-ingests sources and re-runs LLM extraction. With `--from-snapshot=auto` the runner caches the post-extraction vault (keyed by `(suite_name, sources_hash)`) and imports it on subsequent runs:
+
+```bash
+# First run misses the cache → ingest + extract + populate
+memex-eval suite run basic_extraction --from-snapshot=auto
+
+# Subsequent runs hit the cache → import only, no LLM extraction
+memex-eval suite run basic_extraction --from-snapshot=auto
+
+# Force re-extraction (e.g. after extraction-affecting code changes)
+memex-eval suite run basic_extraction --from-snapshot=auto --reingest
+```
+
+Snapshot import/export runs **in-process** in the eval runner against the same Postgres + FileStore the server is configured with — there is no `eval_mode` flag, no server route, no allowlist. Reflection and the rest of the background scheduler keep running normally so reflection scenarios remain testable. Cache root defaults to `platformdirs.user_cache_dir('memex-eval', 'memex')` (e.g. `~/.cache/memex-eval/` on Linux); override with `--snapshot-cache-dir` or `MEMEX_EVAL_SNAPSHOT_ROOT`. Limitations: single-vault suites only; remote (LiteLLM) embedding backends rejected; one snapshot per DB.
 
 ### External benchmarks (LoCoMo)
 
@@ -120,6 +167,29 @@ The benchmark runs in three decoupled phases, each resumable:
 - **Image-dependent questions**: Some LoCoMo questions reference images shared in conversations (book covers, photos of signs, pottery). The Memex pipeline extracts text from conversations but does not process shared images, so questions whose answers depend solely on image content cannot be answered from stored memories alone.
 - **Adversarial scoring**: Adversarial questions deliberately swap subjects (e.g., asking about Melanie's instruments when they are Caroline's). The judge must recognize that correcting the false premise is a correct response, not an error.
 
+### External benchmarks (LongMemEval)
+
+[LongMemEval](https://arxiv.org/abs/2502.19373) evaluates long-term memory across five question categories with a focus on abstention (knowing when the memory does not contain the answer). It runs as a complementary benchmark alongside LoCoMo.
+
+```bash
+# End-to-end (ingest -> answer -> judge -> report)
+memex-eval longmemeval run --dataset-path ./data/longmemeval/ --run-id baseline
+
+# Individual phases
+memex-eval longmemeval ingest --dataset-path ./data/longmemeval/ --variant s --run-id baseline
+memex-eval longmemeval answer --dataset-path ./data/longmemeval/ --variant s --run-id baseline
+memex-eval longmemeval judge --dataset-path ./data/longmemeval/ --variant s --hypotheses hypotheses.jsonl
+memex-eval longmemeval report --judgments judgments.jsonl
+
+# Compare modes (agent vs note-only vs memory-only)
+memex-eval longmemeval compare --mode-run agent:./run-agent --mode-run note-only:./run-note
+
+# Parse trace files
+memex-eval longmemeval parse-trace traces/ --dataset-path ./data/longmemeval/
+```
+
+**Dataset variants**: `s` (default, matches agentmemory baseline), `oracle`, `m`. The dataset SHA-256 is pinned; use `--allow-unpinned-checksum` to bypass during development.
+
 ## Results
 
 > Single run on LoCoMo conversation 0. Scores include manual review corrections where the automated judge was inconsistent.
@@ -163,6 +233,15 @@ memex_eval/
     locomo_judge.py       # Phase 3: grade answers + produce report
     locomo_efficiency.py  # Efficiency analysis: latency, tokens, tool usage
     locomo_report.py      # Phase 4: generate Markdown report with plots
+    longmemeval_common.py       # Shared types, dataset loaders, SHA-256 pin, abstention helpers
+    longmemeval_ingest.py       # Phase 0: ingest LongMemEval sessions
+    longmemeval_answer.py       # Phase 2: answer via Claude Code subagent (agent/note-only/memory-only modes)
+    longmemeval_answer_direct.py # Direct retrieval-only answer modes
+    longmemeval_judge.py        # Phase 3: graded correctness + abstention precision
+    longmemeval_report.py       # Phase 4: three-axis evaluation + plots
+    longmemeval_compare.py      # A/B comparison across modes
+    longmemeval_trace_parser.py # Claude Code session trace parsing
+    longmemeval_efficiency.py  # Efficiency analysis: latency, tokens, retrieval cost
 ```
 
 ## Adding scenarios (internal)

@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "cb9bdf6ae7a238c17a8165f66ebd2da4",
+  "created_at": "2026-06-12T19:47:49.928452+00:00",
+  "description": "TechCo Global Sales Department Operations and Expansion",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "cb9bdf6ae7a238c17a8165f66ebd2da4",
+      "filestore_path": null,
+      "note_description": "Overview of the Sales department at TechCo Global.",
+      "note_name": "Sales Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "sales",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "af4001f263441ba5f1245c70148a0b85"
+    },
+    "tags": [
+      "department",
+      "sales",
+      "techco",
+      "sales operations",
+      "regional expansion",
+      "asia-pacific",
+      "organizational structure",
+      "salesforce",
+      "corporate leadership"
+    ]
+  },
+  "filestore_path": null,
+  "id": "af4001f2-6344-1ba5-f124-5c70148a0b85",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Sales Department Operations and Expansion",
+      "publish_date": "2026-06-12 19:47:49.927638+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "sales",
+        "techco",
+        "sales operations",
+        "regional expansion",
+        "asia-pacific",
+        "organizational structure",
+        "salesforce",
+        "corporate leadership"
+      ],
+      "title": "Sales Department Overview",
+      "total_tokens": 90
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "2487da7c150b9d561534f81f95a048d3",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "2487da7c150b9d561534f81f95a048d3",
+            "children": [],
+            "end_index": 233,
+            "id": "b4e170e9426994a856ecb3bd690df1b5",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 140,
+            "subtree_tokens": 18,
+            "summary": {
+              "how": "By establishing 5 new satellite offices",
+              "what": "Regional expansion initiative",
+              "when": "Currently / in progress",
+              "where": "Asia-Pacific region",
+              "who": "The organization"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 18
+          },
+          {
+            "assets": [],
+            "block_id": "2487da7c150b9d561534f81f95a048d3",
+            "children": [],
+            "end_index": 421,
+            "id": "5ad51368b333c25f9bfe0da09ffe6239",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 233,
+            "subtree_tokens": 39,
+            "summary": {
+              "how": "By managing all sales-related activities and reporting to the department head.",
+              "what": "Departmental responsibilities and reporting structure.",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "Nina Patel and the 38-member Sales department team."
+            },
+            "title": "Responsibilities",
+            "token_estimate": 39
+          }
+        ],
+        "end_index": 421,
+        "id": "63afda688506b4c86553efa4d570bfe0",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 90,
+        "summary": {
+          "how": "By utilizing core tools including Salesforce, Gong, and Outreach.",
+          "what": "Overview of department structure, leadership, and technological stack.",
+          "when": null,
+          "where": "TechCo Global Sales Department.",
+          "who": "Nina Patel (Department Head) and 38 employees."
+        },
+        "title": "Sales Department — TechCo Global",
+        "token_estimate": 33
+      }
+    ]
+  },
+  "publish_date": "2026-06-12T19:47:49.927638+00:00",
+  "session_id": "25f2ac2e-d40f-49fc-87c5-d5afc032ab19",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Sales Department Overview",
+  "updated_at": "2026-06-12T19:47:49.928452+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

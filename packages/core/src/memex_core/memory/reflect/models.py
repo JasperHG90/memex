@@ -6,13 +6,15 @@ from memex_core.config import GLOBAL_VAULT_ID
 
 
 class ReflectionRequest(BaseModel):
-    """
-    Request to run the reflection loop on a specific entity.
-    """
+    """Request to run reflection on a specific entity."""
 
     entity_id: UUID = Field(description='The UUID of the entity to reflect upon.')
-    limit_recent_memories: int = Field(
-        default=20, description='Number of recent memories to consider.'
+    limit_recent_memories: int | None = Field(
+        default=20,
+        description=(
+            'Number of recent memories to consider. None = unbounded '
+            '(capped at MAX_FULL_SCOPE_UNITS by the engine).'
+        ),
     )
     vault_id: UUID = Field(
         default=GLOBAL_VAULT_ID,

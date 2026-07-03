@@ -206,8 +206,9 @@ async def test_existing_rows_have_empty_keys_after_upgrade(fresh_db_url: str) ->
     finally:
         await engine.dispose()
 
-    # Now upgrade to head (i.e., apply 021).
-    await _alembic_upgrade(fresh_db_url, target='head')
+    # Now upgrade past 020 to apply 021 (target pinned to Wave 1 head; Tier A
+    # NIE stubs at 025-029 must not run from this fixture).
+    await _alembic_upgrade(fresh_db_url, target='024_intent_risk_classifier')
 
     engine = create_async_engine(fresh_db_url, poolclass=NullPool)
     try:

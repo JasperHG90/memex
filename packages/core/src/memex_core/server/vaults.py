@@ -86,6 +86,13 @@ async def list_vaults(
         None, description='Filter by state: "active" for active vault'
     ),
     is_default: bool | None = Query(None, description='Filter by default status'),
+    include_system: bool = Query(
+        False,
+        description=(
+            'Include system vaults (e.g. inbox). Default False — system vaults '
+            'are silent on browse surfaces; pass ?include_system=true to opt in.'
+        ),
+    ),
 ):
     """
     List vaults.
@@ -93,6 +100,9 @@ async def list_vaults(
     Query params:
     - state: Optional filter by state. Use 'active' for the active vault.
     - is_default: Optional filter by default status. True for default vaults.
+    - include_system: Include system vaults (default False). Set to true to
+      surface the inbox and other infrastructure vaults. The CLI `--include-system`
+      flag and the service layer `list_vaults(include_system=...)` default match.
     """
     try:
         if state == 'active':
@@ -107,7 +117,18 @@ async def list_vaults(
             return ndjson_response(
                 [
                     VaultDTO(
-                        id=vault.id, name=vault.name, description=vault.description, access=access
+                        id=vault.id,
+                        name=vault.name,
+                        description=vault.description,
+                        mw_mode=vault.mw_mode,
+                        # Migration-compat shim: 060_vault_kind_policy adds
+                        # ``kind``/``policy`` columns. Pre-migration rows (or
+                        # stale ORM caches) may still lack the attribute; the
+                        # getattr default keeps the DTO shape intact. Safe to
+                        # drop after the migration is unavoidable (V12).
+                        kind=getattr(vault, 'kind', 'content'),
+                        policy=getattr(vault, 'policy', None) or {},
+                        access=access,
                     )
                 ]
             )
@@ -123,7 +144,13 @@ async def list_vaults(
                 )
             active_access = await _vault_access(active.id, auth, api)
             active_dto = VaultDTO(
-                id=active.id, name=active.name, description=active.description, access=active_access
+                id=active.id,
+                name=active.name,
+                description=active.description,
+                mw_mode=active.mw_mode,
+                kind=getattr(active, 'kind', 'content'),
+                policy=getattr(active, 'policy', None) or {},
+                access=active_access,
             )
 
             # Resolve default reader vault (if different from active)
@@ -139,6 +166,9 @@ async def list_vaults(
                                 id=reader.id,
                                 name=reader.name,
                                 description=reader.description,
+                                mw_mode=reader.mw_mode,
+                                kind=getattr(reader, 'kind', 'content'),
+                                policy=getattr(reader, 'policy', None) or {},
                                 access=reader_access,
                             )
                         )
@@ -153,8 +183,8 @@ async def list_vaults(
 
             return ndjson_response(dtos)
 
-        # Default: list all vaults with note counts
-        rows = await api.list_vaults_with_counts()
+        # Default: list vaults with note counts
+        rows = await api.list_vaults_with_counts(include_system=include_system)
         active_vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         dtos_full: list[VaultDTO] = []
         for row in rows:
@@ -165,6 +195,9 @@ async def list_vaults(
                     id=v.id,
                     name=v.name,
                     description=v.description,
+                    mw_mode=v.mw_mode,
+                    kind=getattr(v, 'kind', 'content'),
+                    policy=getattr(v, 'policy', None) or {},
                     is_active=(v.id == active_vault_id),
                     note_count=row['note_count'],
                     last_note_added_at=row['last_note_added_at'],
@@ -182,8 +215,20 @@ async def create_vault(
 ):
     """Create a new vault."""
     try:
-        vault = await api.create_vault(name=request.name, description=request.description)
-        return VaultDTO(id=vault.id, name=vault.name, description=vault.description)
+        vault = await api.create_vault(
+            name=request.name,
+            description=request.description,
+            kind=request.kind,
+            policy=request.policy,
+        )
+        return VaultDTO(
+            id=vault.id,
+            name=vault.name,
+            description=vault.description,
+            mw_mode=vault.mw_mode,
+            kind=getattr(vault, 'kind', 'content'),
+            policy=getattr(vault, 'policy', None) or {},
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to create vault')
 
@@ -202,9 +247,9 @@ async def get_or_resolve_vault(identifier: str, api: Annotated[MemexAPI, Depends
         # Check if identifier is a valid UUID
         try:
             vault_id = UUID(identifier)
-            # It's a UUID, verify it exists
-            vaults = await api.list_vaults()
-            if any(v.id == vault_id for v in vaults):
+            # It's a UUID — verify it exists by direct lookup (resolves content
+            # AND system vaults; addressability is never filtered by kind).
+            if await api.validate_vault_exists(vault_id):
                 return {'id': vault_id}
             raise HTTPException(status_code=404, detail=f'Vault with ID {identifier} not found')
         except ValueError:

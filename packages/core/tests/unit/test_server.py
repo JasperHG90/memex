@@ -29,9 +29,14 @@ def mock_api():
         'note_id': 'doc_123',
     }
 
-    # Use SimpleNamespace to simulate an object with attributes that Pydantic can read
+    # Use SimpleNamespace to simulate an object with attributes that Pydantic can read.
+    # ``mw_mode`` is read by the create_vault route into VaultDTO; without it the
+    # SimpleNamespace mock raises AttributeError before the DTO can serialise.
     mock_api.create_vault.return_value = SimpleNamespace(
-        id=MOCK_VAULT_ID, name='Test Vault', description='A test vault'
+        id=MOCK_VAULT_ID,
+        name='Test Vault',
+        description='A test vault',
+        mw_mode='stationary',
     )
 
     mock_api.search.return_value = (
@@ -104,7 +109,9 @@ def test_create_vault_validation(client, mock_api):
     response = client.post('/api/v1/vaults', json=payload)
 
     assert response.status_code == 200, f'Response: {response.text}'
-    mock_api.create_vault.assert_called_once_with(name='New Vault', description='Secure storage')
+    mock_api.create_vault.assert_called_once_with(
+        name='New Vault', description='Secure storage', kind='content', policy=None
+    )
 
     data = response.json()
     assert data['id'] == str(MOCK_VAULT_ID)
@@ -136,7 +143,7 @@ def test_claim_reflection_queue(client, mock_api):
     response = client.post('/api/v1/reflections/claim?limit=5')
 
     assert response.status_code == 200
-    mock_api.claim_reflection_queue_batch.assert_called_once_with(limit=5)
+    mock_api.claim_reflection_queue_batch.assert_called_once_with(limit=5, vault_id=None)
 
     import json
 
@@ -213,6 +220,30 @@ def test_get_note_page_index_not_found(client, mock_api):
     response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
     assert response.status_code == 404
+
+
+def test_head_note_returns_200_when_present(client, mock_api):
+    """A.5: HEAD /notes/{id} returns 200 with no body when the note exists."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000077')
+    mock_api.note_exists.return_value = True
+
+    response = client.head(f'/api/v1/notes/{doc_id}')
+
+    assert response.status_code == 200
+    # HEAD must not return a body.
+    assert response.content == b''
+    mock_api.note_exists.assert_awaited_once_with(doc_id)
+
+
+def test_head_note_returns_404_when_absent(client, mock_api):
+    """A.5: HEAD /notes/{id} returns 404 when the note doesn't exist."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000078')
+    mock_api.note_exists.return_value = False
+
+    response = client.head(f'/api/v1/notes/{doc_id}')
+
+    assert response.status_code == 404
+    assert response.content == b''
 
 
 def test_get_note_metadata_with_data(client, mock_api):

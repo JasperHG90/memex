@@ -34,6 +34,8 @@ def _make_search_result(note_id=None, unit_id=None):
     mock.occurred_end = None
     mock.mentioned_at = None
     mock.citations = []
+    mock.intent_class = 'durable'
+    mock.risk_class = 'none'
     return mock
 
 
@@ -231,4 +233,106 @@ async def test_note_search_include_seen_true_returns_full(mock_api):
         assert data2[0]['previously_returned'] is False
         assert data2[0]['description'] == 'A test note'
 
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_note_search_surfaces_degraded_warning(mock_api):
+    """A degraded result set (timeout dropped graph/keyword) gets a system-hint
+    warning prepended so the agent knows the results are incomplete."""
+    _session_dedup.clear()
+    result1 = _make_note_search_result(title='My Note')
+    result1.degraded = True
+    result1.dropped_strategies = ['graph', 'keyword']
+    mock_api.search_notes = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert any('degraded' in (item.get('tags') or []) for item in data), 'degraded hint missing'
+    assert any('Partial results' in (item.get('title') or '') for item in data)
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_note_search_no_degraded_warning_when_complete(mock_api):
+    """A normal (non-degraded) result set gets NO degradation warning."""
+    _session_dedup.clear()
+    result1 = _make_note_search_result(title='My Note')
+    result1.degraded = False
+    result1.dropped_strategies = []
+    mock_api.search_notes = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert not any('degraded' in (item.get('tags') or []) for item in data)
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_surfaces_degraded_warning(mock_api):
+    """A degraded memory-search result set (timeout dropped graph/keyword) gets a
+    system-hint warning prepended so the agent knows the results are incomplete."""
+    _session_dedup.clear()
+    result1 = _make_search_result()
+    result1.degraded = True
+    result1.dropped_strategies = ['graph', 'keyword']
+    mock_api.search = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert any('degraded' in (item.get('tags') or []) for item in data), 'degraded hint missing'
+    assert any('Partial results' in (item.get('text') or '') for item in data)
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_no_degraded_warning_when_complete(mock_api):
+    """A normal (non-degraded) memory-search result set gets NO degradation warning."""
+    _session_dedup.clear()
+    result1 = _make_search_result()
+    result1.degraded = False
+    result1.dropped_strategies = []
+    mock_api.search = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert not any('degraded' in (item.get('tags') or []) for item in data)
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_no_degraded_warning_when_attr_unset(mock_api):
+    """A result whose ``degraded`` attribute is UNSET must NOT trip the warning.
+
+    Pins the ``is True`` guard (server.py): ``getattr(mock, 'degraded', False)`` on a
+    MagicMock auto-vivifies to a *truthy* Mock, so a naive truthiness check would emit
+    a spurious degraded hint for every mock-based result. This fails if the guard is
+    weakened to plain truthiness."""
+    _session_dedup.clear()
+    result1 = _make_search_result()  # .degraded deliberately NOT set → truthy MagicMock
+    mock_api.search = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert not any('degraded' in (item.get('tags') or []) for item in data)
     _session_dedup.clear()

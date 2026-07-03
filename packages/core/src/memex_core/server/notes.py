@@ -10,6 +10,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Response,
     UploadFile,
 )
 from pydantic import BaseModel
@@ -85,6 +86,10 @@ async def list_notes(
             "'created_at' = ingest time. 'publish_date' = authored date."
         ),
     ),
+    slim: Annotated[
+        bool,
+        Query(description='Drop per-note summaries to keep responses under hook caps.'),
+    ] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -126,6 +131,7 @@ async def list_notes(
                 before=parsed_before,
                 template=template,
                 date_field=date_field,
+                slim=slim,
             )
         else:
             docs = await api.list_notes(
@@ -138,6 +144,7 @@ async def list_notes(
                 tags=tags,
                 status=status,
                 date_field=date_field,
+                slim=slim,
             )
         return ndjson_response([build_note_list_item_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -173,6 +180,7 @@ async def search_notes(
             before=request.before,
             tags=request.tags,
             reference_date=request.reference_date,
+            include_system_vaults=request.include_system_vaults,
         )
         return ndjson_response(results)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -204,13 +212,19 @@ async def find_notes_by_title(
     query: str = Query(..., description='Title search query'),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
     limit: Annotated[int, Query(ge=1, le=500, description='Maximum results to return')] = 5,
+    threshold: Annotated[
+        float,
+        Query(ge=0.0, le=1.0, description='Trigram similarity floor (0..1).'),
+    ] = 0.3,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Fuzzy-search notes by title using trigram similarity."""
     try:
         await check_vault_access(auth, vault_id, api)
         resolved = await resolve_vault_ids(api, vault_id)
-        results = await api.find_notes_by_title(query=query, vault_ids=resolved, limit=limit)
+        results = await api.find_notes_by_title(
+            query=query, vault_ids=resolved, limit=limit, threshold=threshold
+        )
         return [FindNoteResult(**r) for r in results]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to find notes by title')
@@ -244,6 +258,21 @@ async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         return build_note_dto(doc)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get note')
+
+
+@router.head('/notes/{note_id}', dependencies=[Depends(require_read)])
+async def head_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) -> Response:
+    """Cheap existence check — 200 if the note exists, 404 otherwise.
+
+    A.5: hermes-plugin polls this at 10 Hz (now backoff-paced, default
+    deadline 120s — see provider.py:_wait_for_note_row) to confirm a
+    background-ingested session note has materialised. Goes through a
+    pk-index lookup + LIMIT 1 in NoteService.note_exists, so we don't
+    hydrate the full Note model on every poll.
+    """
+    if await api.note_exists(note_id):
+        return Response(status_code=200)
+    return Response(status_code=404)
 
 
 class BatchNodeRequest(BaseModel):
@@ -303,7 +332,7 @@ async def set_note_status(
     request: Annotated[SetNoteStatusRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
-    """Set note lifecycle status (active, superseded, appended)."""
+    """Set note lifecycle status (active or superseded)."""
     try:
         return await api.set_note_status(note_id, request.status, request.linked_note_id)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

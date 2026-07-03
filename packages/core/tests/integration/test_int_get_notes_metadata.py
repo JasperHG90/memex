@@ -53,6 +53,52 @@ class TestGetNotesMetadataBatch:
             assert str(nid) in result_note_ids
 
     @pytest.mark.asyncio
+    async def test_includes_created_at_and_publish_date(self, api, metastore):
+        """created_at is always present; the publish_date column wins, and when
+        the column is null the page_index publish_date is preserved."""
+        from datetime import datetime, timezone
+
+        col_note = uuid4()
+        pi_only_note = uuid4()
+        pub = datetime(2024, 3, 15, tzinfo=timezone.utc)
+        async with metastore.session() as session:
+            session.add(
+                Note(
+                    id=col_note,
+                    vault_id=GLOBAL_VAULT_ID,
+                    content_hash=f'hash-{uuid4().hex}',
+                    original_text=f'Content {uuid4()}',
+                    publish_date=pub,
+                    page_index={'metadata': {'title': 'Col'}, 'toc': []},
+                )
+            )
+            session.add(
+                Note(
+                    id=pi_only_note,
+                    vault_id=GLOBAL_VAULT_ID,
+                    content_hash=f'hash-{uuid4().hex}',
+                    original_text=f'Content {uuid4()}',
+                    page_index={
+                        'metadata': {'title': 'Pi', 'publish_date': '2024-01-15'},
+                        'toc': [],
+                    },
+                )
+            )
+            await session.commit()
+
+        results = await api.get_notes_metadata([col_note, pi_only_note])
+        by_id = {r['note_id']: r for r in results}
+
+        col = by_id[str(col_note)]
+        assert col['created_at'] is not None
+        assert col['publish_date'] == pub.isoformat()
+
+        pi = by_id[str(pi_only_note)]
+        assert pi['created_at'] is not None
+        # column is null → page_index publish_date is preserved
+        assert pi['publish_date'] == '2024-01-15'
+
+    @pytest.mark.asyncio
     async def test_skips_notes_without_page_index(self, api, metastore):
         """Notes without page_index should be skipped in results."""
         note_with_pi = uuid4()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from functools import lru_cache
 from typing import Protocol, Any, runtime_checkable
 from uuid import UUID
 
@@ -13,6 +15,7 @@ from sqlalchemy import (
     text,
     cast,
     String,
+    union,
     union_all,
     distinct,
 )
@@ -35,11 +38,43 @@ from memex_core.memory.sql_models import MentalModel
 
 logger = logging.getLogger('memex.core.memory.retrieval.strategies')
 
+
+# Warn-once helper for the mental-model strategy's intent/risk filter no-op.
+# ``lru_cache`` memoises by the argument tuple, so repeat calls with the same
+# (intent_class, risk_class) combination silently return None after the first
+# warning is emitted. A different combination warns again, since it is a new
+# cache key. ``maxsize=64`` comfortably bounds the realistic key space
+# (3 intent values x 4 risk values x None combinations = 20 distinct keys).
+# Defined at module scope (not as a method) because ``lru_cache`` on bound
+# methods retains ``self`` in the cache, which is a known footgun.
+@lru_cache(maxsize=64)
+def _warn_mental_model_filters_skipped(intent_class: str | None, risk_class: str | None) -> None:
+    logger.warning(
+        'Mental-model strategy ignores intent/risk filters (intent_class=%s, risk_class=%s); '
+        'results will mix unfiltered mental-model units with filtered units from other strategies. '
+        'Out-of-scope per issue #92.',
+        intent_class,
+        risk_class,
+    )
+
+
 # Maximum exponent magnitude for temporal decay to prevent Postgres NUMERIC underflow.
 # power(2, -996) ~ 1e-300 which is near the minimum representable NUMERIC value.
 # Without clamping, historic dates (e.g. 1970-01-01) produce exponents like -687
 # which cause NumericValueOutOfRangeError.
 _MAX_DECAY_EXPONENT = -996
+
+
+def _escape_like_pattern(s: str) -> str:
+    """Escape `%`, `_`, and `\\` so `s` matches as a literal in ILIKE.
+
+    NER outputs are nominally proper nouns, but the query-side fallback
+    accepts raw user input. Without this, an input like `Al_ce` would
+    match `Alice` (`_` = "any single char"); `%` would widen the match
+    arbitrarily. Pair with `ilike(pattern, escape='\\\\')` at the call site
+    so the backslash itself is treated literally.
+    """
+    return s.replace('\\', '\\\\').replace('%', r'\%').replace('_', r'\_')
 
 
 def apply_date_filters(statement: Select, date_column: Any, **kwargs: Any) -> Select:
@@ -89,6 +124,11 @@ def apply_generic_filters(statement: Select, **kwargs: Any) -> Select:
     if not include_stale:
         statement = statement.where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
 
+    # Filter out deprioritized units by default; include them when explicitly requested.
+    include_deprioritized = kwargs.get('include_deprioritized', False)
+    if not include_deprioritized:
+        statement = statement.where(col(MemoryUnit.is_deprioritized) == False)  # noqa: E712
+
     return statement
 
 
@@ -97,6 +137,36 @@ def apply_context_filter(statement: Select, **kwargs: Any) -> Select:
     source_context = kwargs.get('source_context')
     if source_context:
         statement = statement.where(col(MemoryUnit.context) == source_context)
+    return statement
+
+
+def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
+    """Filter MemoryUnits by ``intent_class`` and ``risk_class`` when set.
+
+    Both filters are independent and additive — pass either, both, or neither.
+    Values are not validated here (validation happens at the API/CLI boundary
+    against the ``IntentClass`` / ``RiskClass`` enums).
+
+    NULL semantics: this filter uses strict SQL equality (``column = :value``),
+    so rows with ``NULL`` in ``intent_class`` or ``risk_class`` are excluded
+    when the corresponding filter is active. This is by design and matches
+    the legacy client-side filter (``getattr(u, 'intent_class', 'durable') ==
+    wanted`` likewise excluded ``None`` values, because the attribute exists
+    on the model — ``getattr``'s default is only returned when the attribute
+    is missing entirely). In production, NULLs cannot occur: the
+    intent/risk classifier migration (``024_intent_risk_classifier``) adds both columns as
+    ``NOT NULL`` with ``server_default`` (``'durable'`` / ``'none'``) and a
+    CHECK constraint pinning values to the enum domain, so existing rows
+    are backfilled and new rows are rejected if NULL is attempted. A persistent
+    NULL would therefore indicate genuinely-unclassified data that should not
+    silently match a specific intent/risk query.
+    """
+    intent_class = kwargs.get('intent_class')
+    if intent_class is not None:
+        statement = statement.where(col(MemoryUnit.intent_class) == intent_class)
+    risk_class = kwargs.get('risk_class')
+    if risk_class is not None:
+        statement = statement.where(col(MemoryUnit.risk_class) == risk_class)
     return statement
 
 
@@ -148,6 +218,7 @@ class SemanticStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         if query_embedding is None:
             # If no embedding, this strategy is effectively disabled
@@ -188,6 +259,7 @@ class KeywordStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         return (
             statement.add_columns(rank.label('score'))
@@ -202,7 +274,7 @@ from memex_core.memory.utils import get_phonetic_code
 
 
 # ---------------------------------------------------------------------------
-# Semantic seed CTE builder (T3 — semantic seeding)
+# Semantic seed CTE builder
 # ---------------------------------------------------------------------------
 
 
@@ -255,6 +327,17 @@ def build_semantic_seed_cte(
 # ---------------------------------------------------------------------------
 
 
+# Safety bounds for seed-entity resolution. A document-sized search query (e.g.
+# an agent passing a whole note as the query string) otherwise makes NER emit
+# thousands of names; the per-name OR/IN below then produces a multi-thousand-
+# parameter statement that times out (observed: ~3,200 params in prod, note-search
+# path). These cap the query length used for NER/windowing/LIKE and the distinct
+# seed-name count. For normal queries (< the cap) both are no-ops. Promotable to
+# config if a deployment needs tuning.
+_MAX_SEED_QUERY_CHARS = 1024
+_MAX_SEED_ENTITIES = 64
+
+
 def _build_ner_seeds(
     query: str,
     ner_model: FastNERModel | None,
@@ -276,38 +359,61 @@ def _build_ner_seeds(
     Returns:
         A ``Select | CompoundSelect`` producing a single ``id`` column.
     """
+    # Bound the query used for NER prediction, token windowing, and the LIKE
+    # fallback. A document-sized query otherwise explodes all three.
+    query = query[:_MAX_SEED_QUERY_CHARS]
+
     extracted_names: list[str] = []
     extracted_phonetics: list[str] = []
 
     if pre_extracted_entities is not None:
         extracted_names = [e['word'] for e in pre_extracted_entities]
-        for name in extracted_names:
-            p_code = get_phonetic_code(name)
-            if p_code:
-                extracted_phonetics.append(p_code)
     elif ner_model:
         try:
-            extracted = ner_model.predict(query)
-            extracted_names = [e['word'] for e in extracted]
-            for name in extracted_names:
-                p_code = get_phonetic_code(name)
-                if p_code:
-                    extracted_phonetics.append(p_code)
+            extracted_names = [e['word'] for e in ner_model.predict(query)]
         except (ValueError, RuntimeError, OSError) as e:
             logger.warning(f'NER extraction failed: {e}. Falling back to naive search.')
+
+    # Dedupe + top-K cap: bounds the per-name OR/IN explosion regardless of the
+    # caller. Covers BOTH the pre-extracted list (the MU engine runs NER on the
+    # full, untruncated query and passes it in) and our own predict above.
+    # The kept names are the first K in NER/document order (no relevance ranking
+    # available) — fine for a safety cap, since this only trims pathological
+    # document-as-query searches; normal queries are sub-cap no-ops.
+    extracted_names = list(dict.fromkeys(extracted_names))[:_MAX_SEED_ENTITIES]
+    for name in extracted_names:
+        p_code = get_phonetic_code(name)
+        if p_code:
+            extracted_phonetics.append(p_code)
 
     if extracted_names:
         logger.info(f'NER found entities: {extracted_names}')
 
+        # B.1: align trgm-fuzzy queries to the existing functional GIN-trgm
+        # indexes on `lower(canonical_name)` and `lower(name)` (see
+        # sql_models.py:_GIN_TRGM_CANONICAL_NAME / _GIN_TRGM_ALIAS_NAME).
+        # Without the `func.lower()` wrapper Postgres cannot match the query
+        # expression to the indexed expression and falls back to a seqscan
+        # over `entities` + `entity_aliases` per NER token — the root cause
+        # of the ~18s `statement_timeout` documented in the 2026-05-29 tech
+        # report. RHS is lowered once at the Python level so the planner
+        # doesn't have to call lower() per row.
         conds_canonical: list[Any] = [col(Entity.canonical_name).in_(extracted_names)]
         if extracted_phonetics:
             conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                escaped = _escape_like_pattern(lowered)
                 conds_canonical.append(
-                    func.similarity(col(Entity.canonical_name), name) > similarity_threshold
+                    func.lower(col(Entity.canonical_name)).like(f'%{escaped}%', escape='\\')
                 )
+                # pg_trgm `%` operator: sargable via the gin_trgm_ops index on
+                # lower(canonical_name). The prior `similarity(...) > const` form is
+                # NOT index-sargable, so OR-ing it with the LIKE defeated the index
+                # and seqscanned all entities (~51ms/term). Match cutoff is the
+                # pg_trgm.similarity_threshold GUC (DB default 0.3 == prior constant).
+                conds_canonical.append(func.lower(col(Entity.canonical_name)).op('%')(lowered))
 
         seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
 
@@ -316,28 +422,67 @@ def _build_ner_seeds(
             conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                escaped = _escape_like_pattern(lowered)
                 conds_alias.append(
-                    func.similarity(col(EntityAlias.name), name) > similarity_threshold
+                    func.lower(col(EntityAlias.name)).like(f'%{escaped}%', escape='\\')
                 )
+                conds_alias.append(func.lower(col(EntityAlias.name)).op('%')(lowered))
 
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(or_(*conds_alias))
     else:
         logger.info('No entities found by NER. Using fallback similarity search.')
+        # Same B.1 fix on the no-NER fallback path. Escape LIKE wildcards
+        # because `query` is user-supplied free text.
+        query_lower = query.lower()
+        query_escaped = _escape_like_pattern(query_lower)
         seed_from_canonical = select(col(Entity.id).label('id')).where(
             or_(
-                col(Entity.canonical_name).ilike(f'%{query}%'),
-                func.similarity(col(Entity.canonical_name), query) > similarity_threshold,
+                func.lower(col(Entity.canonical_name)).like(f'%{query_escaped}%', escape='\\'),
+                func.lower(col(Entity.canonical_name)).op('%')(query_lower),
             )
         )
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
             or_(
-                col(EntityAlias.name).ilike(f'%{query}%'),
-                func.similarity(col(EntityAlias.name), query) > similarity_threshold,
+                func.lower(col(EntityAlias.name)).like(f'%{query_escaped}%', escape='\\'),
+                func.lower(col(EntityAlias.name)).op('%')(query_lower),
             )
         )
 
-    return seed_from_canonical.union(seed_from_alias)
+    # Query-term entity seeding (NER-independent). The NER model only tags
+    # proper-noun spans — for "…the Engineering department at TechCo
+    # Global" it extracts ONLY "TechCo Global", never the common-noun
+    # entity "Engineering department" that actually discriminates the
+    # answer. Generate 1–3 word lowercased windows of the query and match
+    # them by equality against entity / alias names. This seeds the
+    # discriminating entity so the downstream IDF weighting (see
+    # ``build_seed_entity_cte``) can elevate it and suppress the ubiquitous
+    # org name. Equality on ``lower(name)`` (small candidate list of
+    # windows) keeps this scalable — no per-row substring scan of the query.
+    _toks = [t for t in re.split(r'[^0-9a-z]+', query.lower()) if t]
+    _windows = {
+        ' '.join(_toks[_i : _i + _n])
+        for _n in (1, 2, 3)
+        for _i in range(len(_toks) - _n + 1)
+        if len(' '.join(_toks[_i : _i + _n])) >= 4
+    }
+
+    seed_selects: list[Select] = [seed_from_canonical, seed_from_alias]
+    if _windows:
+        # Cap the window IN-list too (query is already truncated, but bound it
+        # explicitly so the equality IN can't grow unbounded).
+        window_list = list(_windows)[:_MAX_SEED_ENTITIES]
+        seed_selects.append(
+            select(col(Entity.id).label('id')).where(
+                func.lower(col(Entity.canonical_name)).in_(window_list)
+            )
+        )
+        seed_selects.append(
+            select(col(EntityAlias.canonical_id).label('id')).where(
+                func.lower(col(EntityAlias.name)).in_(window_list)
+            )
+        )
+    return union(*seed_selects)
 
 
 def build_seed_entity_cte(
@@ -384,10 +529,49 @@ def build_seed_entity_cte(
     )
     ner_subq = ner_seeds_query.subquery(f'{cte_name}_ner_t')
 
-    ner_weighted = select(
-        ner_subq.c.id.label('id'),
-        literal(1.0).label('weight'),
-    ).select_from(ner_subq)
+    # Lever 1 — IDF-weight NER seeds by vault-scoped document frequency.
+    # A query entity present in (nearly) every unit — e.g. the org name
+    # carried by all of a vault's notes — has zero discriminating power,
+    # yet a flat seed weight lets it flood the graph strategy and bury the
+    # genuinely specific entity. Weighting each seed by inverse document
+    # frequency ``idf = ln((N + 1) / (df + 1))`` drives the ubiquitous seed
+    # toward 0 (df→N ⇒ idf→0) and lets the rare, discriminating entity
+    # dominate ``score = seed_weight + temporal``.
+    #
+    # Computed ON DEMAND in SQL — no materialized idf column/table — and
+    # restricted to the seed entities (``WHERE entity_id IN (seeds)`` keeps
+    # the aggregation O(#seeds), not O(#entities)), so it stays fresh,
+    # vault-correct, and cheap. Falls back to a flat 1.0 when the search is
+    # not vault-scoped (df has no grain without a vault).
+    if vault_id is not None:
+        n_units_sq = (
+            select(func.count(col(MemoryUnit.id)))
+            .where(col(MemoryUnit.vault_id) == vault_id)
+            .scalar_subquery()
+        )
+        df_sq = (
+            select(
+                col(UnitEntity.entity_id).label('eid'),
+                func.count(func.distinct(col(UnitEntity.unit_id))).label('df'),
+            )
+            .where(col(UnitEntity.vault_id) == vault_id)
+            .where(col(UnitEntity.entity_id).in_(select(ner_subq.c.id)))
+            .group_by(col(UnitEntity.entity_id))
+            .subquery(f'{cte_name}_df')
+        )
+        idf_weight = func.ln((n_units_sq + 1.0) / (func.coalesce(df_sq.c.df, 0) + 1.0)).label(
+            'weight'
+        )
+        ner_weighted = (
+            select(ner_subq.c.id.label('id'), idf_weight)
+            .select_from(ner_subq)
+            .outerjoin(df_sq, df_sq.c.eid == ner_subq.c.id)
+        )
+    else:
+        ner_weighted = select(
+            ner_subq.c.id.label('id'),
+            literal(1.0).label('weight'),
+        ).select_from(ner_subq)
 
     use_semantic = enable_semantic_seeding and query_embedding is not None and vault_id is not None
 
@@ -415,12 +599,7 @@ def build_seed_entity_cte(
             ).group_by(combined.c.id)
         ).cte(cte_name)
     else:
-        return (
-            select(
-                ner_subq.c.id.label('id'),
-                literal(1.0).label('weight'),
-            ).select_from(ner_subq)
-        ).cte(cte_name)
+        return ner_weighted.cte(cte_name)
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +636,7 @@ class EntityCooccurrenceGraphStrategy:
         enable_semantic_seeding: bool = True,
         semantic_seed_top_k: int = 5,
         semantic_seed_weight: float = 0.7,
+        max_neighbors: int = 50,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
@@ -465,6 +645,9 @@ class EntityCooccurrenceGraphStrategy:
         self.enable_semantic_seeding = enable_semantic_seeding
         self.semantic_seed_top_k = semantic_seed_top_k
         self.semantic_seed_weight = semantic_seed_weight
+        # Cap on 2nd-order co-occurrence neighbours (top-N by link_strength),
+        # bounding the same hub fan-out the note variant caps. See get_statement.
+        self.max_neighbors = max_neighbors
 
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
@@ -498,11 +681,13 @@ class EntityCooccurrenceGraphStrategy:
         select_first = apply_vault_filters(select_first, MemoryUnit.vault_id, **kwargs)
         select_first = apply_generic_filters(select_first, **kwargs)
         select_first = apply_context_filter(select_first, **kwargs)
+        select_first = apply_intent_risk_filter(select_first, **kwargs)
 
         select_second = apply_date_filters(select_second, MemoryUnit.event_date, **kwargs)
         select_second = apply_vault_filters(select_second, MemoryUnit.vault_id, **kwargs)
         select_second = apply_generic_filters(select_second, **kwargs)
         select_second = apply_context_filter(select_second, **kwargs)
+        select_second = apply_intent_risk_filter(select_second, **kwargs)
 
         # 2. 1st Order Memories (Direct Link)
         # V2 Scoring: 1.0 + Temporal Decay
@@ -542,27 +727,39 @@ class EntityCooccurrenceGraphStrategy:
             col(EntityCooccurrence.entity_id_1),
         ).label('neighbor_id')
 
-        co_occur_stmt = (
-            select(
-                neighbor_id_expr,
-                (
-                    func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
-                    / func.ln(col(Entity.mention_count) + 2)
-                ).label('link_strength'),
-            )
-            .join(
-                seed_entities,
-                or_(
-                    col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
-                    col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
-                ),
-            )
-            .join(Entity, col(Entity.id) == neighbor_id_expr)
+        # Sum co-occurrence counts across vaults per neighbour BEFORE scoring.
+        # Since 052 the grain is (entity_id_1, entity_id_2, vault_id): a seed↔
+        # neighbour pair has one row per vault, so scoring raw rows would emit a
+        # duplicate neighbour per vault and double-count it in the 2nd-order
+        # join below. Aggregate first, then derive link_strength from the sum.
+        neighbor_cooc = select(
+            neighbor_id_expr,
+            func.sum(col(EntityCooccurrence.cooccurrence_count)).label('cooc_count'),
+        ).join(
+            seed_entities,
+            or_(
+                col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
+                col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
+            ),
         )
+        neighbor_cooc = apply_vault_filters(neighbor_cooc, EntityCooccurrence.vault_id, **kwargs)
+        neighbor_cooc = _apply_as_of_filter(neighbor_cooc, **kwargs)
+        neighbor_cooc = neighbor_cooc.group_by(neighbor_id_expr).subquery('neighbor_cooc')
 
-        co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
-        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
-        co_occurrences = co_occur_stmt.cte('related_entities')
+        co_occur_stmt = select(
+            neighbor_cooc.c.neighbor_id,
+            (
+                func.ln(neighbor_cooc.c.cooc_count + 1) / func.ln(col(Entity.mention_count) + 2)
+            ).label('link_strength'),
+        ).join(Entity, col(Entity.id) == neighbor_cooc.c.neighbor_id)
+        # Cap to top-N neighbours by link_strength before the 2nd-order join,
+        # bounding the hub fan-out (neighbor_cooc already aggregates cooccurrence
+        # per neighbour, so this is distinct-neighbour top-N).
+        co_occurrences = (
+            co_occur_stmt.order_by(text('link_strength DESC'))
+            .limit(self.max_neighbors)
+            .cte('related_entities')
+        )
 
         # 4. 2nd Order Memories (Indirect Link)
         second_order = (
@@ -590,12 +787,32 @@ class MentalModelStrategy:
     ) -> Select:
         statement = select(MentalModel.id).select_from(MentalModel)
 
+        # Hide archived models — set by the archive_mental_model proposal
+        # action, reversible by clearing archived_at. The partial index
+        # idx_mental_models_archived_at lets the planner short-circuit the
+        # WHERE clause on healthy vaults (no archived rows).
+        statement = statement.where(MentalModel.archived_at.is_(None))  # type: ignore[union-attr]
+
         # Apply Filters (Mental Models track last_refreshed)
         statement = apply_date_filters(statement, MentalModel.last_refreshed, **kwargs)
         statement = apply_vault_filters(statement, MentalModel.vault_id, **kwargs)
         # Generic filters generally don't apply to MentalModels in the same way (no fact_type),
         # so we skip apply_generic_filters here or check column existence.
         # MentalModels don't have 'fact_type', so we skip it.
+        #
+        # NOTE: apply_context_filter / apply_intent_risk_filter are intentionally
+        # NOT applied here. ``context``, ``intent_class`` and ``risk_class`` are
+        # MemoryUnit columns (set at write time); MentalModel rows are
+        # synthesised by reflection across many memory units and don't carry
+        # those facets. If a write-time risk/intent filter must constrain
+        # mental-model retrieval in the future, the join would need to fan out
+        # through the contributing MemoryUnits — out of scope for issue #92.
+        intent_class = kwargs.get('intent_class')
+        risk_class = kwargs.get('risk_class')
+        if intent_class is not None or risk_class is not None:
+            # Warn-once per (intent_class, risk_class) tuple — see
+            # ``_warn_mental_model_filters_skipped`` for caching rationale.
+            _warn_mental_model_filters_skipped(intent_class, risk_class)
 
         if query_embedding is None:
             # Fallback to name match if no embedding
@@ -623,18 +840,29 @@ class TemporalStrategy:
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
     ) -> Select:
-        score_col = func.extract('epoch', col(MemoryUnit.event_date))
+        # Rank by ``occurred_start`` (the real authored date), NOT
+        # ``event_date``. ``event_date`` defaults to ingest time for undated
+        # content, so a query-blind recency sort on it surfaces the whole
+        # pile of date-less units as "today" and floods the RRF vote with
+        # topically-irrelevant rows. Keying on ``occurred_start`` and
+        # excluding rows where it is NULL makes undated units *abstain* from
+        # the temporal signal rather than dominate it — only facts with a
+        # genuine authored date contribute recency evidence (matches
+        # Hindsight, which keys temporal on ``occurred_start``).
+        score_col = func.extract('epoch', col(MemoryUnit.occurred_start))
 
         statement = (
             select(MemoryUnit.id).select_from(MemoryUnit).add_columns(score_col.label('score'))
         )
 
+        statement = statement.where(col(MemoryUnit.occurred_start).isnot(None))
         statement = apply_date_filters(statement, MemoryUnit.event_date, **kwargs)
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
-        return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
+        return statement.order_by(desc(col(MemoryUnit.occurred_start))).limit(limit)
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +891,7 @@ class EntityCooccurrenceNoteGraphStrategy:
         enable_semantic_seeding: bool = True,
         semantic_seed_top_k: int = 5,
         semantic_seed_weight: float = 0.7,
+        max_neighbors: int = 50,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
@@ -671,6 +900,10 @@ class EntityCooccurrenceNoteGraphStrategy:
         self.enable_semantic_seeding = enable_semantic_seeding
         self.semantic_seed_top_k = semantic_seed_top_k
         self.semantic_seed_weight = semantic_seed_weight
+        # Cap on 2nd-order co-occurrence neighbours per query (top-N by
+        # link_strength), bounding the 2-hop fan-out that drives the search
+        # statement_timeout on hub entities. See get_statement.
+        self.max_neighbors = max_neighbors
 
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
@@ -723,32 +956,73 @@ class EntityCooccurrenceNoteGraphStrategy:
         first_order = apply_vault_filters(first_order, Chunk.vault_id, **kwargs)
         first_order = apply_context_filter(first_order, **kwargs)
 
-        # 2nd Order: Co-occurrence expansion
-        neighbor_id_expr = func.coalesce(
-            func.nullif(col(EntityCooccurrence.entity_id_2), seed_entities.c.id),
-            col(EntityCooccurrence.entity_id_1),
-        ).label('neighbor_id')
-
-        co_occur_stmt = (
+        # 2nd Order: Co-occurrence expansion.
+        # B.4: the previous shape used a single SELECT joined on
+        # `entity_id_1 = seed.id OR entity_id_2 = seed.id`. The `OR` defeats
+        # single-index use — Postgres can't push either side into the
+        # `(entity_id_1, …)` or `(entity_id_2, …)` btrees independently, so
+        # it fell back to a sequential / bitmap-or path that exploded for
+        # hub entities (e.g. `Memex`, `Claude`) with tens of thousands of
+        # cooccurrence rows before the outer LIMIT 60. Split into
+        # UNION ALL of two single-side joins — each branch uses its own
+        # btree, and the planner sees the small per-side cardinality.
+        #
+        # `UNION ALL` (vs `UNION`) keeps left/right branches disjoint per pair:
+        # EntityCooccurrence enforces `CHECK (entity_id_1 < entity_id_2)`
+        # (`sql_models.py`), so for a seed S the left branch (entity_id_1 = S)
+        # and right branch (entity_id_2 = S) never match the same row. Since
+        # migration 052 the PK is (entity_id_1, entity_id_2, vault_id) — a pair
+        # {S, N} has one row PER VAULT — so we carry the raw cooccurrence_count
+        # and mention_count here and AGGREGATE per distinct neighbour across
+        # vaults below (GROUP BY + SUM), matching the memory-unit variant, so the
+        # top-N cap counts distinct neighbours rather than (neighbour, vault) rows.
+        left_raw = (
             select(
-                neighbor_id_expr,
+                col(EntityCooccurrence.entity_id_2).label('neighbor_id'),
+                col(EntityCooccurrence.cooccurrence_count).label('cooc'),
+                col(Entity.mention_count).label('mention'),
+            )
+            .join(seed_entities, col(EntityCooccurrence.entity_id_1) == seed_entities.c.id)
+            .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_2))
+        )
+        left_raw = apply_vault_filters(left_raw, EntityCooccurrence.vault_id, **kwargs)
+        left_raw = _apply_as_of_filter(left_raw, **kwargs)
+
+        right_raw = (
+            select(
+                col(EntityCooccurrence.entity_id_1).label('neighbor_id'),
+                col(EntityCooccurrence.cooccurrence_count).label('cooc'),
+                col(Entity.mention_count).label('mention'),
+            )
+            .join(seed_entities, col(EntityCooccurrence.entity_id_2) == seed_entities.c.id)
+            .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_1))
+        )
+        right_raw = apply_vault_filters(right_raw, EntityCooccurrence.vault_id, **kwargs)
+        right_raw = _apply_as_of_filter(right_raw, **kwargs)
+
+        raw_neighbors = union_all(left_raw, right_raw).subquery('doc_graph_raw_neighbors')
+
+        # Aggregate cooccurrence per DISTINCT neighbour across vaults, score, then
+        # cap to the top-N by link_strength BEFORE the 2nd-order join. An uncapped
+        # hub (e.g. "Rituals", ~1.9k neighbours) otherwise fans out to ~90k rows
+        # through Chunk->Note->MemoryUnit->UnitEntity (~2GB buffers for 60 results)
+        # — the dominant note-search statement_timeout driver, multiplied by
+        # multi-seed queries. Dropped neighbours carry the lowest link_strength
+        # (ln(sum_cooc+1)/ln(mention+2)) and contribute ~0 to the score, so the cap
+        # is quality-preserving. GLOBAL top-N (the seed set has no per-seed grain).
+        co_occurrences = (
+            select(
+                raw_neighbors.c.neighbor_id,
                 (
-                    func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
-                    / func.ln(col(Entity.mention_count) + 2)
+                    func.ln(func.sum(raw_neighbors.c.cooc) + 1)
+                    / func.ln(raw_neighbors.c.mention + 2)
                 ).label('link_strength'),
             )
-            .join(
-                seed_entities,
-                or_(
-                    col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
-                    col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
-                ),
-            )
-            .join(Entity, col(Entity.id) == neighbor_id_expr)
+            .group_by(raw_neighbors.c.neighbor_id, raw_neighbors.c.mention)
+            .order_by(text('link_strength DESC'))
+            .limit(self.max_neighbors)
+            .cte('doc_graph_related_entities')
         )
-        co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
-        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
-        co_occurrences = co_occur_stmt.cte('doc_graph_related_entities')
 
         second_order = (
             select(Chunk.id)
@@ -772,7 +1046,7 @@ NoteGraphStrategy = EntityCooccurrenceNoteGraphStrategy
 
 
 # ---------------------------------------------------------------------------
-# Causal graph expansion strategies (T2)
+# Causal graph expansion strategies
 # ---------------------------------------------------------------------------
 
 CAUSAL_LINK_TYPES = ('causes', 'caused_by', 'enables', 'prevents')
@@ -1008,7 +1282,7 @@ class CausalNoteGraphStrategy:
 
 
 # ---------------------------------------------------------------------------
-# Link-expansion graph strategies (T4)
+# Link-expansion graph strategies
 # ---------------------------------------------------------------------------
 
 

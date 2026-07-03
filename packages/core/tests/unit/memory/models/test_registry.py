@@ -2,7 +2,7 @@ from memex_core.memory.models.base import MODEL_REGISTRY, ModelSpec
 
 
 def test_registry_has_all_models() -> None:
-    assert set(MODEL_REGISTRY.keys()) == {'embedding', 'reranker', 'ner'}
+    assert set(MODEL_REGISTRY.keys()) == {'embedding', 'reranker', 'ner', 'nli'}
 
 
 def test_registry_entries_are_model_specs() -> None:

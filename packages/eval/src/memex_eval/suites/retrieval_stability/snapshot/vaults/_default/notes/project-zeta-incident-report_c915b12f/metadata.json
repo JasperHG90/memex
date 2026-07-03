@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "c7749e89efba8e7c5e0597a1104c3d26",
+  "created_at": "2026-06-12T19:48:03.887371+00:00",
+  "description": "Project Zeta Q3 P1 Incident Analysis",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "c7749e89efba8e7c5e0597a1104c3d26",
+      "filestore_path": null,
+      "note_description": "Project Zeta Q3 outage incident report.",
+      "note_name": "Project Zeta Incident Report",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "zeta",
+        "incident"
+      ],
+      "template": null,
+      "uuid": "c915b12f1434fc05b11c07eb2f434b4f"
+    },
+    "tags": [
+      "project",
+      "zeta",
+      "incident",
+      "incident report",
+      "system outage",
+      "database management",
+      "orm",
+      "sla breach",
+      "infrastructure"
+    ]
+  },
+  "filestore_path": null,
+  "id": "c915b12f-1434-fc05-b11c-07eb2f434b4f",
+  "page_index": {
+    "metadata": {
+      "description": "Project Zeta Q3 P1 Incident Analysis",
+      "publish_date": "2025-09-28 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "zeta",
+        "incident",
+        "incident report",
+        "system outage",
+        "database management",
+        "orm",
+        "sla breach",
+        "infrastructure"
+      ],
+      "title": "Project Zeta Incident Report",
+      "total_tokens": 158
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "e3ecaec34ae7adc1dee4b03ab6de5ba3",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "e3ecaec34ae7adc1dee4b03ab6de5ba3",
+            "children": [],
+            "end_index": 452,
+            "id": "0a02a9c8773933410e28a6344aaeb590",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 117,
+            "subtree_tokens": 70,
+            "summary": {
+              "how": "Cascading database connection pool exhaustion caused by an unbounded connection pool in the ORM layer failing under heavy traffic.",
+              "what": "A major system outage affecting 15% of users.",
+              "when": "September 28, 2025, lasting over 4 hours.",
+              "where": "The Project Zeta platform.",
+              "who": "Project Zeta infrastructure and its users."
+            },
+            "title": "Incident Summary",
+            "token_estimate": 70
+          },
+          {
+            "assets": [],
+            "block_id": "e3ecaec34ae7adc1dee4b03ab6de5ba3",
+            "children": [],
+            "end_index": 711,
+            "id": "c2b9e706834cbfcb2fbc55f2c36cee79",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 452,
+            "subtree_tokens": 51,
+            "summary": {
+              "how": "Manual database connection pool restarts",
+              "what": "$2.3M revenue loss, 340 complaints, and SLA penalty breaches",
+              "when": "Post-incident recovery period",
+              "where": "Database infrastructure and enterprise contracts",
+              "who": "The database team and 12 enterprise clients"
+            },
+            "title": "Impact",
+            "token_estimate": 51
+          }
+        ],
+        "end_index": 711,
+        "id": "06d108b0f2ddc217cc2965fca2846316",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 158,
+        "summary": {
+          "how": "By documenting a P1 severity incident over a duration of 4 hours and 23 minutes.",
+          "what": "Project Zeta Q3 Incident Report.",
+          "when": "September 28, 2025.",
+          "where": "Within the Project Zeta operational environment.",
+          "who": "Project Zeta team."
+        },
+        "title": "Project Zeta — Q3 Incident Report",
+        "token_estimate": 37
+      }
+    ]
+  },
+  "publish_date": "2025-09-28T00:00:00+00:00",
+  "session_id": "0b358af1-cd99-419d-bcb7-82f368974fe6",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Zeta Incident Report",
+  "updated_at": "2026-06-12T19:48:03.887371+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

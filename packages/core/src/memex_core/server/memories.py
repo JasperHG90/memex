@@ -1,14 +1,28 @@
 """Memory unit endpoints."""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
 
-from memex_common.exceptions import MemexError
-from memex_core.server.auth import require_delete, require_read
-from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO
+from memex_common.config import Permission
+from memex_common.exceptions import (
+    MemexError,
+    MemoryUnitNotFoundError,
+    ObservationReadOnlyError,
+)
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_delete,
+    require_read,
+    require_write,
+)
+from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO, UnitHistoryNodeDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -16,15 +30,114 @@ from memex_core.server.common import (
     build_memory_unit_dto,
     get_api,
 )
+from memex_core.services.locks import EntityLockTimeoutError
+from memex_core.services.rate_limit import RateLimitExceededError
 
 logger = logging.getLogger('memex.core.server')
 
 router = APIRouter(prefix='/api/v1')
 
 
+class MemoryUnitsByChunksRequest(BaseModel):
+    """Batch lookup of memory units by chunk_id."""
+
+    chunk_ids: list[UUID] = Field(..., description='Chunk UUIDs to expand into memory units.')
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID to scope the lookup. REQUIRED — chunk-traversal must not '
+            'leak units from sibling vaults.'
+        ),
+    )
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each unit's stored embedding vector in the results.",
+    )
+
+
+class MemoryUnitsByIdsRequest(BaseModel):
+    """Batch lookup of memory units by unit ID."""
+
+    unit_ids: list[UUID] = Field(
+        ...,
+        max_length=500,
+        description='Memory unit UUIDs to fetch (max 500 per request).',
+    )
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID to scope the lookup. REQUIRED — IDs belonging to a '
+            'sibling vault are silently omitted from the result.'
+        ),
+    )
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each unit's stored embedding vector in the results.",
+    )
+
+
+@router.post(
+    '/memories/by-chunks',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_memory_units_by_chunks(
+    request: Annotated[MemoryUnitsByChunksRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """Get all memory units belonging to the named chunks (vault-scoped)."""
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
+        return [build_memory_unit_dto(u, include_vectors=request.include_vectors) for u in units]
+    except (MemexError, ValueError) as e:
+        # Narrowed from (KeyError, RuntimeError, OSError) which can mask
+        # genuine bugs (bad DTO dict access, filesystem errors) rather than
+        # client-visible errors. Service-layer raises MemexError subclasses
+        # for known failure modes; ValueError covers UUID/typing validation.
+        # Anything else propagates as a 500 with a logged stack.
+        raise _handle_error(e, 'Failed to get memory units by chunks')
+
+
+@router.post(
+    '/memories/by-ids',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_memory_units_by_ids(
+    request: Annotated[MemoryUnitsByIdsRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """Get memory units by ID (vault-scoped batch lookup).
+
+    IDs that don't exist or belong to another vault are silently omitted;
+    duplicates are deduplicated. Result order is not guaranteed to follow
+    input order.
+    """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.get_memory_units_by_ids(request.unit_ids, request.vault_id)
+        return [build_memory_unit_dto(u, include_vectors=request.include_vectors) for u in units]
+    except (MemexError, ValueError) as e:
+        # Narrow catch matches get_memory_units_by_chunks above, where the
+        # comment explains the reasoning.
+        raise _handle_error(e, 'Failed to get memory units by ids')
+
+
 @router.get('/memories/{id}', response_model=MemoryUnitDTO, dependencies=[Depends(require_read)])
 async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
-    """Get memory unit details."""
+    """Get memory unit details.
+
+    This route is intentionally NOT vault-scoped (no ``vault_id``, no
+    ``check_vault_access``) — preserved from before this contract for the
+    many vault-agnostic callers (CLI, cockpit, MCP, Hermes). Because of
+    that, it deliberately does NOT expose embedding vectors: vector
+    exposure is confined to vault-scoped routes. To fetch a single unit's
+    vector, use ``POST /memories/by-ids`` with a one-element ``unit_ids``
+    and the owning ``vault_id``.
+    """
     try:
         unit = await api.get_memory_unit(id)
         if not unit:
@@ -35,6 +148,45 @@ async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, f'Failed to get memory unit {id}')
 
 
+@router.get(
+    '/notes/{note_id}/memory_units',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def list_memory_units_by_note(
+    note_id: UUID,
+    vault_id: Annotated[
+        UUID,
+        Query(description='Vault UUID — required for vault-scoping; cross-vault is rejected.'),
+    ],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    include_vectors: Annotated[
+        bool,
+        Query(description="Include each unit's stored embedding vector in the results."),
+    ] = False,
+) -> list[MemoryUnitDTO]:
+    """List memory units belonging to a note (vault-scoped).
+
+    Used by the eval suite to resolve note_keys to unit IDs after
+    ingestion. Vault-scoping is mandatory and enforced via
+    ``check_vault_access`` so a mismatched ``vault_id`` returns 403.
+    Backed by ``idx_memory_units_note_id``.
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.list_memory_units_by_note(note_id, vault_id)
+        return [build_memory_unit_dto(u, include_vectors=include_vectors) for u in units]
+    except (MemexError, ValueError) as e:
+        # Narrow catch matches the sibling get_memory_units_by_chunks above,
+        # where the comment explains the reasoning: KeyError / RuntimeError /
+        # OSError mask genuine bugs rather than client-visible failures.
+        # Service-layer raises MemexError subclasses for known failure modes;
+        # ValueError covers UUID/typing validation. Anything else propagates
+        # as a 500 with a logged stack.
+        raise _handle_error(e, f'Failed to list memory units for note {note_id}')
+
+
 @router.delete('/memories/{id}', dependencies=[Depends(require_delete)])
 async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a memory unit and all associated data (entity links, memory links, evidence)."""
@@ -43,6 +195,342 @@ async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Memory unit deletion failed')
+
+
+class DeprioritizeRequest(BaseModel):
+    reason: str = Field(..., description='Why this unit was deprioritized (logged to audit_logs).')
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
+        ),
+    )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context (API-key name + prefix) if the '
+            'request is authenticated.'
+        ),
+    )
+
+
+class RestoreRequest(BaseModel):
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
+        ),
+    )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context if authenticated.'
+        ),
+    )
+
+
+@router.post(
+    '/memories/{id}/deprioritize',
+    response_model=MemoryUnitDTO,
+    dependencies=[Depends(require_write)],
+)
+async def deprioritize_memory_unit(
+    id: UUID,
+    request: DeprioritizeRequest,
+    background_tasks: BackgroundTasks,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+):
+    """Deprioritize a memory unit (non-destructive — flips ``is_deprioritized=True``).
+
+    Per vault-scoping invariant: this is the NON-destructive curation verb. Archive
+    remains the destructive counterpart.
+    """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
+    try:
+        unit = await api.deprioritize_memory_unit(
+            id,
+            reason=request.reason,
+            vault_id=request.vault_id,
+            actor=request.actor,
+            background_tasks=background_tasks,
+        )
+        return build_memory_unit_dto(unit)
+    except ObservationReadOnlyError as e:
+        # Observations are read-only projections of MUs; redirect the caller to
+        # the underlying source MUs. Ordering: catch this BEFORE MemexError, since
+        # ObservationReadOnlyError is a MemexError subclass and the generic catch
+        # below would otherwise flatten the structured detail to a string.
+        # Shape is owned by ``ObservationReadOnlyError.to_http_detail()`` — both
+        # this handler and the defensive clause in ``server/common.py`` use it,
+        # so a contract change updates one place.
+        raise HTTPException(status_code=400, detail=e.to_http_detail())
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to deprioritize memory unit {id}')
+
+
+@router.post(
+    '/memories/{id}/restore',
+    response_model=MemoryUnitDTO,
+    dependencies=[Depends(require_write)],
+)
+async def restore_memory_unit(
+    id: UUID,
+    request: RestoreRequest,
+    background_tasks: BackgroundTasks,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+):
+    """Restore a deprioritized memory unit (flips ``is_deprioritized=False``)."""
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
+    try:
+        unit = await api.restore_memory_unit(
+            id,
+            vault_id=request.vault_id,
+            actor=request.actor,
+            background_tasks=background_tasks,
+        )
+        return build_memory_unit_dto(unit)
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to restore memory unit {id}')
+
+
+# ---------------------------------------------------------------------------
+# Per-entity reconsolidation / vault-wide consolidation
+# ---------------------------------------------------------------------------
+
+
+class ReconsolidateRequest(BaseModel):
+    """Per-entity reconsolidation under an advisory lock."""
+
+    entity_id: UUID = Field(..., description='Entity UUID to reconsolidate.')
+    vault_id: UUID = Field(..., description='Vault UUID — explicit scoping for unit_ids.')
+    timeout_seconds: float = Field(
+        default=30.0,
+        ge=0.1,
+        le=300.0,
+        description='Advisory lock acquisition timeout.',
+    )
+
+
+class ConsolidateRequest(BaseModel):
+    """Vault-wide low-Memory-Worth consolidation."""
+
+    vault_id: UUID = Field(..., description='Vault UUID to consolidate.')
+    dry_run: bool = Field(
+        default=False,
+        description='If true, return preview without writes.',
+    )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context if authenticated.'
+        ),
+    )
+
+
+class ReconsolidateResponse(BaseModel):
+    """Typed response envelope for /memory/reconsolidate.
+
+    Mirrors `LocksService.reconsolidate_entity` return shape.
+    """
+
+    entity_id: UUID = Field(..., description='Entity UUID that was reconsolidated.')
+    vault_id: UUID = Field(..., description='Vault UUID the entity was scoped to.')
+    units_examined: int = Field(
+        ..., description='Number of memory units linked to the entity in this vault.'
+    )
+    contradictions_run: int = Field(
+        ..., description='Number of unit_ids passed to ContradictionEngine.detect_contradictions.'
+    )
+    mental_model_id: UUID | None = Field(
+        default=None,
+        description='ID of the updated MentalModel, if reflection produced one.',
+    )
+    observations_added: int = Field(
+        default=0, description='Number of new observations added to the mental model.'
+    )
+    abandoned: bool = Field(
+        default=False,
+        description=(
+            'True when the synchronous reflection abandoned because a concurrent '
+            'worker advanced the mental_models.version between read and Phase 5 '
+            'CAS UPDATE. The entity has been re-enqueued (retry_count unchanged) '
+            'and the fresh model is already persisted — re-read via '
+            'memex_get_entity / memex_memory_search rather than retrying '
+            'reconsolidate. Distinguishes "concurrent refresh won" from '
+            '"reflected but no new observations".'
+        ),
+    )
+    error: str | None = Field(
+        default=None,
+        description=(
+            'Optional error string for non-fatal partial outcomes. Reserved for '
+            'future partial-outcome reporting from the service layer: when a '
+            'reconsolidation completes with degraded results (e.g., reflection '
+            'succeeded but contradiction detection skipped a subset of units), '
+            'the service may surface a non-fatal explanation here without raising. '
+            'Currently always ``None`` — populated when partial-outcome reporting '
+            'lands.'
+        ),
+    )
+
+
+@router.post(
+    '/memory/reconsolidate',
+    response_model=ReconsolidateResponse,
+    dependencies=[Depends(require_write)],
+    responses={
+        503: {
+            'description': (
+                'Concurrent reconsolidation in progress on this entity (advisory lock '
+                'contention). Includes a ``Retry-After`` header. Mirrors the '
+                '``/memory/consolidate`` lock-timeout contract.'
+            )
+        }
+    },
+)
+async def reconsolidate_entity(
+    request: Annotated[ReconsolidateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> ReconsolidateResponse:
+    """Re-evaluate memories for an entity under a per-entity advisory lock.
+
+    Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
+    `ContradictionEngine.detect_contradictions` over linked unit_ids, then
+    `ReflectionService.reflect_batch` for the entity.
+
+    Translates ``EntityLockTimeoutError`` into a 503 with a ``Retry-After``
+    header derived from ``request.timeout_seconds`` (parity with
+    ``consolidate_vault``). The internal exception text is logged
+    server-side and never surfaced to the client.
+    """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
+    try:
+        result = await api.reconsolidate_entity(
+            request.entity_id,
+            request.vault_id,
+            timeout_seconds=request.timeout_seconds,
+        )
+    except EntityLockTimeoutError as exc:
+        logger.warning(
+            'Reconsolidate entity lock timeout (entity_id=%s vault_id=%s): %s',
+            request.entity_id,
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
+        # Derive Retry-After from the request's configured timeout (the
+        # canonical value the caller asked us to wait). Falls back to '5'
+        # only if the request somehow lacks a positive timeout.
+        retry_after = max(1, int(request.timeout_seconds)) if request.timeout_seconds else 5
+        raise HTTPException(
+            status_code=503,
+            detail='Entity lock timeout — please retry shortly',
+            headers={'Retry-After': str(retry_after)},
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Reconsolidate failed')
+
+    # Response construction is a code-only operation: a ValidationError here
+    # is schema drift between LocksService.reconsolidate_entity's return shape
+    # and ReconsolidateResponse, NOT a client-visible business error. Surface
+    # it as a logged 500 ("schema mismatch") instead of letting the broad
+    # service-error handler swallow it as a generic Internal Server Error.
+    try:
+        return ReconsolidateResponse(**result)
+    except ValidationError as exc:
+        logger.critical(
+            'Reconsolidate response schema drift: service returned dict that does '
+            'not match ReconsolidateResponse: %s',
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail='Internal response schema mismatch')
+
+
+@router.post(
+    '/memory/consolidate',
+    dependencies=[Depends(require_write)],
+    responses={
+        429: {
+            'description': 'Rate limit exceeded for this vault (default 1 call per vault per hour).',
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'rate_limit_exceeded',
+                        'retry_after_seconds': 1234.5,
+                        'message': 'Rate limit exceeded; retry after 1234.50s.',
+                    }
+                }
+            },
+        }
+    },
+)
+async def consolidate_vault(
+    request: Annotated[ConsolidateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> Any:
+    """Vault-wide low-Memory-Worth unit consolidation.
+
+    Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
+    created_at<now()-30d. dry_run=true returns preview without writes.
+
+    Rate-limited per vault (default 1 call per vault per hour). Translates
+    ``RateLimitExceededError`` into a 429 envelope with a ``Retry-After``
+    header. Mirrors the summarize-node 429 contract.
+    """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
+    try:
+        return await api.consolidate_vault(
+            request.vault_id, dry_run=request.dry_run, actor=request.actor
+        )
+    except EntityLockTimeoutError as exc:
+        logger.warning(
+            'Consolidate entity lock timeout (vault_id=%s): %s',
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
+        # Derive Retry-After from the exception's carried timeout (set by
+        # acquire_entity_lock). ConsolidateRequest has no client-supplied
+        # timeout field — consolidate does NOT acquire a per-entity lock —
+        # so the only timeout context available is whatever the underlying
+        # lock context used. Falls back to '5' if absent.
+        retry_after = (
+            max(1, int(exc.timeout_seconds))
+            if exc.timeout_seconds is not None and exc.timeout_seconds > 0
+            else 5
+        )
+        raise HTTPException(
+            status_code=503,
+            detail='Entity lock timeout — please retry shortly',
+            headers={'Retry-After': str(retry_after)},
+        )
+    except RateLimitExceededError as exc:
+        retry_after = max(0, int(exc.retry_after_seconds + 0.999))
+        return JSONResponse(
+            status_code=429,
+            content={
+                'error': 'rate_limit_exceeded',
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            },
+            headers={'Retry-After': str(retry_after)},
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Consolidate failed')
 
 
 @router.get(
@@ -64,3 +552,46 @@ async def get_memory_links(
         return links[:limit]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get links for memory unit {memory_id}')
+
+
+@router.get(
+    '/memories/{memory_id}/history',
+    response_model=UnitHistoryNodeDTO,
+    dependencies=[Depends(require_read)],
+)
+async def get_unit_history(
+    memory_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: UUID = Query(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
+        ),
+    ),
+    max_depth: int = Query(
+        10,
+        ge=0,
+        le=50,
+        description='Maximum recursion depth for the contradiction-graph walk.',
+    ),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> UnitHistoryNodeDTO:
+    """Walk the contradiction graph backward from ``memory_id``.
+
+    Returns the supersession history (negative-evidence path: contradicts /
+    weakens links) as an ordered tree rooted at the queried unit (depth=0).
+    ``reinforces`` is excluded — it points forward in time. v1 returns
+    supersession history, NOT full confidence evolution.
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        return await api.get_unit_history(
+            memory_id,
+            max_depth=max_depth,
+            vault_id=vault_id,
+        )
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to get history for memory unit {memory_id}')

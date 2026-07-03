@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from memex_core.memory.extraction.models import CausalRelation, ExtractedOutput, RawFact
+from memex_core.memory.extraction.models import (
+    CausalRelation,
+    ExtractedFact,
+    ExtractedOutput,
+    RawFact,
+)
 from memex_core.types import CausalRelationshipTypes, FactKindTypes, FactTypes
 
 
@@ -233,3 +238,151 @@ class TestExtractedOutputListUnwrap:
         """Non-list, non-dict input still raises ValidationError."""
         with pytest.raises(ValidationError):
             ExtractedOutput.model_validate('not valid')
+
+
+class TestExtractedFactClassificationValidators:
+    """ExtractedFact must apply the same default-on-fail coercion as RawFact.
+
+    Hermes round-2 MED: ExtractedFact previously had no validators on
+    intent_class / risk_class, even though ProcessedFact.from_extracted_fact
+    eagerly does ``IntentClass(extracted_fact.intent_class)`` /
+    ``RiskClass(...)`` — which would ValueError on an invalid string.
+    Mirroring RawFact's validator preserves the "extraction must never be
+    blocked by a classification mishap" invariant for direct construction
+    paths (e.g. unit-test fixtures, future call sites).
+    """
+
+    @staticmethod
+    def _make(
+        intent_class: object = 'durable',
+        risk_class: object = 'none',
+    ) -> ExtractedFact:
+        import datetime as _dt
+
+        return ExtractedFact(
+            fact_text='x',
+            fact_type=FactTypes.WORLD,
+            content_index=0,
+            chunk_index=0,
+            mentioned_at=_dt.datetime.now(_dt.timezone.utc),
+            intent_class=intent_class,  # type: ignore[arg-type]
+            risk_class=risk_class,  # type: ignore[arg-type]
+        )
+
+    @pytest.mark.parametrize('intent', ['permanent', 'durable', 'ephemeral'])
+    def test_valid_intent_passes_through(self, intent: str) -> None:
+        ef = self._make(intent_class=intent)
+        assert ef.intent_class == intent
+
+    @pytest.mark.parametrize('risk', ['none', 'sensitive', 'private', 'safety'])
+    def test_valid_risk_passes_through(self, risk: str) -> None:
+        ef = self._make(risk_class=risk)
+        assert ef.risk_class == risk
+
+    @pytest.mark.parametrize(
+        'garbage', ['', 'forever', 'unknown', None, 42, ['durable'], {'k': 'durable'}]
+    )
+    def test_invalid_intent_falls_back_to_durable(self, garbage: object) -> None:
+        ef = self._make(intent_class=garbage)
+        assert ef.intent_class == 'durable'
+
+    @pytest.mark.parametrize(
+        'garbage', ['', 'very-bad', 'unknown', None, 42, ['none'], {'k': 'none'}]
+    )
+    def test_invalid_risk_falls_back_to_none(self, garbage: object) -> None:
+        ef = self._make(risk_class=garbage)
+        assert ef.risk_class == 'none'
+
+    def test_processed_fact_from_extracted_fact_does_not_crash_on_garbage(self) -> None:
+        """End-to-end of the invariant: garbage that the validator coerced is
+        consumable by the downstream ``ProcessedFact.from_extracted_fact`` path
+        without ValueError.
+        """
+        from memex_core.memory.extraction.models import ProcessedFact
+
+        ef = self._make(intent_class='forever', risk_class='very-bad')
+        pf = ProcessedFact.from_extracted_fact(ef, [0.0] * 384)
+        assert pf.intent_class.value == 'durable'
+        assert pf.risk_class.value == 'none'
+
+
+class TestClaimTypeValidators:
+    """Validator + model-validator behaviour for ``claim_type`` / ``claim_target``."""
+
+    @pytest.mark.parametrize('value', ['resolution', 'contradiction', None])
+    def test_coerce_claim_type_valid(self, value: object) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=value,  # type: ignore[arg-type]
+        )
+        assert fact.claim_type == value
+
+    @pytest.mark.parametrize('garbage', ['bogus', '', 123, ['resolution'], {'k': 'resolution'}])
+    def test_coerce_claim_type_invalid_defaults_none(self, garbage: object) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=garbage,  # type: ignore[arg-type]
+        )
+        assert fact.claim_type is None
+
+    def test_claim_target_defaulted_when_claim_type_set_without_target(self) -> None:
+        from memex_core.memory.extraction.models import ClaimTarget
+
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type='resolution',
+        )
+        assert isinstance(fact.claim_target, ClaimTarget)
+        assert fact.claim_target.target_topic is None
+        assert fact.claim_target.target_entity_ids == []
+
+    def test_claim_target_dropped_when_claim_type_none(self) -> None:
+        from memex_core.memory.extraction.models import ClaimTarget
+
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=None,
+            claim_target=ClaimTarget(target_topic='ignored'),
+        )
+        assert fact.claim_target is None
+
+    def test_extracted_fact_claim_type_propagates_through_processed(self) -> None:
+        import datetime as _dt
+
+        from memex_core.memory.extraction.models import ClaimTarget, ProcessedFact
+
+        ef = ExtractedFact(
+            fact_text='x',
+            fact_type=FactTypes.WORLD,
+            content_index=0,
+            chunk_index=0,
+            mentioned_at=_dt.datetime.now(_dt.timezone.utc),
+            claim_type='contradiction',
+            claim_target=ClaimTarget(target_topic='the X decision'),
+        )
+        pf = ProcessedFact.from_extracted_fact(ef, [0.0] * 384)
+        assert pf.claim_type == 'contradiction'
+        assert pf.claim_target is not None
+        assert pf.claim_target.target_topic == 'the X decision'
+
+    def test_extracted_fact_claim_type_invalid_coerces_to_none(self) -> None:
+        import datetime as _dt
+
+        ef = ExtractedFact(
+            fact_text='x',
+            fact_type=FactTypes.WORLD,
+            content_index=0,
+            chunk_index=0,
+            mentioned_at=_dt.datetime.now(_dt.timezone.utc),
+            claim_type='garbage',  # type: ignore[arg-type]
+        )
+        assert ef.claim_type is None
+        assert ef.claim_target is None

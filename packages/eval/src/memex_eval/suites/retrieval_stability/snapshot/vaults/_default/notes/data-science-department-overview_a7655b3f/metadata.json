@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "0a6c5e9c78837527af2fa643613eb395",
+  "created_at": "2026-06-12T19:47:37.041466+00:00",
+  "description": "Data Science Operations and Initiatives at TechCo Global",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "0a6c5e9c78837527af2fa643613eb395",
+      "filestore_path": null,
+      "note_description": "Overview of the Data Science department at TechCo Global.",
+      "note_name": "Data Science Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "data-science",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "a7655b3fb2730d9a4a36d57470a9dbdb"
+    },
+    "tags": [
+      "department",
+      "data-science",
+      "techco",
+      "data science",
+      "techco global",
+      "customer lifetime value",
+      "gradient boosting",
+      "data engineering",
+      "predictive modeling"
+    ]
+  },
+  "filestore_path": null,
+  "id": "a7655b3f-b273-0d9a-4a36-d57470a9dbdb",
+  "page_index": {
+    "metadata": {
+      "description": "Data Science Operations and Initiatives at TechCo Global",
+      "publish_date": "2026-06-12 19:47:37.040619+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "data-science",
+        "techco",
+        "data science",
+        "techco global",
+        "customer lifetime value",
+        "gradient boosting",
+        "data engineering",
+        "predictive modeling"
+      ],
+      "title": "Data Science Department Overview",
+      "total_tokens": 97
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+            "children": [],
+            "end_index": 247,
+            "id": "5e763cd076b86e04b9ebd70c58fb6a3d",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 146,
+            "subtree_tokens": 15,
+            "summary": {
+              "how": "Using gradient boosting algorithms",
+              "what": "Building a customer lifetime value prediction model",
+              "when": "Current initiative",
+              "where": null,
+              "who": "The organization/development team"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 15
+          },
+          {
+            "assets": [],
+            "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+            "children": [],
+            "end_index": 451,
+            "id": "0d618c8d268d6ba30e0a669fe6aee50b",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 247,
+            "subtree_tokens": 43,
+            "summary": {
+              "how": "By reporting to the department head",
+              "what": "Responsibility for all data science-related activities",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "Mei-Lin Zhao and her team of 12"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 43
+          }
+        ],
+        "end_index": 451,
+        "id": "eaf779e41cd3b56c2c75311a0985d560",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 97,
+        "summary": {
+          "how": "By utilizing tools such as Snowflake, dbt, and Jupyter.",
+          "what": "Overview of department leadership, headcount, and core tooling.",
+          "when": null,
+          "where": "Data Science Department at TechCo Global.",
+          "who": "Mei-Lin Zhao (Department Head) and 12 employees."
+        },
+        "title": "Data Science Department — TechCo Global",
+        "token_estimate": 39
+      }
+    ]
+  },
+  "publish_date": "2026-06-12T19:47:37.040619+00:00",
+  "session_id": "f3e2ac1c-2ddd-4ff5-af0f-6930dc5cd4e9",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Data Science Department Overview",
+  "updated_at": "2026-06-12T19:47:37.041466+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

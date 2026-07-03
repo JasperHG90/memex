@@ -185,3 +185,153 @@ async def test_persist_resolutions_v2(resolver, mock_session):
     assert final_ids[0] == 'existing-uuid'
     assert final_ids[1] == str(new_id)
     assert mock_session.exec.call_count == 3
+
+
+# -- score_entity_pair (cross-batch pair scorer) --
+
+
+from memex_core.memory.entity_resolver import score_entity_pair  # noqa: E402
+
+
+def test_score_entity_pair_high_similarity():
+    """Case-folded near-identical + matching phonetic + neighbour overlap → score >= 0.8."""
+    score = score_entity_pair(
+        a_name='ACME Corp',
+        b_name='acme corp',
+        a_phonetic='AKM',
+        b_phonetic='AKM',
+        a_neighbors={'ceo': 5, 'product launch': 3},
+        b_neighbors={'ceo': 4, 'investor': 2},
+    )
+    assert score >= 0.8, f'expected >= 0.8, got {score}'
+
+
+def test_score_entity_pair_low_similarity():
+    """Disjoint names + disjoint phonetic + no neighbour overlap → score below threshold."""
+    score = score_entity_pair(
+        a_name='ACME Corp',
+        b_name='Globex Inc',
+        a_phonetic='AKM',
+        b_phonetic='KLPKS',
+        a_neighbors={'ceo': 5},
+        b_neighbors={'investor': 2},
+    )
+    assert score < 0.5, f'expected < 0.5, got {score}'
+
+
+def test_score_entity_pair_phonetic_floor():
+    """Trigram weak but matching phonetic code lifts the name score above floor."""
+    score_no_phonetic = score_entity_pair(
+        a_name='abcdefg',
+        b_name='zyxwvu',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={},
+        b_neighbors={},
+    )
+    score_phonetic = score_entity_pair(
+        a_name='abcdefg',
+        b_name='zyxwvu',
+        a_phonetic='PFK',
+        b_phonetic='PFK',
+        a_neighbors={},
+        b_neighbors={},
+    )
+    assert score_phonetic > score_no_phonetic
+
+
+def test_score_entity_pair_neighbor_overlap_contributes():
+    """Shared neighbours lift the score over the no-overlap baseline."""
+    base = score_entity_pair(
+        a_name='Foo Bar',
+        b_name='Foo Baz',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={},
+        b_neighbors={},
+    )
+    with_neighbors = score_entity_pair(
+        a_name='Foo Bar',
+        b_name='Foo Baz',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={'shared_co': 1},
+        b_neighbors={'shared_co': 1},
+    )
+    assert with_neighbors > base
+
+
+def test_score_entity_pair_identical_names_max():
+    """Identical names hit the exact-name fast path → perfect score (1.0)."""
+    score = score_entity_pair(
+        a_name='Same Name',
+        b_name='Same Name',
+        a_phonetic='SNM',
+        b_phonetic='SNM',
+        a_neighbors={},
+        b_neighbors={},
+    )
+    assert score == 1.0
+
+
+def test_score_entity_pair_normalized_case_variant_fast_path():
+    """Case/whitespace-only variants normalize equal → fast path returns 1.0.
+
+    Pins the fix for the scan that never emitted: ``Marc de haas`` /
+    ``Marc de Haas`` must cluster regardless of phonetic codes or thresholds.
+    """
+    assert (
+        score_entity_pair(
+            a_name='Marc de haas',
+            b_name='Marc de Haas',
+            a_phonetic=None,
+            b_phonetic=None,
+            a_neighbors={},
+            b_neighbors={},
+        )
+        == 1.0
+    )
+    # Surrounding/duplicated whitespace also normalizes away.
+    assert (
+        score_entity_pair(
+            a_name='  ACME Corp',
+            b_name='acme corp',
+            a_phonetic='AKM',
+            b_phonetic='AKM',
+            a_neighbors={},
+            b_neighbors={},
+        )
+        == 1.0
+    )
+    # Internal whitespace runs collapse too (messy extraction): "ACME  Corp".
+    assert (
+        score_entity_pair(
+            a_name='ACME  Corp',
+            b_name='ACME Corp',
+            a_phonetic=None,
+            b_phonetic=None,
+            a_neighbors={},
+            b_neighbors={},
+        )
+        == 1.0
+    )
+
+
+def test_score_entity_pair_identical_clears_default_threshold():
+    """An identical name with no neighbour overlap clears the default pair_threshold.
+
+    Regression pin for the structural bug: before the fast path, identical
+    names capped at 0.80 (trigram_weight + phonetic_weight) and the production
+    default threshold sat above that, so no edge ever formed.
+    """
+    from memex_common.config import EntityMaintenanceConfig
+
+    score = score_entity_pair(
+        a_name='Same Name',
+        b_name='Same Name',
+        a_phonetic='SNM',
+        b_phonetic='SNM',
+        a_neighbors={},
+        b_neighbors={},
+    )
+    assert score >= EntityMaintenanceConfig().pair_threshold

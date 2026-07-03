@@ -1,6 +1,8 @@
 """Configuration for Memex based on Persona library"""
 
+import json
 import logging
+import math
 from enum import Enum
 from typing import Literal, Self, Union, Annotated, Any, TypeAlias
 import pathlib as plb
@@ -13,8 +15,17 @@ from uuid import UUID
 logger = logging.getLogger('memex.common.config')
 
 from platformdirs import user_cache_dir, user_config_dir, user_data_dir, user_log_dir
-from pydantic import BaseModel, Field, SecretStr, HttpUrl, field_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    SecretStr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
+from pydantic_settings.sources import EnvSettingsSource
 
 from memex_common.types import ReasoningEffort
 
@@ -353,6 +364,37 @@ class DisabledBackend(BaseModel):
     type: Literal['disabled'] = 'disabled'
 
 
+class LitellmNLIBackend(BaseModel):
+    """Use a litellm-supported chat completion provider for NLI classification.
+
+    NLI (Natural Language Inference) classifies a (premise, hypothesis) pair as
+    entailment, neutral, or contradiction. Used by the surprise gate's polarity
+    branch to detect contradictions that cosine similarity alone would miss.
+
+    Examples: ``openai/gpt-4o-mini``, ``gemini/gemini-2.0-flash``,
+    ``ollama/llama3``.
+    """
+
+    type: Literal['litellm'] = 'litellm'
+    model: str = Field(
+        ...,
+        description=(
+            'LiteLLM model string for NLI classification via chat completion, '
+            "e.g. 'openai/gpt-4o-mini', 'gemini/gemini-2.0-flash', 'ollama/llama3'."
+        ),
+    )
+    api_base: HttpUrl | None = Field(
+        default=None,
+        description='API base URL. Required for self-hosted providers (Ollama, vLLM). '
+        'Omit for cloud providers that use standard endpoints.',
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description='API key. Can also be set via provider env vars '
+        '(OPENAI_API_KEY, GEMINI_API_KEY, etc.).',
+    )
+
+
 EmbeddingBackend: TypeAlias = Annotated[
     Union[OnnxBackend, LitellmEmbeddingBackend],
     Field(discriminator='type'),
@@ -362,6 +404,56 @@ RerankerBackend: TypeAlias = Annotated[
     Union[OnnxBackend, LitellmRerankerBackend, DisabledBackend],
     Field(discriminator='type'),
 ]
+
+NLIBackend: TypeAlias = Annotated[
+    Union[OnnxBackend, LitellmNLIBackend, DisabledBackend],
+    Field(discriminator='type'),
+]
+
+
+class NLIPolarityConfig(BaseModel):
+    """NLI (Natural Language Inference) polarity gate for contradiction detection.
+
+    Controls whether NLI is enabled and the thresholds for the polarity
+    branch of the surprise gate. NLI detects contradictions that cosine
+    similarity alone would miss. The model backend (ONNX, litellm, or
+    disabled) is configured separately via ``NLIBackend``.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='Kill-switch. When False, falls back to cosine-only.',
+    )
+    backend: NLIBackend = Field(
+        default_factory=OnnxBackend,
+        description='NLI model backend. Default: built-in ONNX cross-encoder. '
+        'Set type=litellm to use any litellm-supported chat completion provider. '
+        'Set type=disabled to skip model loading entirely.',
+    )
+    polarity_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description='Min contradiction probability to clear the surprise gate.',
+    )
+    rate_limit_per_vault_per_hour: int | None = Field(
+        default=None,
+        ge=1,
+        description='Per-vault hourly cap. None = unlimited.',
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_flat_config(cls, data: Any) -> Any:
+        """Accept old flat NLIModelConfig format with 'type' at top level."""
+        if isinstance(data, dict) and 'type' in data and 'backend' not in data:
+            data = {**data}
+            backend_type = data.pop('type')
+            data['backend'] = {'type': backend_type}
+        return data
+
+
+NLIModelConfig = NLIPolarityConfig
 
 
 class SearchStrategiesConfig(BaseModel):
@@ -383,6 +475,35 @@ class DocSearchStrategiesConfig(BaseModel):
     keyword: bool = Field(default=True, description='Enable keyword (BM25) search strategy.')
     graph: bool = Field(default=True, description='Enable graph (entity) search strategy.')
     temporal: bool = Field(default=True, description='Enable temporal search strategy.')
+
+
+class SummarizeNodeRateLimitConfig(BaseModel):
+    """Rate-limit config for memex_memory_summarize_node.
+
+    Token bucket per (entity_id, vault_id), in-process LRU. Multi-worker
+    leakage is accepted in v1 (advisory limit, not security gate); the
+    distributed lock will close the cross-process gap.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='When False, summarize_node calls are never rate-limited (set False in tests).',
+    )
+    per_entity_per_seconds: int = Field(
+        default=60,
+        gt=0,
+        description='Window in seconds across which `burst` calls are allowed per (entity, vault).',
+    )
+    burst: int = Field(
+        default=1,
+        gt=0,
+        description='Token-bucket capacity. Default 1 = no bursting (1 call per window).',
+    )
+    max_keys: int = Field(
+        default=10000,
+        gt=0,
+        description='LRU eviction cap on tracked (entity_id, vault_id) keys.',
+    )
 
 
 class ReflectionConfig(BaseModel):
@@ -458,6 +579,78 @@ class ReflectionConfig(BaseModel):
             'Prevents items from being stuck forever when reflection fails mid-flight.'
         ),
     )
+    summarize_node_rate_limit: 'SummarizeNodeRateLimitConfig' = Field(
+        default_factory=lambda: SummarizeNodeRateLimitConfig(),
+        description='per-(entity, vault) rate limit for memex_memory_summarize_node.',
+    )
+    variance_prioritisation_enabled: bool = Field(
+        default=False,
+        description=(
+            'When True, ``_batch_fetch_recent_memories`` sorts each entity '
+            'bucket by closed-form Beta(1, 1) posterior variance (descending) so '
+            'high-uncertainty units land first within the per-tick LLM budget. '
+            'Default False at ship time — ships INERTLY (column + backfill '
+            'only) so reflection ordering does not change on deploy. Pairs with '
+            '``RetrievalConfig.certainty_modulation_enabled``: flip both after '
+            'observing CONFIDENCE_VARIANCE_OBSERVED populates as expected.'
+        ),
+    )
+    refresh_obs_priority_lane: bool = Field(
+        default=True,
+        description=(
+            'When True, refresh-observation tasks land on the priority lane and '
+            'are claimed ahead of regular reflect tasks. Default True so the agent '
+            'sees its deprio signal honored quickly. '
+            'STARVATION RISK: a large deprio burst (many MUs deprio`d in quick '
+            'succession, each citing many observations) can monopolize the '
+            'priority lane and delay regular reflect cycles. Empirically the '
+            'priority lane drains quickly because each refresh task is bounded '
+            'in work; if you observe reflect-lane staleness coinciding with '
+            'priority-lane queue depth >100, flip this to False and let refresh '
+            'compete on score with regular reflects.'
+        ),
+    )
+    min_evidence_for_obs_retention: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            'Guardrail against LLM false-positive should_drop=True in '
+            '_refresh_observation: if surviving_evidence_count >= this threshold, '
+            'override the drop and keep the observation with re-stated content. '
+            'Default 2 — engages only when at least 2 evidence items survive, so '
+            'tiny-evidence observations remain LLM-authoritative.'
+        ),
+    )
+    refresh_obs_retry_backoff_min_seconds: int = Field(
+        default=2,
+        ge=1,
+        description='Minimum jitter window for AdvisoryLockTakenError re-claim backoff.',
+    )
+    refresh_obs_retry_backoff_max_seconds: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Maximum jitter window for AdvisoryLockTakenError re-claim backoff. '
+            'Tight default (2-5s); raise proportionally if you tune '
+            'background_reflection_interval_seconds below 30s.'
+        ),
+    )
+    reconcile_historical_deprios_on_boot: bool = Field(
+        default=True,
+        description=(
+            'When True (default), the reconcile pass on scheduler ticks repairs '
+            'refresh-task rows missing for any deprio`d MU — including historical '
+            '(pre-V21) MUs and rows dropped by the SKIP LOCKED contention path in '
+            '`_enqueue_refresh_tasks_for_mu`. Set False only to opt out of the '
+            'safety net (e.g. while capturing a specific eval baseline).'
+        ),
+    )
+    reconcile_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description='Per-tick reconcile-pass batch size; caps work per scheduler tick.',
+    )
 
     @model_validator(mode='after')
     def _validate_weight_scores(v: 'ReflectionConfig'):
@@ -466,6 +659,23 @@ class ReflectionConfig(BaseModel):
         if weight > 1:
             raise ValueError(
                 "'Urgency', 'resonance', and 'importance' weights should count up to 1 exactly."
+            )
+        return v
+
+    @model_validator(mode='after')
+    def _validate_refresh_backoff_window(v: 'ReflectionConfig'):
+        """Assert min <= max for the refresh-retry backoff jitter window.
+
+        ``random.uniform(min, max)`` silently swaps endpoints if min > max,
+        so a misconfig produces a degenerate jitter distribution without an
+        error. Reject the misconfig up-front.
+        """
+        if v.refresh_obs_retry_backoff_min_seconds > v.refresh_obs_retry_backoff_max_seconds:
+            raise ValueError(
+                'refresh_obs_retry_backoff_min_seconds '
+                f'({v.refresh_obs_retry_backoff_min_seconds}) must be <= '
+                'refresh_obs_retry_backoff_max_seconds '
+                f'({v.refresh_obs_retry_backoff_max_seconds}).'
             )
         return v
 
@@ -584,6 +794,21 @@ class ExtractionConfig(BaseModel):
         'least one in-flight gauge is > 0. None (default) disables it.',
     )
 
+    intent_risk_classifier_enabled: bool = Field(
+        default=True,
+        description='Kill switch for write-time intent + risk handling. '
+        'When True, the LLM-produced intent / risk on each extracted fact are honored '
+        '(intent ∈ {permanent, durable, ephemeral}; risk ∈ {none, sensitive, private, '
+        'safety}) and safety-class facts are dropped at write time. When False, every '
+        'fact is forced to the schema defaults (durable / none) regardless of what the '
+        'LLM emitted, and the per-fact classification distribution metrics are '
+        'suppressed (since they would all read durable / none and pollute dashboards). '
+        'Note: intent + risk were originally implemented as a separate ``ClassifyMemoryUnit`` '
+        'LLM call; those output fields were later folded into the extraction signature itself, '
+        'so this flag no longer gates a separate LLM call — it gates whether the '
+        'inline-emitted classification is honored.',
+    )
+
     @property
     def active_strategy(self) -> ExtractionStrategy:
         """Return the active extraction strategy name."""
@@ -689,13 +914,103 @@ class RetrievalConfig(BaseModel):
     )
     reranking_recency_alpha: float = Field(
         default=0.2,
-        description='Multiplicative recency boost strength for cross-encoder reranking. '
+        description='Recency boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no boost (backward compatible).',
     )
     reranking_temporal_alpha: float = Field(
         default=0.2,
-        description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
+        description='Temporal proximity boost strength for cross-encoder reranking. '
+        'Composed log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no boost (backward compatible).',
+    )
+    reranking_mw_alpha: float = Field(
+        default=0.3,
+        description='Memory Worth boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
+        '0 = no Memory Worth influence. Default 0.3 matches recency/temporal magnitude.',
+    )
+    confidence_alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description='Contradiction-derived confidence boost strength for cross-encoder '
+        'reranking. Composed log-additively with the other four factors (see '
+        'composite_boost_log_clip). Default 0.0 (off) at ship time — flip to non-zero '
+        '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
+        'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
+        'unit a lift before calibration justifies it. '
+        'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction (penalise '
+        'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
+        'low-confidence units.',
+    )
+    decay_alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description='FSFM-lite decay boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
+        'Default 0.0 (off) at ship time — composition is a no-op until the before/after '
+        'benchmark validates the lift; flip to non-zero (target 0.3 to match '
+        'recency/temporal/mw magnitude) in a follow-on config commit. '
+        'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
+        'the boost can go negative for stale low-importance units.',
+    )
+    composite_boost_log_clip: float = Field(
+        default=math.inf,
+        ge=0.0,
+        description='Symmetric clip on the aggregate metadata multiplier applied to the '
+        'cross-encoder score during reranking. The five boost factors compose in log space '
+        '(sum of log(b_i)), the sum is clipped to [-L, +L], then exponentiated and applied '
+        'to ce_score. At default L = math.inf the clip is a no-op and the result is '
+        'mathematically identical (modulo 1e-9 floating-point) to the prior multiplicative '
+        'product for strictly positive boost inputs; a boost of exactly 0.0 (reachable only '
+        'when an alpha is non-zero and a unit was contradicted to zero, dormant under ship '
+        'defaults) produces ce_score * ~1e-9 in the new form for a single zero factor '
+        '(ce_score * 1e-9^k for k floored factors) vs ce_score * 0.0 in the old form — '
+        'rank-equivalent for retrieval scoring (both at the bottom) but no longer tying '
+        'at zero. Finite L bounds the aggregate metadata multiplier to [exp(-L), exp(+L)], '
+        'preventing any single heuristic or product of heuristics from arbitrarily '
+        'compressing or amplifying the semantic signal. Empirical L (typically the p95 of '
+        '|log(aggregate)| from the memex_composite_boost_clipped histogram, which at L=inf '
+        'observes the pre-clip product directly) lands via a follow-up config commit once '
+        'distribution data accumulates. Negative L is rejected: it would invert clip '
+        'semantics.',
+    )
+
+    @field_validator('composite_boost_log_clip', mode='before')
+    @classmethod
+    def _parse_composite_boost_log_clip(cls, value: object) -> float | object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {'inf', '+inf', 'infinity', '+infinity'}:
+                return math.inf
+            return float(normalized)
+        return value
+
+    @field_serializer('composite_boost_log_clip', when_used='json')
+    def _serialize_composite_boost_log_clip(self, value: float) -> float | str | None:
+        if value == math.inf:
+            return 'inf'
+        if not math.isfinite(value):
+            return None
+        return value
+
+    certainty_modulation_enabled: bool = Field(
+        default=False,
+        description='When True, the confidence_boost is multiplied by a certainty '
+        'factor derived from the closed-form Beta(1, 1) posterior over '
+        '(confidence, confidence_evidence_count). Default False at ship time — the '
+        'migration ships the column + backfill INERTLY so the existing '
+        '1.0 + α × (confidence − 0.5) form is retained. Flip to True after observing the '
+        'CONFIDENCE_VARIANCE_OBSERVED histogram populates as expected.',
+    )
+    mw_ema_half_life_days: float = Field(
+        default=60.0,
+        gt=0,
+        description='Half-life in days for EMA decay of Memory Worth counters. '
+        'Only applies when the vault mw_mode is set to ema. '
+        'Default 60 means outcomes older than 60 days contribute half their weight.',
     )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
@@ -706,9 +1021,41 @@ class RetrievalConfig(BaseModel):
         description='Max documents per ONNX reranker inference call. '
         '0 = all at once (no batching). Lower values reduce peak GPU memory.',
     )
+    cross_encoder_cache_enabled: bool = Field(
+        default=True,
+        description='Enable in-process TTL cache for cross-encoder reranker scores. '
+        'Repeat queries (e.g. recurring briefings) get free reranking. Set False to bypass.',
+    )
+    cross_encoder_cache_size: int = Field(
+        default=10000,
+        ge=1,
+        description='Maximum number of (model_version, query_hash, unit_id) entries in the '
+        'cross-encoder score cache. Lock pool uses the same cap. '
+        'To disable the cache, set `cross_encoder_cache_enabled=False` — '
+        'do not set size to 0 (TTLCache rejects zero-sized maps).',
+    )
+    cross_encoder_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=1,
+        description='TTL for cross-encoder score cache entries in seconds. Default 24h. '
+        'Backstops other invalidation paths; model upgrades are invalidated structurally '
+        'via the model_version key component. '
+        'To disable the cache, set `cross_encoder_cache_enabled=False` — '
+        'do not set TTL to 0 (TTLCache rejects zero TTLs).',
+    )
     causal_weight_threshold: float = Field(
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',
+    )
+    anisotropy_window_size: int = Field(
+        default=1024,
+        description='Sliding window size for Z-score anisotropy correction. '
+        '1024 matches D-MEM §4.1. Set to 0 to disable.',
+    )
+    anisotropy_min_samples: int = Field(
+        default=32,
+        description='Minimum observations before anisotropy correction activates. '
+        'Below this threshold, raw similarity scores pass through unchanged.',
     )
     graph_semantic_seeding: bool = Field(
         default=True,
@@ -722,6 +1069,45 @@ class RetrievalConfig(BaseModel):
         default=0.7,
         description='Weight for semantic seed entities (lower than NER weight of 1.0).',
     )
+    graph_max_neighbors: int = Field(
+        default=50,
+        description='Max 2nd-order co-occurrence neighbours per query in graph '
+        'retrieval (both note-graph and memory-unit graph; top-N by link_strength). '
+        'Caps the 2-hop fan-out over hub entities that otherwise drives the search '
+        'statement_timeout. Lower = faster, less associative recall.',
+    )
+    exploration_mode: Literal['epsilon_greedy', 'thompson', 'off'] = Field(
+        default='epsilon_greedy',
+        description=(
+            'Selector for the exploration-floor algorithm. '
+            "'epsilon_greedy' (ship default): inject exploration units with probability "
+            '``exploration_epsilon`` from the low-Memory-Worth tail. '
+            "'thompson': draw θ ~ Beta(success+1, failure+1) per eligible candidate and inject "
+            'the top-θ units; cold-start-fair by construction. '
+            "'off': no exploration injection regardless of other knobs."
+        ),
+    )
+    exploration_epsilon: float = Field(
+        default=0.05,
+        description='Probability of injecting exploration units (low-Memory Worth memories) into '
+        'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
+        'Prevents rich-get-richer dynamics. Ignored when ``exploration_mode != '
+        "'epsilon_greedy'``.",
+    )
+    exploration_max_injections: int = Field(
+        default=2,
+        description='Maximum number of exploration units to inject per retrieval call. '
+        'Note: when the outer ε-greedy roll succeeds (governed by '
+        '``exploration_epsilon``), ALL eligible units up to this cap are injected — '
+        'this is not per-unit independent sampling. Intentional for self-correction: '
+        'once the engine commits to exploring, it explores fully rather than re-rolling '
+        'per candidate.',
+    )
+    exploration_low_mw_threshold: int = Field(
+        default=5,
+        description='Units with (success_co_count + failure_co_count) below this '
+        'threshold are eligible for exploration injection.',
+    )
     link_expansion_causal_threshold: float = Field(
         default=0.3,
         description='Minimum weight for causal links in link-expansion graph strategy.',
@@ -729,6 +1115,75 @@ class RetrievalConfig(BaseModel):
     relations: RelationConfig = Field(
         default_factory=RelationConfig,
         description='Settings for note/unit relationship enrichment in search results.',
+    )
+    fsfm_branch_enabled: bool = Field(
+        default=True,
+        description=(
+            'Pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
+            'Default flipped to True once the importance / stability / '
+            'last_outcome_at columns shipped on memory_units. Set to False to keep the '
+            'pre-filter on Memory Worth + Confidence branches only — the column migration stays '
+            'independently revertible from this flag flip.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def _log_exploration_mode_epsilon_interaction(self) -> Self:
+        """Log (do not raise) when ``exploration_epsilon`` is set to a non-trivial value
+        under a mode that ignores it.
+
+        Operators running a mode A/B will toggle ``exploration_mode`` without
+        resetting ``exploration_epsilon``; raising would block that workflow.
+        Suppressed when ``exploration_epsilon`` is at one of its meaningful
+        "off" values (0.0 = explicit disable; 0.05 = ship default and presumed
+        unmodified) — operators who explicitly chose those values are not the
+        target audience for the warning.
+        """
+        ignored_under_non_epsilon_mode = self.exploration_mode != 'epsilon_greedy'
+        epsilon_is_explicit_nondefault = self.exploration_epsilon not in (0.0, 0.05)
+        if ignored_under_non_epsilon_mode and epsilon_is_explicit_nondefault:
+            logger.info(
+                'exploration_epsilon (%s) is ignored under exploration_mode=%r',
+                self.exploration_epsilon,
+                self.exploration_mode,
+            )
+        return self
+
+
+class OutcomesConfig(BaseModel):
+    """Configuration for outcome-attribution signal quality.
+
+    Owns the per-unit-verb coverage check, contradiction→failure wiring
+    weight, and the default Memory Worth counter mode for new vaults.
+    """
+
+    coverage_check_mode: Literal['strict', 'permissive'] = Field(
+        default='permissive',
+        description=(
+            "Coverage policy for record_outcome. 'strict' rejects calls where "
+            'the reported units do not cover the full retrieved set. '
+            "'permissive' accepts partial coverage and records coverage_ratio "
+            'on the audit row + metric.'
+        ),
+    )
+    contradiction_failure_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Per-link failure-counter bump applied when the contradiction '
+            'engine commits a weakens or contradicts link. Stored as int; '
+            'the per-link bump uses half-up rounding — 0.0 disables wiring, '
+            '0.5 (default) and above yield a +1 bump per negative-evidence link.'
+        ),
+    )
+    mw_mode_default: Literal['stationary', 'ema'] = Field(
+        default='ema',
+        description=(
+            'Default Memory Worth counter mode for newly created vaults. '
+            "'ema' applies EMA decay; 'stationary' keeps raw counters. "
+            'Per-vault `Vault.mw_mode` overrides this default.'
+        ),
     )
 
 
@@ -747,9 +1202,30 @@ class ContradictionConfig(BaseModel):
         default=0.5,
         description='Min cosine similarity for candidate retrieval.',
     )
+    similarity_threshold_explicit_claim: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Min cosine similarity for candidate retrieval when the new unit '
+            'carries an explicit resolution/contradiction claim. Lower than '
+            '``similarity_threshold`` because explicit claims have linguistic '
+            'evidence beyond cosine.'
+        ),
+    )
     max_candidates_per_unit: int = Field(
         default=15,
         description='Max candidates per flagged unit.',
+    )
+    claim_too_aggressive_max_links: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Lint threshold for the ``claim_too_aggressive`` rule: when the '
+            'total ``contradicts``/``weakens`` links accumulated on an '
+            'explicit-claim unit exceed this threshold, a maintenance finding '
+            'is emitted.'
+        ),
     )
     superseded_threshold: float = Field(
         default=0.3,
@@ -758,6 +1234,76 @@ class ContradictionConfig(BaseModel):
     model: ModelConfig | None = Field(
         default=None,
         description='LLM model for classification. None = use extraction model.',
+    )
+
+    @model_validator(mode='after')
+    def _validate_explicit_claim_threshold(self) -> 'ContradictionConfig':
+        if self.similarity_threshold_explicit_claim > self.similarity_threshold:
+            raise ValueError(
+                'similarity_threshold_explicit_claim '
+                f'({self.similarity_threshold_explicit_claim}) must be <= '
+                f'similarity_threshold ({self.similarity_threshold}); explicit-claim '
+                'matching is meant to be a looser filter, not tighter.'
+            )
+        return self
+
+
+class ConsolidationConfig(BaseModel):
+    """Consolidation orchestrator configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Run the per-vault consolidation tick on the scheduler.',
+    )
+    cadence_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description='Wall-clock interval between consolidation ticks (default: 24h).',
+    )
+    units_per_tick: int = Field(
+        default=500,
+        ge=1,
+        description='Per-tick budget (oldest-first). Saturation signalled by units_processed=cap.',
+    )
+    entity_lock_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=60.0,
+        description=(
+            'Per-entity advisory-lock timeout the consolidation tick uses when racing with '
+            'reconsolidate; entities whose lock cannot be acquired in this '
+            'window are deferred to the next tick.'
+        ),
+    )
+
+
+class ConsolidateRateLimitConfig(BaseModel):
+    """Rate-limit config for memex_memory_consolidate.
+
+    Per-vault token bucket (default 1 call per vault per hour). LLM-intensive
+    workload + mass-mutation guard — reuses the TokenBucketRateLimiter
+    primitive. In-process LRU; multi-worker leakage matches the documented
+    limitation (advisory, not security gate).
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='When False, consolidate_vault calls are never rate-limited (set False in tests).',
+    )
+    per_vault_per_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description='Window in seconds across which `burst` calls are allowed per vault (default 1h).',
+    )
+    burst: int = Field(
+        default=1,
+        gt=0,
+        description='Token-bucket capacity. Default 1 = no bursting (1 call per window).',
+    )
+    max_keys: int = Field(
+        default=10000,
+        gt=0,
+        description='LRU eviction cap on tracked vault_id keys.',
     )
 
 
@@ -1003,8 +1549,609 @@ class TracingConfig(BaseModel):
     )
 
 
+# Pin the cold-start variance ceiling once at module
+# scope so the Field default + ``le`` + ``is_active`` predicate all
+# reference the same float arithmetic instead of three independent
+# ``1.0 / 12.0`` evaluations. Mirrors
+# ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``; the cross-reference unit
+# test in ``test_confidence.py`` (TestDtoFormulaConsistency) pins
+# equivalence with the core constant.
+# Any edit here MUST be
+# mirrored in ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``.
+_MAX_VARIANCE: float = 1.0 / 12.0
+
+
+class LintConfidenceGate(BaseModel):
+    """Per-lint-type ``(confidence_min, variance_max)`` gate.
+
+    A finding is suppressed when ``confidence < confidence_min`` OR
+    ``variance > variance_max``. Cold-start units (no evidence) have
+    variance = 1/12 = MAX_VARIANCE so they fall above any non-trivial
+    ``variance_max`` ceiling and are skipped — preventing false-positive
+    "low confidence" findings on freshly extracted units.
+    """
+
+    confidence_min: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description='Minimum confidence (mean) for a finding to surface. '
+        'Default 0.0 = no floor (preserves prior behaviour).',
+    )
+    variance_max: float = Field(
+        default=_MAX_VARIANCE,
+        ge=0.0,
+        le=_MAX_VARIANCE,
+        description='Maximum variance for a finding to surface. Default = MAX_VARIANCE '
+        '(1/12) = no ceiling (preserves prior behaviour). Lowering this ceiling '
+        'suppresses findings on under-evidenced units. WARNING: '
+        '``variance_max = 0.0`` is a legal bound but acts as a near-total '
+        'suppression — the lint gate predicate is ``variance > variance_max``, '
+        'so any unit with positive variance (essentially every unit, since '
+        'variance hits 0 only in the limit of infinite evidence) would be '
+        'blocked. Operators wanting tight gating should use a small positive '
+        'value (e.g. ``0.001``), not ``0.0``.',
+    )
+
+    def is_active(self) -> bool:
+        """Return True iff this gate would suppress at least one shape of finding.
+
+        Collapses the duplicated
+        ``confidence_min > 0.0 or variance_max < (1/12)`` predicate
+        previously inlined in both ``lint.py`` and ``lint_llm.py`` to a
+        single source of truth so a future tweak to gate-active semantics
+        cannot drift across the two services.
+        """
+        return self.confidence_min > 0.0 or self.variance_max < _MAX_VARIANCE
+
+
+class ExternalLintProposalsConfig(BaseModel):
+    """Configuration for externally-submitted lint proposals.
+
+    External tools (agent skills, routing agents) submit proposals through
+    the lint-proposals endpoint; these knobs bound how aggressively they can
+    write into the maintenance ledger.
+    """
+
+    cooldown_days: int = Field(
+        default=30,
+        ge=0,
+        description=(
+            'Days after a resolution/dismissal during which an identical '
+            'external proposal (same rule/target/vault) is suppressed. '
+            '0 disables the cooldown.'
+        ),
+    )
+    max_batch: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description='Maximum proposals accepted in a single submission request.',
+    )
+    require_vault: bool = Field(
+        default=True,
+        description=(
+            'Reject external proposals without a vault — global (NULL-vault) '
+            'findings stay internal-only, and the pending-dedup index does '
+            'not deduplicate NULL vaults. NOTE: when disabled, the resulting '
+            'NULL-vault external findings resolve only via no_op/dismiss '
+            '(mutating actions need vaults_affected evidence, which is a '
+            'server-owned key external submitters cannot set).'
+        ),
+    )
+
+
+class LintConfig(BaseModel):
+    """Configuration for the maintenance ledger / rule-based linter."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic lint runs via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between lint runs. Default: 6 hours.',
+    )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='confidence/variance gate for rule-based lint findings.',
+    )
+    external_proposals: ExternalLintProposalsConfig = Field(
+        default_factory=ExternalLintProposalsConfig,
+        description='Bounds for externally-submitted lint proposals.',
+    )
+
+
+class EntityMaintenanceConfig(BaseModel):
+    """Configuration for the cross-batch entity-cluster collapse loop.
+
+    Detects highly-similar entity rows that escaped the intra-batch
+    resolver (e.g. "ACME Corp" / "acme corp" / "Acme Corp") and emits a
+    cluster-aware MaintenanceProposal that a human can approve to merge
+    them into one canonical entity. Off by default — operators opt in.
+    """
+
+    scan_enabled: bool = Field(
+        default=False,
+        description=(
+            'Master switch for the periodic entity-cluster collapse scan. '
+            'Off by default — operators opt in once thresholds are tuned.'
+        ),
+    )
+    top_n: int = Field(
+        default=100,
+        ge=2,
+        description=(
+            'Maximum entities considered per scan, selected by activity '
+            '(mention_count). Clusters require at least two members, so '
+            'top_n must be >= 2. Empirically covers >95% of '
+            'cooccurrence-weighted activity in typical vaults.'
+        ),
+    )
+    scan_cooldown_days: int = Field(
+        default=7,
+        ge=0,
+        description=(
+            'Per-entity cooldown in days. An entity already scanned within '
+            'this window is skipped on subsequent scans.'
+        ),
+    )
+    pair_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum pairwise similarity to connect two entities in the '
+            'candidate-cluster graph. Names that are identical after '
+            'case-folding + whitespace-stripping always cluster via an exact-name '
+            'fast path (score 1.0), regardless of this threshold. The threshold '
+            'governs only NON-identical near-duplicates; kept high (0.85) because '
+            'at the name-similarity weights a token-insertion variant such as '
+            '"Marc Haas" / "Marc de Haas" only scores ~0.39 while distinct names '
+            'that share a phonetic code ("Robert"/"Roberta") reach ~0.60 — so a '
+            'lower threshold floods proposals with false positives without '
+            'catching the token-insertion case (which needs cooccurrence signal '
+            'or human review instead).'
+        ),
+    )
+    cluster_min_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Cohesion guard: minimum pairwise similarity across every pair '
+            'in a candidate cluster. Clusters whose min-pair falls below this '
+            'are rejected (rope-drift protection). Must be <= pair_threshold.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def _validate_thresholds(self) -> 'EntityMaintenanceConfig':
+        if self.cluster_min_threshold > self.pair_threshold:
+            raise ValueError(
+                'cluster_min_threshold must be <= pair_threshold '
+                f'(got cluster_min_threshold={self.cluster_min_threshold}, '
+                f'pair_threshold={self.pair_threshold})'
+            )
+        return self
+
+
+class LintLLMCheckConfig(BaseModel):
+    """Per-check feature flag for a DSPy lint signature."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Whether this LLM check is invoked when the surprise gate fires.',
+    )
+
+
+class LintLLMChecksConfig(BaseModel):
+    """Feature flags for the individual DSPy lint signatures.
+
+    Default-on; ops can disable a check (e.g. ``semantic_contradiction``) if
+    false-positives manifest in production. Tier B follow-up will revisit
+    polarity discrimination via NLI without touching this surface.
+    """
+
+    semantic_contradiction: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description='CheckSemanticContradiction signature (sentence-level).',
+    )
+    schema_drift: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description='CheckSchemaDrift signature (date format / id style / structure).',
+    )
+    propose_contradiction_winner: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description=(
+            'ProposeContradictionWinner signature — fires on FSFM contradiction-pressure '
+            'findings (flag_reason ∈ low_credibility_contradiction_only | components_disagree) '
+            'and emits a reversible winner proposal.'
+        ),
+    )
+
+
+class LintLLMConfig(BaseModel):
+    """Configuration for surprise-gated LLM-assisted lint.
+
+    Default-on at the cap-zero gate: if ``cost_cap_per_24h`` is 0 the tick
+    short-circuits before any work, including the surprise computation.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='Master switch; if False, the tick is a no-op.',
+    )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between lint ticks. Default: 6 hours.',
+    )
+    units_per_tick: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            'Maximum candidate units evaluated per tick per vault. The '
+            'cost cap will short-circuit further work once exhausted.'
+        ),
+    )
+    surprise_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum surprise score for a unit to be eligible for LLM lint. '
+            'Validated by POC against synthetic topical-anomaly data.'
+        ),
+    )
+    cost_cap_per_24h: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            'Maximum LLM lint calls per vault per rolling 24h window. '
+            'Setting this to 0 disables the tick entirely.'
+        ),
+    )
+    deferred_queue_cap: int = Field(
+        default=100,
+        ge=0,
+        description=(
+            'Maximum llm_deferred MaintenanceProposal rows kept per vault. '
+            'Excess entries evicted oldest-first with a warning span.'
+        ),
+    )
+    surprise_k: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            'Top-k peer-similarity count used to derive the surprise score '
+            'for a unit. Matches the POC-validated default.'
+        ),
+    )
+    checks: LintLLMChecksConfig = Field(
+        default_factory=LintLLMChecksConfig,
+        description='Per-check feature flags for the DSPy lint signatures.',
+    )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='confidence/variance gate applied to candidate units before '
+        'the LLM check runs. Skips cold-start (variance = MAX_VARIANCE) and '
+        'low-confidence units when the gate is configured.',
+    )
+    polarity: NLIPolarityConfig = Field(
+        default_factory=NLIPolarityConfig,
+        description='NLI polarity classifier configuration (entailment / neutral / '
+        'contradiction). The NLI branch only fires when cosine surprise is below '
+        'surprise_threshold, so this is a fallback signal — never a primary gate.',
+    )
+    propose_winner_min_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum confidence for a definitive winner proposal. Below this '
+            'threshold, definitive verdicts are downgraded to `inconclusive` — '
+            'the proposal lands in the lint ledger for audit but the apply '
+            'path is blocked. '
+            'Env: MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE.'
+        ),
+    )
+
+
+class DeprioritizeScoreWeights(BaseModel):
+    """Per-component weights for the FSFM-inspired composite score."""
+
+    graph: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description='Weight on the graph-pressure component (inbound MemoryLink aggregate).',
+    )
+    mw: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description='Weight on (1 - Memory Worth posterior).',
+    )
+    temporal: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description='Weight on temporal staleness (1 - exp(-age / stability)).',
+    )
+    entity: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description='Weight on entity-dormancy via the freshest linked entity.last_seen.',
+    )
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            'graph': self.graph,
+            'mw': self.mw,
+            'temporal': self.temporal,
+            'entity': self.entity,
+        }
+
+
+class DeprioritizeScoreThresholds(BaseModel):
+    """Threshold band for the FSFM scorer's downstream actions."""
+
+    propose: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Score above which a MaintenanceProposal is emitted (lint rule predicate). '
+            'Calibrated against the ephemeral-max ceiling: with ``importance=0.3`` the '
+            'composite caps at ~0.63 so anything above 0.30 reflects meaningful negative '
+            'signal accumulation. Durable items (importance=0.7, max ~0.27) effectively '
+            'never trip this — by design.'
+        ),
+    )
+    auto_deprioritize: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Score above which the auto-band flips is_deprioritized to true. '
+            'Skipped if the proposal carries an escalation flag_reason or any '
+            'hard-override class is set. Below the ephemeral-max ceiling so '
+            'units actually reach this band; durable units never do — that is the '
+            'protective intent of the importance multiplier.'
+        ),
+    )
+    disagreement_range: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Range (max − min) across the four normalized components above which the '
+            'rule emits the ``components_disagree`` flag_reason. Range is a cheap '
+            'in-SQL proxy for variance; range > 0.45 corresponds (loosely) to '
+            'population variance > 0.05.'
+        ),
+    )
+    contradicted_low_credibility_max: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Σ source-credibility threshold below which a unit contradicted only '
+            'by low-credibility sources escalates for human review.'
+        ),
+    )
+    high_mw_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'MW posterior above which a unit is considered "previously high MW". '
+            'Combined with ``high_mw_min_outcomes`` to detect the high-MW-yet-flagged '
+            'pattern that signals a likely false positive.'
+        ),
+    )
+    high_mw_min_outcomes: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Minimum (success_co_count + failure_co_count) for the high-MW '
+            'escalation pattern. Prevents flagging units whose MW is "high" only '
+            'because the Beta prior dominates a tiny outcome count.'
+        ),
+    )
+
+
+class DeprioritizeScoreConfig(BaseModel):
+    """Configuration for the FSFM-inspired graph-aware deprioritization scorer."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable the deprioritize-score lint rules + auto-band step.',
+    )
+    interval_seconds: int = Field(
+        default=24 * 3600,
+        ge=60,
+        description='Interval between scorer runs when invoked from the periodic lint task.',
+    )
+    weights: DeprioritizeScoreWeights = Field(
+        default_factory=DeprioritizeScoreWeights,
+        description='Per-component weights for the composite.',
+    )
+    lambda_link: float = Field(
+        default=0.01,
+        ge=0.0,
+        description='Per-link recency decay rate (per day) — older links weigh less.',
+    )
+    mu_entity: float = Field(
+        default=0.005,
+        ge=0.0,
+        description='Entity-dormancy decay rate (per day) over the freshest entity.last_seen.',
+    )
+    thresholds: DeprioritizeScoreThresholds = Field(
+        default_factory=DeprioritizeScoreThresholds,
+        description='Threshold band for proposal emission, auto-deprioritization, and escalation.',
+    )
+    cooldown_days: int = Field(
+        default=14,
+        ge=0,
+        description=(
+            'Days after a memory_restore audit during which the auto-band MUST NOT '
+            're-deprioritize the unit (prevents user-restore <-> auto-band loops).'
+        ),
+    )
+
+
+class ProceduralConfig(BaseModel):
+    """Configuration for the procedural (procedure / strategy) plane.
+
+    These knobs are operator-level defaults; per-request overrides on
+    ``ProceduralSearchRequest`` and ``procedural_briefing_cards`` still
+    win. Keep the surface narrow — every entry here is a real toggle the
+    brief described, not a speculation. The 8 fields below correspond to
+    the 8 tunables pinned by the design review.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            'Kill switch for the procedural plane. When False, the HTTP router, '
+            'MCP tools, and CLI group are still mounted (so `/procedural` is '
+            'discoverable) but every entrypoint returns 503 / a typed error. '
+            'Useful for staged rollouts and incident rollback.'
+        ),
+    )
+
+    # Hybrid search defaults — overridden per-request by `bm25_weight` /
+    # `vector_weight` on `ProceduralSearchRequest`. Operators tune the
+    # baseline; the agent can dial it up/down for the immediate query.
+    search_default_bm25_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Default RRF weight for the BM25 stream on a procedural-plane search. '
+            'Per-request `bm25_weight` overrides this.'
+        ),
+    )
+    search_default_vector_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Default RRF weight for the vector stream on a procedural-plane search. '
+            'Per-request `vector_weight` overrides this.'
+        ),
+    )
+
+    # Briefing cards — the per-context cap. The route clamps to this
+    # upper bound even if a caller requests more, so a runaway agent
+    # cannot pull a thousand cards into a briefing slot.
+    briefing_default_limit_per_context: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description=(
+            'Default per-context cap on `procedural_briefing_cards` results. '
+            'The route clamps any caller-supplied `limit_per_context` to this '
+            'value (the agent cannot exceed it).'
+        ),
+    )
+
+    # Status default — what new entries are created as if the caller did
+    # not pick. Matches the briefing's "only published" filter so a
+    # forgetful caller doesn't end up with a graveyard of drafts.
+    default_status: Literal['draft', 'published'] = Field(
+        default='published',
+        description=(
+            'Default status for entries created via `procedural create` and '
+            '`procedural upsert` when the caller did not specify one. '
+            '`published` makes the entry visible to search + briefing; '
+            '`draft` keeps it private until the caller explicitly promotes.'
+        ),
+    )
+
+    # Identity conflict — the operator's choice between two failure
+    # modes when `(kind, scope, verb, context)` already exists:
+    #   * `reject`  — return 409 (default; matches HTTP semantics; agent
+    #                 is forced to acknowledge the collision).
+    #   * `upsert`  — silently update the existing row (matches the
+    #                 upsert surface; saves a round-trip but hides the
+    #                 collision from the caller).
+    identity_conflict_mode: Literal['reject', 'upsert'] = Field(
+        default='reject',
+        description=(
+            'How the procedural plane handles identity-anchor collisions '
+            'on `procedural create`. `reject` returns 409 (caller decides '
+            'whether to retry as `procedural upsert`); `upsert` transparently '
+            'overwrites the existing row. `procedural upsert` is unaffected.'
+        ),
+    )
+
+    # Derivation worker — the background loop that materialises derived
+    # rows (e.g. tag normalisation, vector re-embed after model swap).
+    # Off by default: the synchronous write path already runs derivation
+    # eagerly; the worker is only needed for batch catch-up.
+    derivation_worker_enabled: bool = Field(
+        default=False,
+        description=(
+            'Enable the background derivation worker. When False, derivation '
+            'runs synchronously inside the create/update/upsert path. When '
+            'True, a Postgres-advisory-lock-leader-electing worker polls the '
+            'queue. Operators opt in only for high-volume installations.'
+        ),
+    )
+    derivation_worker_batch_size: int = Field(
+        default=16,
+        ge=1,
+        le=256,
+        description=(
+            'How many pending derivation rows the worker claims per poll '
+            '(`SELECT ... FOR UPDATE SKIP LOCKED`). Larger batches trade '
+            'latency-per-row for fewer transactions.'
+        ),
+    )
+    derivation_worker_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=3600.0,
+        description=(
+            'Idle sleep between worker polls when the queue is empty. '
+            'When the queue has work, the worker drains without sleeping.'
+        ),
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def _warn_legacy_inbox_router(cls, data: Any) -> Any:
+        """Ignore a stray ``inbox_router`` section, warning that it is gone.
+
+        The in-core inbox router was removed in V6 (routing moved to the
+        external triage-inbox skill). MemoryConfig ignores unknown keys by
+        default, so a legacy ``server.memory.inbox_router`` block already parses
+        without error — this validator exists only to tell operators to delete
+        it, and to drop the key so it never lingers in ``model_extra``. Remove
+        this shim a release after V6 ships.
+        """
+        if isinstance(data, dict) and 'inbox_router' in data:
+            data = dict(data)
+            data.pop('inbox_router', None)
+            warnings.warn(
+                'server.memory.inbox_router is deprecated and ignored; inbox '
+                'routing moved to the triage-inbox skill. Remove this section '
+                'from your config.',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return data
 
     extraction: ExtractionConfig = Field(
         default_factory=ExtractionConfig,
@@ -1025,9 +2172,59 @@ class MemoryConfig(BaseModel):
         description='Configuration for contradiction detection.',
     )
 
+    outcomes: OutcomesConfig = Field(
+        default_factory=OutcomesConfig,
+        description='Configuration for outcome-attribution signal quality.',
+    )
+
+    consolidation: ConsolidationConfig = Field(
+        default_factory=ConsolidationConfig,
+        description='Consolidation orchestrator configuration.',
+    )
+
+    consolidate_rate_limit: ConsolidateRateLimitConfig = Field(
+        default_factory=ConsolidateRateLimitConfig,
+        description='per-vault rate limit for memex_memory_consolidate.',
+    )
+
     circuit_breaker: CircuitBreakerConfig = Field(
         default_factory=CircuitBreakerConfig,
         description='Configuration for the LLM call circuit breaker.',
+    )
+
+    lint: LintConfig = Field(
+        default_factory=LintConfig,
+        description='Configuration for the maintenance ledger / rule-based linter.',
+    )
+
+    lint_llm: LintLLMConfig = Field(
+        default_factory=LintLLMConfig,
+        description='Configuration for surprise-gated LLM-assisted lint.',
+    )
+
+    entity_maintenance: EntityMaintenanceConfig = Field(
+        default_factory=EntityMaintenanceConfig,
+        description=(
+            'Configuration for the cross-batch entity-cluster collapse loop. '
+            'Off by default; operators opt in via scan_enabled.'
+        ),
+    )
+
+    deprioritize_score: DeprioritizeScoreConfig = Field(
+        default_factory=DeprioritizeScoreConfig,
+        description=(
+            'FSFM-inspired graph-aware deprioritization scorer configuration '
+            '(composite score driving lint proposals and auto-deprioritization).'
+        ),
+    )
+
+    procedural: ProceduralConfig = Field(
+        default_factory=ProceduralConfig,
+        description=(
+            'Configuration for the procedural (procedure / strategy) '
+            'plane — search weight defaults, briefing caps, identity-collision '
+            'mode, and the optional background derivation worker.'
+        ),
     )
 
 
@@ -1189,6 +2386,17 @@ class ServerConfig(BaseModel):
             'Default tuned for capable hosts. Reduce on memory-constrained '
             'hosts (e.g. set to 2 on a Jetson Orin Nano 8 GiB); see '
             'docs/how-to/memory-budget.md.'
+        ),
+    )
+    nli_max_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            'Max concurrent NLI classify() calls. Used by the lint_llm '
+            'polarity gate (scheduler tick) and the on-demand '
+            '/api/v1/lint/llm/run/{vault_id} endpoint. Default tuned for '
+            'capable hosts. Reduce on memory-constrained hosts (sister to '
+            'reranker_max_concurrency — same compute path).'
         ),
     )
     reranker_call_timeout: int = Field(
@@ -1380,6 +2588,34 @@ class ServerConfig(BaseModel):
         return self
 
 
+class _BareVaultEnvSettingsSource(EnvSettingsSource):
+    """EnvSettingsSource that accepts bare-string env values for the
+    `vault` field of `MemexConfig`.
+
+    The hermes plugin's `HermesMemexConfig` reads `MEMEX_VAULT` from
+    `os.environ` as a flat string into `vault_id`, and the plugin's
+    README documents `MEMEX_VAULT` as alias for that flat field. The
+    same env var, fed to `MemexConfig`'s pydantic-settings chain, is
+    treated as the JSON encoding of a `VaultConfig` dict — bare strings
+    fail JSON parsing and raise `SettingsError: error parsing value for
+    field "vault"` before any `mode='before'` field validator can
+    intercept (see `pydantic_settings.sources.base.SettingsSourceBase
+    .prepare_field_value`).
+
+    This subclass overrides the complex-value decode step so a bare
+    string for the `vault` field is treated as the shorthand
+    `{'active': value}`, falling back to the default JSON decode for any
+    other shape.
+    """
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if field_name == 'vault' and isinstance(value, str):
+            # `MEMEX_VAULT=hermes` → `{'active': 'hermes'}`. Empty strings
+            # are treated as unset so tests can blank out the env var.
+            return {'active': value} if value else None
+        return super().decode_complex_value(field_name, field, value)
+
+
 class VaultConfig(BaseModel):
     """Client-side vault preferences.
 
@@ -1395,6 +2631,31 @@ class VaultConfig(BaseModel):
         default=None,
         description='Vaults to search/read. Falls back to [active] or server default if None.',
     )
+
+    @field_validator('search', mode='before')
+    @classmethod
+    def _coerce_csv_search(cls, v: Any) -> Any:
+        """Accept `MEMEX_VAULT__SEARCH=a,b,c` as shorthand for `[a, b, c]`.
+
+        Try JSON first so a kwarg / YAML value like `'["a","b"]'`
+        survives unchanged — the CSV fallback would otherwise mangle a
+        JSON-list string to `['["a"', '"b"]']`. Empty CSV entries are
+        dropped so trailing commas and whitespace don't leak in.
+
+        Env values may also arrive here as already-parsed lists from
+        pydantic-settings (which JSON-decodes complex types upstream);
+        the bare ``isinstance(v, str)`` guard punts those to the default
+        path.
+        """
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            return [s.strip() for s in v.split(',') if s.strip()]
+        return v
 
 
 class MemexConfig(BaseSettings):
@@ -1422,6 +2683,28 @@ class MemexConfig(BaseSettings):
         default_factory=ServerConfig,
         description='Configuration for the API server.',
     )
+
+    @field_validator('vault', mode='before')
+    @classmethod
+    def _coerce_bare_vault_string(cls, v: Any) -> Any:
+        """Accept `MEMEX_VAULT=foo` as shorthand for `MEMEX_VAULT__ACTIVE=foo`.
+
+        C.1: the hermes-plugin's `HermesMemexConfig` reads `MEMEX_VAULT`
+        manually as a flat string into its `vault_id` field, and the
+        deployment side (hermes.hcl) sets `MEMEX_VAULT=<name>` per the
+        plugin README. But `MemexConfig.vault` is the nested `VaultConfig`,
+        so pydantic-settings tries to JSON-parse the bare string as a
+        VaultConfig dict and raises
+        `ValidationError: error parsing value for field "vault"` —
+        the exact text seen in the 2026-05-29 watcher post-mortems.
+
+        Coercing here closes the deployment env-var footgun: bare-string
+        env / YAML values become `{'active': v}`; dict inputs (existing
+        nested env / YAML / direct kwargs) pass through unchanged.
+        """
+        if isinstance(v, str):
+            return {'active': v}
+        return v
 
     @property
     def write_vault(self) -> str:
@@ -1453,6 +2736,13 @@ class MemexConfig(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # C.1: replace the default EnvSettingsSource with one that accepts
+        # a bare-string `MEMEX_VAULT=foo` as shorthand for the nested
+        # `MEMEX_VAULT__ACTIVE=foo`. The default source tries to
+        # JSON-parse complex-type env values BEFORE `mode='before'`
+        # field validators run, so the field validator alone can't fix
+        # this — see `_BareVaultEnvSettingsSource` for details.
+        env_settings = _BareVaultEnvSettingsSource(settings_cls)
         return (
             init_settings,
             env_settings,
@@ -1498,6 +2788,7 @@ __all__ = [
     'ExtractionConfig',
     'RetrievalConfig',
     'ContradictionConfig',
+    'OutcomesConfig',
     'MemoryConfig',
     'TracingConfig',
     'ServerConfig',

@@ -2,15 +2,24 @@
 Vault Management Commands.
 """
 
-import json
+from pathlib import Path
 from typing import Annotated
+from uuid import UUID
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_common.schemas import CreateVaultRequest
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+    resolve_list_format,
+)
 
 console = Console()
 
@@ -20,42 +29,51 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+snapshot_app = typer.Typer(
+    name='snapshot',
+    help='Vault snapshot export (one-way; downstream consumers).',
+    no_args_is_help=True,
+)
+app.add_typer(snapshot_app, name='snapshot')
+
 
 @app.command('list')
 @async_command
 async def list_vaults(
     ctx: typer.Context,
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one vault name per line.')
-    ] = False,
-    compact: Annotated[
+    include_system: Annotated[
         bool,
-        typer.Option('--compact', help='Output as a plain markdown table with note counts.'),
+        typer.Option('--include-system', help='Also list system vaults (inbox, etc.).'),
     ] = False,
 ):
     """
-    List all available vaults.
+    List available vaults (content vaults by default; --include-system for all).
+
+    For vaults, --format ids prints one vault name per line and --format line
+    prints a plain markdown table with note counts.
     """
     config: MemexConfig = ctx.obj
+    fmt = resolve_list_format(output_format, json_output)
 
     async with get_api_context(config) as api:
-        if compact:
+        if fmt == ListFormat.line:
             try:
-                rows = await api.list_vaults_with_counts()
+                rows = await api.list_vaults_with_counts(include_system=include_system)
             except Exception as e:
                 handle_api_error(e)
 
             has_access = any(row['vault'].access is not None for row in rows)
             if has_access:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | Access | Description |',
-                    '|------|-------|---------------|--------|--------|-------------|',
+                    '| Name | Notes | Last Modified | Active | Memory Worth | Access | Description |',
+                    '|------|-------|---------------|--------|---------|--------|-------------|',
                 ]
             else:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | Description |',
-                    '|------|-------|---------------|--------|-------------|',
+                    '| Name | Notes | Last Modified | Active | Memory Worth | Description |',
+                    '|------|-------|---------------|--------|---------|-------------|',
                 ]
             for row in rows:
                 v = row['vault']
@@ -63,29 +81,32 @@ async def list_vaults(
                 last_mod_dt = row.get('last_note_added_at')
                 last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
+                mw_mode = v.mw_mode.replace('_', ' ') if v.mw_mode else '—'
                 desc = v.description or ''
                 if has_access:
                     access = ', '.join(v.access) if v.access else '\u2014'
                     lines.append(
-                        f'| {v.name} | {count} | {last_mod} | {active} | {access} | {desc} |'
+                        f'| {v.name} | {count} | {last_mod} | {active} | {mw_mode} | {access} | {desc} |'
                     )
                 else:
-                    lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
+                    lines.append(
+                        f'| {v.name} | {count} | {last_mod} | {active} | {mw_mode} | {desc} |'
+                    )
             print('\n'.join(lines))
             return
 
         try:
-            vaults = await api.list_vaults()
+            vaults = await api.list_vaults(include_system=include_system)
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for v in vaults:
             console.print(v.name)
         return
 
-    if json_output:
-        console.print_json(json.dumps([v.model_dump() for v in vaults], default=str))
+    if fmt == ListFormat.json:
+        emit_json([v.model_dump() for v in vaults])
         return
 
     has_access = any(v.access is not None for v in vaults)
@@ -93,6 +114,8 @@ async def list_vaults(
     table = Table(title='Available Vaults')
     table.add_column('ID', style='dim')
     table.add_column('Name', style='cyan')
+    table.add_column('Kind', style='magenta')
+    table.add_column('Memory Worth', style='yellow')
     table.add_column('Description', style='white')
     if has_access:
         table.add_column('Access', style='green')
@@ -101,7 +124,8 @@ async def list_vaults(
         console.print('[yellow]No vaults found.[/yellow]')
     else:
         for v in vaults:
-            row = [str(v.id), v.name, v.description or '']
+            kind = getattr(v, 'kind', 'content')
+            row = [str(v.id), v.name, kind, v.mw_mode, v.description or '']
             if has_access:
                 row.append(', '.join(v.access) if v.access else '\u2014')
             table.add_row(*row)
@@ -120,29 +144,91 @@ async def create_vault(
     description: Annotated[
         str | None, typer.Option('--description', '-d', help='Optional description.')
     ] = None,
+    kind: Annotated[
+        str,
+        typer.Option('--kind', help='Vault kind: "content" (corpus) or "system" (infrastructure).'),
+    ] = 'content',
+    reflect: Annotated[
+        bool,
+        typer.Option(
+            '--reflect',
+            help='Enable per-entity reflection for this vault. Default: enabled for content, disabled for system.',
+        ),
+    ] = False,
+    no_reflect: Annotated[
+        bool, typer.Option('--no-reflect', help='Disable per-entity reflection for this vault.')
+    ] = False,
+    summarize: Annotated[
+        bool,
+        typer.Option(
+            '--summarize',
+            help='Enable vault-summary generation for this vault. Default: enabled for content, disabled for system.',
+        ),
+    ] = False,
+    no_summarize: Annotated[
+        bool,
+        typer.Option('--no-summarize', help='Disable vault-summary generation for this vault.'),
+    ] = False,
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
-    Create a new vault.
+    Create a new vault. The kind is permanent and cannot be changed later.
     """
     config: MemexConfig = ctx.obj
 
+    if kind not in ('content', 'system'):
+        console.print("[red]--kind must be 'content' or 'system'.[/red]")
+        raise typer.Exit(code=1)
+
+    # Mutual exclusion: a user passing both --reflect and --no-reflect is
+    # ambiguous; refuse the call rather than silently picking one. Same for
+    # summarize. (Typer gives us no built-in "exactly one" support for
+    # pairs of bool flags, so the check is manual.) Run BEFORE the
+    # confirmation prompt so a conflicting invocation never gets a "y/N"
+    # response that's immediately discarded.
+    if reflect and no_reflect:
+        console.print('[red]--reflect and --no-reflect are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
+    if summarize and no_summarize:
+        console.print('[red]--summarize and --no-summarize are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
+
+    # The kind is permanent; only the deliberate (non-default) system choice prompts.
+    if (
+        kind == 'system'
+        and not force
+        and not typer.confirm(
+            "Vault kind 'system' is permanent and cannot be changed later. Continue?"
+        )
+    ):
+        raise typer.Exit(code=1)
+
+    policy: dict[str, bool | None] = {}
+    if reflect:
+        policy['reflect'] = True
+    if no_reflect:
+        policy['reflect'] = False
+    if summarize:
+        policy['summarize'] = True
+    if no_summarize:
+        policy['summarize'] = False
+
     console.print(f'[green]Creating vault:[/green] {name}')
 
-    req = CreateVaultRequest(name=name, description=description)
     async with get_api_context(config) as api:
         try:
-            vault = await api.create_vault(req)
+            vault = await api.create_vault(name, description, kind=kind, policy=policy or None)
         except Exception as e:
             handle_api_error(e)
 
     console.print(f'[bold green]Vault created successfully![/bold green] ID: {vault.id}')
 
 
-@app.command('truncate')
+@app.command('clear')
 @async_command
-async def truncate_vault(
+async def clear_vault(
     ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to truncate.')],
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to clear.')],
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
@@ -187,13 +273,13 @@ async def truncate_vault(
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
-        console.print(f'[red]Truncating vault:[/red] {identifier}...')
+        console.print(f'[red]Clearing vault:[/red] {identifier}...')
         try:
             counts = await api.truncate_vault(vault_uuid)
         except Exception as e:
             handle_api_error(e)
 
-    console.print('[bold green]Vault truncated.[/bold green]')
+    console.print('[bold green]Vault cleared.[/bold green]')
     for label, count in counts.items():
         if count > 0:
             console.print(f'  {label}: [dim]{count} removed[/dim]')
@@ -281,7 +367,7 @@ async def vault_summary(
             return
 
     if json_output:
-        console.print_json(json.dumps(summary.model_dump(), default=str))
+        emit_json(summary.model_dump(exclude={'embedding'}))
         return
 
     if compact:
@@ -357,3 +443,120 @@ async def vault_summary(
                 ent.get('name', ''), ent.get('type', ''), str(ent.get('mention_count', 0))
             )
         console.print(ent_table)
+
+
+@snapshot_app.command('export')
+@async_command
+async def snapshot_export(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Argument(help='Vault name or UUID to export.'),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option('--output', '-o', help='Directory to write the snapshot into.'),
+    ],
+) -> None:
+    """Export a vault snapshot to a local directory.
+
+    Produces a self-describing snapshot (manifest.json + per-table JSONL +
+    note bodies + assets) ready for downstream consumption (analytics,
+    eval suites, ML pipelines). The output directory is created if it
+    doesn't exist; existing files inside it may be overwritten.
+
+    Refuses the global vault and any vault named 'global' / 'default'.
+    """
+    config: MemexConfig = ctx.obj
+
+    try:
+        import memex_core  # noqa: F401
+    except ImportError:
+        console.print(
+            "[bold red]Error:[/bold red] Snapshot export requires the 'memex-cli[server]' extra "
+            '(needs memex-core).'
+        )
+        raise typer.Exit(1)
+
+    from memex_common.config import LitellmEmbeddingBackend, OnnxBackend
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+    from memex_core.services.snapshot import SnapshotExporter
+    from memex_core.services.snapshot.exporter import SnapshotExportError
+    from memex_core.services.snapshot.manifest import EmbeddingModelIdentity
+    from memex_core.storage.filestore import get_filestore
+    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
+
+    # Resolve the vault selector (UUID or name) — accept either form.
+    selector: str | UUID
+    try:
+        selector = UUID(vault)
+    except ValueError:
+        selector = vault
+
+    # Path safety: refuse symlinks and verify the resolved path lies
+    # outside privileged system directories. The CLI runs with the user's
+    # privileges (no service-side trust), but a malicious or careless
+    # --output ../../../etc would still corrupt user-writable system
+    # files.
+    output_path = output.expanduser().resolve()
+    if output.is_symlink():
+        console.print(f'[bold red]Refusing to export into a symlinked path:[/bold red] {output}')
+        raise typer.Exit(1)
+    for forbidden in ('/etc', '/usr', '/bin', '/sbin', '/proc', '/sys', '/dev', '/boot'):
+        try:
+            if output_path.is_relative_to(Path(forbidden)):
+                console.print(
+                    f'[bold red]Refusing to export into a system directory:[/bold red] {output_path}'
+                )
+                raise typer.Exit(1)
+        except ValueError:
+            continue
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Build the embedding-model identity from the live server config so the
+    # manifest reflects what was actually used to extract embeddings in the
+    # source DB — not the registry default. V12 import refuses on mismatch.
+    embedding_cfg = config.server.embedding_model
+    if isinstance(embedding_cfg, OnnxBackend) or embedding_cfg is None:
+        from memex_core.memory.models.base import MODEL_REGISTRY
+
+        spec = MODEL_REGISTRY['embedding']
+        embedding_identity = EmbeddingModelIdentity(
+            name=str(spec.repo_id), dim=EMBEDDING_DIMENSION, hash=str(spec.revision)
+        )
+    elif isinstance(embedding_cfg, LitellmEmbeddingBackend):
+        # The dim is unknown for LiteLLM backends ahead of a probe call;
+        # record what we know and let V12 decide whether to refuse.
+        embedding_identity = EmbeddingModelIdentity(
+            name=f'litellm/{embedding_cfg.model}', dim=EMBEDDING_DIMENSION, hash=''
+        )
+    else:
+        console.print(f'[bold red]Unknown embedding backend type:[/bold red] {type(embedding_cfg)}')
+        raise typer.Exit(1)
+
+    engine = AsyncPostgresMetaStoreEngine(config=config.server.meta_store)
+    await engine.connect(create_schema=False)
+    try:
+        filestore = get_filestore(config.server.file_store)
+        async with engine.session() as session:
+            exporter = SnapshotExporter(
+                session=session,
+                filestore=filestore,
+                vault_id_or_name=selector,
+                output_dir=output_path,
+                embedding_model=embedding_identity,
+            )
+            try:
+                manifest = await exporter.export()
+            except SnapshotExportError as e:
+                console.print(f'[bold red]Snapshot export failed:[/bold red] {e}')
+                raise typer.Exit(1) from e
+        console.print(
+            f'[green]Wrote snapshot[/green] (version {manifest.snapshot_version}) '
+            f'for vault [bold]{manifest.source_vault_name}[/bold] '
+            f'to [cyan]{output_path}[/cyan]'
+        )
+        for table, count in sorted(manifest.table_counts.items()):
+            console.print(f'  {table}: {count}')
+    finally:
+        await engine.close()

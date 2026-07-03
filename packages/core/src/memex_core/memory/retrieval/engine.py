@@ -1,7 +1,9 @@
 import hashlib
 import logging
+import random
 import time
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from uuid import UUID, uuid5
 import asyncio
@@ -12,8 +14,10 @@ import math
 import numpy as np
 import tiktoken
 from cachetools import TTLCache
-from sqlalchemy import func, literal, union_all
+from sqlalchemy import func, literal, text, union_all
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import defer, selectinload
+from sqlalchemy.sql.elements import TextClause
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -40,25 +44,310 @@ from memex_core.memory.retrieval._offload import (
     get_reranker_call_timeout,
     get_reranker_semaphore,
 )
+from memex_core.memory.retrieval.rerank_cache import CrossEncoderScoreCache, hash_query
 from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
 from memex_core.memory.retrieval.temporal_concretizer import (
     TemporalConcretizer,
     has_ambiguous_temporal_expression,
 )
-from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
+from memex_core.memory.sql_models import (
+    MemoryUnit,
+    MentalModel,
+    UnitEntity,
+    ContentStatus,
+    Vault,
+    MWMode,
+)
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
+from memex_core.memory.confidence import (
+    HasConfidence,
+    certainty_from_variance,
+    extract_confidence_and_count,
+    mean_and_variance,
+)
 from memex_core.memory.formatting import format_for_reranking
+from memex_core.metrics import (
+    COMPOSITE_BOOST_CLIPPED,
+    COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED,
+    CONFIDENCE_BOOST_OBSERVED,
+    CONFIDENCE_SCORE_DISTRIBUTION,
+    CONFIDENCE_VARIANCE_OBSERVED,
+    CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
+    DECAY_BOOST_OBSERVED,
+    MW_BOOST_OBSERVED,
+)
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
+
+
+def _is_statement_timeout(exc: DBAPIError) -> bool:
+    """True if the DBAPIError is a Postgres statement_timeout.
+
+    The asyncpg dialect wraps the QueryCanceledError in a generic adapter ``Error``
+    whose type name is NOT 'QueryCanceledError', so match on SQLSTATE 57014
+    (query_canceled). (Same helper as document_search; kept local to avoid a
+    cross-engine import.)
+    """
+    orig = getattr(exc, 'orig', None)
+    return getattr(orig, 'sqlstate', None) == '57014'
+
+
+# Request-scoped accumulator for strategies the memory-search fallback dropped
+# (statement_timeout degradation). The server endpoint sets a fresh set() before
+# calling api.search and reads it after, so it can flag the returned units as
+# degraded. ContextVars are task-local — concurrent requests don't see each
+# other's value — and engine→endpoint runs in the SAME async task server-side,
+# so no signature threading through recall/search/api is needed. (Note-search
+# uses an explicit accumulator instead because its single search() method owns
+# the whole loop; memory's call chain is too deep for that to be clean.)
+_SEARCH_DEGRADED_DROPPED: ContextVar[set[str] | None] = ContextVar(
+    'memex_search_degraded_dropped', default=None
+)
+
+
+LOG_FLOOR_COMPOSITE_BOOST = 1e-9
+
+# ``mentioned_at`` is auto-filled to ~``created_at`` (ingest time) for undated
+# content, so a genuine authored date parked in ``mentioned_at`` differs from
+# ``created_at`` by far more than this tolerance. Used by ``_recency_anchor``
+# to separate an authored date in ``mentioned_at`` from the ingest-time default.
+_INGEST_DATE_TOLERANCE_S = 60.0
+
+
+def _mentioned_at_is_authored(unit: MemoryUnit) -> bool:
+    """True when ``unit.mentioned_at`` is a genuine authored date (a publish
+    date or an in-text date) rather than the ingest-time auto-fill.
+
+    For undated content the pipeline fills ``mentioned_at`` with ~the ingest
+    timestamp (``created_at``), so the two coincide to well within
+    ``_INGEST_DATE_TOLERANCE_S``; a real authored date sits days-to-years away.
+    """
+    if unit.mentioned_at is None:
+        return False
+    created = unit.created_at
+    return (
+        created is None
+        or abs((unit.mentioned_at - created).total_seconds()) > _INGEST_DATE_TOLERANCE_S
+    )
+
+
+def _recency_anchor(unit: MemoryUnit) -> datetime | None:
+    """The date a unit's recency is scored against: the LATEST authored date
+    it carries.
+
+    Combines ``occurred_start`` (a dated event) with an authored
+    ``mentioned_at`` (see ``_mentioned_at_is_authored`` — excludes the
+    ingest-time default). Taking the ``max`` keeps ongoing / current-state
+    facts recent — "head since 2024, published 2026" anchors on 2026, not its
+    old 2024 start. Returns ``None`` for a truly-undated unit, which the rerank
+    recency boost then treats as neutral (neither boosted nor penalised).
+    """
+    candidates: list[datetime] = []
+    if unit.occurred_start is not None:
+        candidates.append(unit.occurred_start)
+    if _mentioned_at_is_authored(unit):
+        candidates.append(unit.mentioned_at)
+    return max(candidates) if candidates else None
+
+
+def _compose_boosts_logspace(
+    ce_score: float,
+    *,
+    recency: float,
+    temporal: float,
+    mw: float,
+    confidence: float,
+    decay: float,
+    log_clip: float,
+) -> float:
+    """Compose five boost factors onto ce_score with log-space additive clip.
+
+    Returns ``ce_score * exp(clip(sum(log(b_i)), -log_clip, +log_clip))``.
+    Boost values at or below ``LOG_FLOOR_COMPOSITE_BOOST = 1e-9`` are floored
+    at the floor before taking the log, so zero or (theoretically) negative
+    inputs do not raise. At the ship default ``log_clip = math.inf`` the clip
+    is a no-op and the result equals the prior multiplicative product
+    (within float-precision rounding from the log/exp round-trip) for
+    strictly positive boost inputs; for an input that hits the floor (e.g. a
+    boost of exactly ``0.0``), the new form produces ``ce_score * ~1e-9`` for
+    a single zero factor (``ce_score * 1e-9^k`` if ``k`` factors hit the
+    floor; degenerate all-five case is ``ce_score * 1e-45``) rather than the
+    strict ``0.0`` the multiplicative product would return. Rank-equivalent
+    for retrieval scoring (both at the bottom), but no longer ties every
+    zero-boost unit at zero. Under ship-default alphas every boost evaluates
+    to ``1.0`` (or strictly positive), so the zero-input path is dormant.
+
+    Any non-finite input (``NaN`` or ``±inf``) on a boost or ``ce_score``,
+    a ``NaN`` ``log_clip``, or a negative ``log_clip`` short-circuits: the
+    function returns ``ce_score`` unmodified and emits a separate
+    ``COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED`` counter increment instead
+    of observing ``1.0`` to the regular histogram (which would be
+    indistinguishable from a genuine neutral multiplier). The negative-clip
+    rejection is defense-in-depth: ``RetrievalConfig`` already enforces
+    ``ge=0.0`` at construction time, but a direct caller could pass a
+    negative clip, where ``max(-log_clip, min(log_clip, log_boost))`` would
+    silently flip into a maximum-multiplier path. The guard ensures the
+    function is correct standalone, not just via its caller chain.
+
+    Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` for
+    operator visibility into whether the clip is firing in production
+    traffic.
+    """
+    if (
+        not math.isfinite(ce_score)
+        or any(not math.isfinite(b) for b in (recency, temporal, mw, confidence, decay))
+        or math.isnan(log_clip)
+        or log_clip < 0
+    ):
+        COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED.inc()
+        return ce_score
+    log_boost = (
+        math.log(max(recency, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(temporal, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(mw, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(confidence, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(decay, LOG_FLOOR_COMPOSITE_BOOST))
+    )
+    clipped = max(-log_clip, min(log_clip, log_boost))
+    multiplier = math.exp(clipped)
+    COMPOSITE_BOOST_CLIPPED.observe(multiplier)
+    return ce_score * multiplier
+
+
+def _get_confidence(unit: HasConfidence) -> float:
+    """Resolve a unit's confidence with defensive fallback to 1.0.
+
+    Thin wrapper over the shared
+    :func:`memex_core.memory.confidence.extract_confidence_and_count` so the
+    falsy-zero handling and ``None`` fallback stay in one place. Schema is
+    NOT NULL DEFAULT 1.0; this guard handles stripped/stale model objects
+    (no attribute) and rows materialised with confidence=None before the
+    column default takes effect. ``0.0`` is a legitimate value (unit
+    contradicted to zero) and is preserved verbatim — never coerced via
+    ``or 1.0``.
+    """
+    confidence, _ = extract_confidence_and_count(unit)
+    return confidence
+
+
+# Pre-reranker filter at hydration.
+# STABILITY_SECONDS_PER_DAY is re-exported from
+# memex_core.memory.retrieval.constants so the SQL builder and the Python
+# boost share one source of truth. Numeric values flow into SQL via
+# parameter binding (asyncpg ``$N`` placeholder), never f-string
+# interpolation — see _build_pre_filter_clause's SECURITY INVARIANT.
+from memex_core.memory.retrieval.constants import (  # noqa: E402
+    STABILITY_SECONDS_PER_DAY,
+    STABILITY_THRESHOLD,
+)
+
+# Minimum candidate depth the exploration bypass re-fetches at. The main path's
+# candidate_depth collapses to the final limit when there is no reranker or
+# token budget; exploration (F33) must look *beyond* the top-N to resurface the
+# low-Memory-Worth / low-confidence units the main path prunes (F48), so the
+# bypass pool is fetched at least this deep regardless of the final limit.
+_EXPLORATION_BYPASS_MIN_DEPTH = 50
+
+
+def _build_pre_filter_clause(
+    *,
+    apply_pre_filter: bool,
+    fsfm_branch_enabled: bool,
+) -> TextClause | None:
+    """Build the pre-reranker predicate as a SQLAlchemy ``TextClause``.
+
+    Returns a ``TextClause`` already wrapped as ``NOT (...)`` so the caller
+    can pass it straight to ``stmt.where(...)``, or ``None`` when the
+    entire pre-filter must drop out (``apply_pre_filter=False`` or no
+    branches active).
+
+    SECURITY / parameter-binding INVARIANT: every numeric this builder
+    substitutes flows through ``bindparams(...)`` (asyncpg ``$N``
+    placeholder), NOT f-string interpolation — regardless of provenance.
+    The current FSFM branch reads ``STABILITY_SECONDS_PER_DAY`` and
+    ``STABILITY_THRESHOLD`` from
+    ``memex_core.memory.retrieval.constants``, but the convention applies
+    uniformly: the next iteration of this builder may take per-vault or
+    per-class overrides that ARE user-controlled, and routing some values
+    through interpolation while others use binding creates an inconsistent
+    surface where the wrong code path can leak. Pinning test asserts the
+    rendered SQL string is independent of the constants' values.
+
+    Implementation pitfall: the FSFM branch is included via a **Python-level
+    conditional**, NOT a SQL-side runtime flag like ``(NOT :fsfm_enabled OR
+    ...)``. SQL-side guards still reference the missing column names at parse
+    time and would crash on ``column "importance" does not exist`` until the
+    FSFM migration runs.
+
+    The pinning test in
+    ``tests/unit/retrieval/test_f40_sql_builder.py`` enforces this by
+    asserting that the generated SQL string does not contain
+    ``importance`` / ``stability`` / ``last_outcome_at`` substrings when
+    ``fsfm_branch_enabled=False``.
+    """
+    if not apply_pre_filter:
+        return None
+
+    branches: list[str] = []
+    binds: dict[str, float] = {}
+
+    # Memory Worth branch (always on — columns exist since the outcomes feature).
+    # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
+    branches.append(
+        '((memory_units.success_co_count + memory_units.failure_co_count) >= 5 '
+        'AND (memory_units.success_co_count + 1.0) / '
+        '(memory_units.success_co_count + memory_units.failure_co_count + 2.0) < 0.15)'
+    )
+
+    # FSFM branch (gated by config flag — columns ship with the FSFM migration).
+    # COALESCE(..., FALSE) wraps the *branch result*, not individual columns,
+    # so SQL three-valued logic ``FALSE OR NULL OR FALSE -> NULL`` doesn't
+    # poison the surrounding ``NOT`` and exclude cold-start rows. NULLIF on
+    # ``stability`` keeps zero-stability rows from filtering (degenerate
+    # state — observability surfaces it). STABILITY_SECONDS_PER_DAY and
+    # STABILITY_THRESHOLD are bound parameters (see invariant above).
+    if fsfm_branch_enabled:
+        branches.append(
+            'COALESCE('
+            'memory_units.importance * '
+            'exp(-EXTRACT(EPOCH FROM (now() - memory_units.last_outcome_at)) / '
+            ':stability_seconds_per_day / NULLIF(memory_units.stability, 0)) '
+            '< :stability_threshold, '
+            'FALSE)'
+        )
+        binds['stability_seconds_per_day'] = STABILITY_SECONDS_PER_DAY
+        binds['stability_threshold'] = STABILITY_THRESHOLD
+
+    # Confidence branch (always on; column is NOT NULL DEFAULT 1.0,
+    # so cold-start units never match). Strict ``<`` keeps the 0.2 boundary
+    # safe. No COALESCE wrap needed: unlike FSFM, ``confidence`` cannot be
+    # NULL by schema, so SQL three-valued logic does not arise. The
+    # contradiction engine's α-stepping is itself the evidence-accumulation
+    # threshold — adding a separate count gate would double-count.
+    branches.append('(memory_units.confidence < 0.2)')
+
+    if not branches:
+        return None
+
+    # OR'd, not AND'd — either signal is sufficient grounds to skip the
+    # cross-encoder. Cold-start safeguards (Memory Worth >= 5 outcomes, FSFM exp(elapsed))
+    # are inside the individual branches.
+    pre_filter_clause = ' OR '.join(branches)
+    clause = text(f'NOT ({pre_filter_clause})')
+    if binds:
+        clause = clause.bindparams(**binds)
+    return clause
 
 
 def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
     """Derive note-level status from unit confidences."""
     if not units:
         return 'active'
-    low_confidence = sum(1 for u in units if getattr(u, 'confidence', 1.0) < superseded_threshold)
+    low_confidence = sum(
+        1 for u in units if extract_confidence_and_count(u)[0] < superseded_threshold
+    )
     ratio = low_confidence / len(units)
     if ratio > 0.5:
         return 'superseded'
@@ -159,6 +448,13 @@ class RetrievalEngine:
         self.ner_model = ner_model
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
+        # Per-engine RNG for the ε-greedy roll. ``random.random()``
+        # would dispatch to CPython's module-global Mersenne Twister,
+        # which is guarded by a lock — under high concurrency that lock
+        # is contended. A per-instance ``random.Random()`` is unshared
+        # and lock-free, and keeps the global RNG free for callers that
+        # rely on it being seedable from outside.
+        self._rng = random.Random()
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
         self.concretizer: TemporalConcretizer | None = (
             TemporalConcretizer(lm=self.lm)
@@ -166,6 +462,23 @@ class RetrievalEngine:
             else None
         )
         self._session_factory = session_factory
+
+        # Anisotropy corrector — shared across retrieval / contradiction /
+        # extraction-dedup since they observe the same embedding manifold.
+        # Disabled mode keeps a private instance so the singleton stays
+        # untainted for other callers.
+        from memex_core.memory.models.anisotropy import (
+            AnisotropyCorrector,
+            get_shared_corrector,
+        )
+
+        if self.retrieval_config.anisotropy_window_size == 0:
+            self._anisotropy = AnisotropyCorrector(window_size=0)
+        else:
+            self._anisotropy = get_shared_corrector(
+                window_size=self.retrieval_config.anisotropy_window_size,
+                min_samples=self.retrieval_config.anisotropy_min_samples,
+            )
 
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
@@ -175,11 +488,27 @@ class RetrievalEngine:
         self._embedding_cache: TTLCache[str, np.ndarray] = TTLCache(maxsize=256, ttl=300)
         self._embedding_cache_lock = asyncio.Lock()
 
+        # Cross-encoder score cache (default-on; bypassed when flag is False)
+        self._rerank_cache: CrossEncoderScoreCache | None = (
+            CrossEncoderScoreCache(
+                max_size=self.retrieval_config.cross_encoder_cache_size,
+                ttl_seconds=self.retrieval_config.cross_encoder_cache_ttl_seconds,
+            )
+            if self.retrieval_config.cross_encoder_cache_enabled
+            else None
+        )
+
         from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
         self.queue_service = (
             ReflectionQueueService(config=reflection_config) if reflection_config else None
         )
+        # max_neighbors caps the 2nd-order fan-out; only the entity_cooccurrence
+        # strategy accepts it (causal/link_expansion don't), so forward it only
+        # for that type — the factory passes **kwargs straight to the constructor.
+        graph_kwargs: dict[str, Any] = {}
+        if self.retrieval_config.graph_retriever_type == 'entity_cooccurrence':
+            graph_kwargs['max_neighbors'] = self.retrieval_config.graph_max_neighbors
         self.strategies: dict[str, tuple[RetrievalStrategy, bool]] = {
             'semantic': (SemanticStrategy(), False),  # False = ASC (Distance)
             'keyword': (KeywordStrategy(), True),  # True = DESC (Score)
@@ -190,6 +519,7 @@ class RetrievalEngine:
                     similarity_threshold=self.retrieval_config.similarity_threshold,
                     temporal_decay_days=self.retrieval_config.temporal_decay_days,
                     temporal_decay_base=self.retrieval_config.temporal_decay_base,
+                    **graph_kwargs,
                 ),
                 True,
             ),  # True = DESC
@@ -239,6 +569,13 @@ class RetrievalEngine:
         Retrieve memories and synthesized observations using In-DB RRF.
         If a reranker is available, fetches a larger pool and re-ranks them.
         """
+        # Pin the pg_trgm similarity threshold for the graph strategy's seed-entity
+        # `%` matching. set_limit() mutates a SESSION-scoped GUC the pool does not
+        # reset, so without this the seed cutoff would non-deterministically inherit
+        # a value left by an earlier query on the same pooled connection (e.g.
+        # find_notes_by_title's 0.5). 0.3 == RetrievalConfig.similarity_threshold.
+        await session.exec(text('SELECT set_limit(0.3)'))
+
         _t = time.monotonic
 
         # 1. Query Expansion (Multi-Query)
@@ -264,6 +601,8 @@ class RetrievalEngine:
         token_budget = request.token_budget
         if token_budget is None and self.retrieval_config:
             token_budget = self.retrieval_config.token_budget
+        if token_budget is not None and token_budget <= 0:
+            token_budget = None
 
         effective_limit = request.limit
         if token_budget is not None and effective_limit < 50:
@@ -327,9 +666,18 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Pass include_deprioritized flag to strategies (default: exclude)
+        filters['include_deprioritized'] = request.include_deprioritized
+
         # Thread source_context filter for context-scoped retrieval
         if request.source_context:
             filters['source_context'] = request.source_context
+
+        # Thread intent_class / risk_class filters (write-time classifier)
+        if request.intent_class is not None:
+            filters['intent_class'] = request.intent_class
+        if request.risk_class is not None:
+            filters['risk_class'] = request.risk_class
 
         # Pre-compute NER entities off the event loop so graph strategies don't block
         t0 = _t()
@@ -377,6 +725,7 @@ class RetrievalEngine:
                     strategies=request.strategies,
                     strategy_weights=request.strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=True,
                 )
             else:
                 items = await self._perform_rrf_retrieval(
@@ -388,6 +737,7 @@ class RetrievalEngine:
                     strategies=request.strategies,
                     strategy_weights=request.strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=True,
                 )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
@@ -420,6 +770,7 @@ class RetrievalEngine:
                         strategies=request.strategies,
                         strategy_weights=request.strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=True,
                     )
                 else:
                     items = await self._perform_rrf_retrieval(
@@ -431,31 +782,57 @@ class RetrievalEngine:
                         strategies=request.strategies,
                         strategy_weights=request.strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=True,
                     )
                 all_ranked_items.append((items, q_weight))
             fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
 
-        # Free embedding lists — no longer needed after RRF + fallback
-        del all_embeddings_list
+        # NOTE: ``all_embeddings_list`` is intentionally kept alive past here —
+        # the exploration bypass below re-runs the RRF at a deeper depth and
+        # needs the per-query embeddings. It is GC'd at method return.
 
         if not fused_items:
             return ([], None)
 
-        # 6. Hydrate Objects
+        # 6. Hydrate Objects (pre-filter applies here when enabled).
         t0 = _t()
-        final_results = await self._hydrate_results(session, fused_items)
+        final_results = await self._hydrate_results(
+            session, fused_items, apply_pre_filter=request.apply_pre_filter
+        )
         t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
         if not request.include_superseded:
             threshold = self.retrieval_config.superseded_threshold
-            final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
+            final_results = [
+                u for u in final_results if extract_confidence_and_count(u)[0] >= threshold
+            ]
+
+        # Snapshot AFTER superseded filter so exploration injection cannot
+        # surface superseded-but-ACTIVE units.
+        hydrated_candidates = list(final_results)
+
+        # 6c. Populate ``temporal_proximity`` from the query's extracted date
+        # window (only set when the query was temporal) so the rerank temporal
+        # boost (scaled by ``reranking_temporal_alpha``) is active rather than
+        # permanently neutral.
+        self._apply_temporal_proximity(
+            final_results, filters.get('start_date'), filters.get('end_date')
+        )
 
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
+            resolved_mw_mode = MWMode.STATIONARY
+            if session is not None and primary_vault_id is not None:
+                vault_row = await session.get(Vault, primary_vault_id)
+                if vault_row is not None:
+                    resolved_mw_mode = vault_row.mw_mode
             final_results = await self._rerank_results(
-                request.query, final_results[:rerank_cap], min_score=request.min_score
+                request.query,
+                final_results[:rerank_cap],
+                min_score=request.min_score,
+                mw_mode=resolved_mw_mode,
             )
         t_rerank = _t() - t0
 
@@ -502,6 +879,136 @@ class RetrievalEngine:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
+
+        # 9b. Exploration floor: inject under-explored units back into the
+        # result set so Memory Worth doesn't become monotonic. Two
+        # algorithms are dispatched on ``RetrievalConfig.exploration_mode``:
+        #
+        # - ``'epsilon_greedy'`` (ship default): outer roll at ε, then
+        #   inject up to ``exploration_max_injections`` from the
+        #   low-Memory-Worth tail (the existing behaviour).
+        # - ``'thompson'``: draw θ ~ Beta(success+1, failure+1) per
+        #   eligible candidate, inject the top-θ units (cold-start-fair
+        #   by construction; the ε roll is bypassed).
+        # - ``'off'``: skip the injector entirely.
+        #
+        # Both injecting modes share the bypass-pool re-hydration: when
+        # the pre-filter is active, the exploration path must see units
+        # the main path filtered out, otherwise the very units we want
+        # to re-surface are invisible to the injector. Cost profile is
+        # mode-asymmetric: ε-greedy pays the bypass round-trip only on
+        # the ~ε fraction of calls where the outer roll succeeds (≈5% at
+        # the ship default). Thompson pays it on every retrieval, by
+        # design — the algorithm samples each call, and degeneracy
+        # mitigation lives in the sampler (cold-start fair-shake +
+        # MW EMA decay), not in gating. Operators trading away the
+        # per-call cost should run ``exploration_mode='off'``.
+        exploration_mode = self.retrieval_config.exploration_mode
+        total_injected = 0
+        if final_results and exploration_mode != 'off':
+            from memex_core.memory.retrieval.exploration import (
+                inject_exploration_units,
+                inject_thompson_exploration,
+            )
+            from memex_core.metrics import (
+                EXPLORATION_INJECTED_TOTAL,
+                EXPLORATION_THOMPSON_THETA_DISTRIBUTION,
+            )
+
+            if exploration_mode == 'epsilon_greedy':
+                should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
+            else:  # thompson
+                should_inject = True
+
+            if should_inject:
+                exploration_pool = hydrated_candidates
+                if request.apply_pre_filter:
+                    # The main path pruned low-confidence/low-MW units at the
+                    # pre-filter, AND candidate_depth (≈ the final limit when
+                    # there is no reranker or token budget) truncated fused_items
+                    # too shallow to even contain them — so re-hydrating
+                    # fused_items alone can never surface them. Re-run the RRF at
+                    # an exploration-floor depth and hydrate WITHOUT the
+                    # pre-filter, so F33 can resurface units the main path can
+                    # never see (the F48 ∩ F33 self-correction contract). The RRF
+                    # itself does not apply the confidence pre-filter; only
+                    # hydration does, so the deeper fetch recovers them.
+                    #
+                    # NOTE (follow-up): the MAIN candidate pool is also capped at
+                    # candidate_depth; when that equals the limit it defeats MMR
+                    # diversity too. Flooring candidate_depth for the main path is
+                    # the broader fix, left to the retrieval owner so this change
+                    # does not alter main-path ranking under the merge.
+                    bypass_depth = max(candidate_depth, _EXPLORATION_BYPASS_MIN_DEPTH)
+                    bypass_ranked = []
+                    for q, q_emb, q_weight in zip(queries, all_embeddings_list, query_weights):
+                        if use_partitioned:
+                            items = await self._perform_partitioned_rrf(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        else:
+                            items = await self._perform_rrf_retrieval(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        bypass_ranked.append((items, q_weight))
+                    bypass_fused = self._fuse_multi_query_results(bypass_ranked, bypass_depth)
+                    bypass_pool = await self._hydrate_results(
+                        session, bypass_fused, apply_pre_filter=False
+                    )
+                    if not request.include_superseded:
+                        threshold = self.retrieval_config.superseded_threshold
+                        # Use the SSOT helper for the confidence read so the
+                        # falsy-zero handling and ``None`` fallback are
+                        # consistent with the rerank path and lint
+                        # (services/lint_confidence.py).
+                        bypass_pool = [
+                            u
+                            for u in bypass_pool
+                            if extract_confidence_and_count(u)[0] >= threshold
+                        ]
+                    exploration_pool = bypass_pool
+
+                if exploration_pool:
+                    pre_inject_count = len(final_results)
+                    if exploration_mode == 'epsilon_greedy':
+                        # Force inner ε=1.0: we already rolled the dice; the
+                        # inner roll would otherwise re-roll and could veto.
+                        final_results = inject_exploration_units(
+                            final_results,
+                            exploration_pool,
+                            epsilon=1.0,
+                            max_injections=self.retrieval_config.exploration_max_injections,
+                            low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
+                        )
+                        injected = len(final_results) - pre_inject_count
+                        if injected > 0:
+                            EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy').inc(injected)
+                            total_injected += injected
+                    else:  # thompson
+                        final_results, thetas = inject_thompson_exploration(
+                            final_results,
+                            exploration_pool,
+                            max_injections=self.retrieval_config.exploration_max_injections,
+                            rng=self._rng,
+                        )
+                        injected = len(final_results) - pre_inject_count
+                        if injected > 0:
+                            EXPLORATION_INJECTED_TOTAL.labels(mode='thompson').inc(injected)
+                            total_injected += injected
+                            for theta in thetas:
+                                EXPLORATION_THOMPSON_THETA_DISTRIBUTION.observe(theta)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
@@ -565,7 +1072,14 @@ class RetrievalEngine:
 
         if token_budget is not None:
             return (final_results, resonance_context)
-        return (final_results[: request.limit], resonance_context)
+
+        # Exploration injections sit at the tail of ``final_results`` (appended by
+        # ``inject_exploration_units`` / ``inject_thompson_exploration``); expand
+        # the slice by the injection count so they survive the limit clamp. The
+        # design doc names exploration "post-MMR budget injection" — the limit
+        # is meant to bound the primary MMR-diversified head, not the
+        # exploration tail.
+        return (final_results[: request.limit + total_injected], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int
@@ -589,6 +1103,42 @@ class RetrievalEngine:
         Item = namedtuple('Item', ['id', 'type'])
 
         return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
+
+    def _apply_temporal_proximity(
+        self,
+        units: list[MemoryUnit],
+        start_date: datetime | None,
+        end_date: datetime | None,
+    ) -> None:
+        """Populate ``unit.temporal_proximity`` in [0, 1] from the query's
+        extracted date window so the rerank temporal boost (scaled by
+        ``RetrievalConfig.reranking_temporal_alpha``) is no longer inert.
+
+        ``1.0`` = the unit's date sits at the window midpoint; it falls
+        linearly to ``0.0`` a full half-width away (or beyond). Units without a
+        date are left unset, so the rerank read defaults them to a neutral
+        ``0.5``. No-op when the query carried no temporal window (the common
+        case) — this only fires for genuinely temporal queries. Mirrors
+        Hindsight's temporal arm: ``1 - min(days_from_mid / (total_days/2), 1)``.
+        """
+        if start_date is None or end_date is None:
+            return
+        mid = start_date + (end_date - start_date) / 2
+        half_window = abs((end_date - start_date).total_seconds()) / 2.0
+        for u in units:
+            unit_date = u.occurred_start or u.event_date
+            if unit_date is None:
+                continue
+            try:
+                offset = abs((unit_date - mid).total_seconds())
+            except TypeError:
+                # Naive/aware datetime mismatch — skip rather than crash.
+                continue
+            if half_window <= 0:
+                proximity = 1.0 if offset == 0 else 0.0
+            else:
+                proximity = 1.0 - min(offset / half_window, 1.0)
+            object.__setattr__(u, 'temporal_proximity', proximity)
 
     def _apply_position_aware_blending(self, results: list[MemoryUnit]) -> list[MemoryUnit]:
         """
@@ -652,6 +1202,84 @@ class RetrievalEngine:
         return result.all()
 
     async def _perform_rrf_retrieval(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        filters: dict[str, Any],
+        strategies: list[str] | None = None,
+        strategy_weights: dict[str, float] | None = None,
+        debug_ctx: DebugContext | None = None,
+        record_degraded: bool = False,
+    ) -> Sequence[Any]:
+        """RRF retrieval with graceful degradation on statement_timeout.
+
+        On a Postgres statement_timeout (the graph strategy's seed/2-hop work is
+        the usual culprit) the aborted transaction is rolled back and the query is
+        retried with only the cheap signals (semantic + temporal), so memory search
+        degrades to partial results instead of failing with QueryCanceledError —
+        mirroring the note-search fallback in document_search. Non-timeout errors
+        propagate; for normal queries the path is unchanged.
+        """
+        try:
+            return await self._perform_rrf_retrieval_inner(
+                session,
+                query,
+                query_embedding,
+                limit,
+                filters,
+                strategies,
+                strategy_weights,
+                debug_ctx,
+            )
+        except DBAPIError as exc:
+            if not _is_statement_timeout(exc):
+                raise
+            await session.rollback()
+            active_names = set(self._resolve_active_strategies(strategies)[0].keys())
+            # Record the dropped expensive strategies so the endpoint can flag the
+            # response as degraded — but ONLY for the primary retrieval
+            # (``record_degraded=True``). Supplementary passes (exploration bypass,
+            # mental-model sub-fetch) run AFTER the main results are already complete
+            # and at a deeper, more timeout-prone depth; letting them write would
+            # falsely flag a complete result set as partial. No-op when no accumulator
+            # is set (non-server callers: CLI, eval, direct api).
+            if record_degraded:
+                _acc = _SEARCH_DEGRADED_DROPPED.get()
+                if _acc is not None:
+                    _acc.update({'graph', 'keyword'} & active_names)
+            fallback = [s for s in ('semantic', 'temporal') if s in active_names]
+            if not fallback:
+                logger.error(
+                    'Memory search hit statement_timeout and no cheap signal is enabled; '
+                    'this query returns NOTHING (incomplete results).'
+                )
+                return []
+            logger.error(
+                'Memory search hit statement_timeout — retrying WITHOUT the graph + keyword '
+                'strategies (degraded to %s). Results for this query are INCOMPLETE.',
+                fallback,
+            )
+            try:
+                return await self._perform_rrf_retrieval_inner(
+                    session,
+                    query,
+                    query_embedding,
+                    limit,
+                    filters,
+                    fallback,
+                    strategy_weights,
+                    debug_ctx,
+                )
+            except DBAPIError as exc2:
+                if not _is_statement_timeout(exc2):
+                    raise
+                await session.rollback()
+                logger.error('Semantic fallback ALSO timed out; this query returns nothing.')
+                return []
+
+    async def _perform_rrf_retrieval_inner(
         self,
         session: AsyncSession,
         query: str,
@@ -787,6 +1415,7 @@ class RetrievalEngine:
         strategies: list[str] | None = None,
         strategy_weights: dict[str, float] | None = None,
         debug_ctx: DebugContext | None = None,
+        record_degraded: bool = False,
     ) -> Sequence[Any]:
         """Run RRF independently per fact type, then interleave results.
 
@@ -827,6 +1456,7 @@ class RetrievalEngine:
                         strategies=unit_only_strategies,
                         strategy_weights=strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=record_degraded,
                     )
 
             per_type_results = list(await asyncio.gather(*[_run_ft(ft) for ft in fact_types]))
@@ -843,6 +1473,7 @@ class RetrievalEngine:
                     strategies=unit_only_strategies,
                     strategy_weights=strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=record_degraded,
                 )
                 per_type_results.append(result)
 
@@ -858,6 +1489,7 @@ class RetrievalEngine:
                 strategies=['mental_model'],
                 strategy_weights=strategy_weights,
                 debug_ctx=debug_ctx,
+                record_degraded=record_degraded,
             )
             mm_results = mm_items
 
@@ -977,26 +1609,76 @@ class RetrievalEngine:
         return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
 
     async def _hydrate_results(
-        self, session: AsyncSession, ranked_items: Sequence[Any]
+        self,
+        session: AsyncSession,
+        ranked_items: Sequence[Any],
+        *,
+        apply_pre_filter: bool = True,
     ) -> list[MemoryUnit]:
-        """Fetches actual objects from DB and converts them to MemoryUnits."""
-        unit_ids = [row.id for row in ranked_items if row.type == 'unit']
-        model_ids = [row.id for row in ranked_items if row.type == 'model']
+        """Fetches actual objects from DB and converts them to MemoryUnits.
+
+        When ``apply_pre_filter`` is True, the unit hydration query gains a
+        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-Memory Worth)
+        and (when ``fsfm_branch_enabled`` is True) decayed candidates before
+        they reach the cross-encoder.
+
+        Emits ``HYDRATION_QUERY_DURATION_SECONDS`` and
+        ``PRE_FILTER_CANDIDATES_PRUNED``. Metrics emit when ``unit_ids`` is
+        non-empty. Empty-input retrievals (model-only results) skip the
+        hydration query entirely and so don't emit pre-filter metrics.
+        """
+        from memex_core.metrics import (
+            HYDRATION_QUERY_DURATION_SECONDS,
+            PRE_FILTER_CANDIDATES_PRUNED,
+        )
+
+        # Dedupe IDs (RRF fusion can produce duplicates across strategies);
+        # SQL ``IN`` already deduplicates the fetched set, so an undeduped
+        # ``unit_ids`` would inflate the ``pruned`` count below. Use
+        # ``dict.fromkeys`` to preserve insertion order.
+        unit_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'unit'))
+        model_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'model'))
 
         fetched_units = {}
         fetched_models = {}
 
         if unit_ids:
-            units = (
-                await session.exec(
-                    select(MemoryUnit)
-                    .where(col(MemoryUnit.id).in_(unit_ids))
-                    .options(defer(MemoryUnit.embedding))  # type: ignore
-                    .options(selectinload(MemoryUnit.note))
-                    .options(selectinload(MemoryUnit.unit_entities))
-                )
-            ).all()
+            stmt = (
+                select(MemoryUnit)
+                .where(col(MemoryUnit.id).in_(unit_ids))
+                .options(defer(MemoryUnit.embedding))  # type: ignore
+                .options(selectinload(MemoryUnit.note))
+                .options(selectinload(MemoryUnit.unit_entities))
+            )
+
+            # Python-level conditional pre-filter. The Memory Worth branch is always
+            # included; the FSFM branch is included only when the config
+            # flag is True. SQL-side runtime flags would still reference
+            # the missing columns at parse time. The builder owns the
+            # single ``text(...)`` boundary — see its docstring for the
+            # SECURITY INVARIANT pinning constants-only interpolation.
+            pre_filter_clause = _build_pre_filter_clause(
+                apply_pre_filter=apply_pre_filter,
+                fsfm_branch_enabled=self.retrieval_config.fsfm_branch_enabled,
+            )
+            if pre_filter_clause is not None:
+                stmt = stmt.where(pre_filter_clause)
+
+            t0 = time.monotonic()
+            units = (await session.exec(stmt)).all()
+            HYDRATION_QUERY_DURATION_SECONDS.observe(time.monotonic() - t0)
+
             fetched_units = {u.id: u for u in units}
+
+            # Pruned-candidates histogram (always emits, even when the
+            # predicate is inactive — value is 0 in that case).
+            pruned = max(0, len(unit_ids) - len(fetched_units))
+            PRE_FILTER_CANDIDATES_PRUNED.observe(pruned)
+
+            # Calibration signal: emit raw confidence values regardless of
+            # confidence_alpha so the pre-flip distribution accumulates.
+            for u in units:
+                CONFIDENCE_SCORE_DISTRIBUTION.observe(_get_confidence(u))
 
         if model_ids:
             models = (
@@ -1009,7 +1691,9 @@ class RetrievalEngine:
             fetched_models = {m.id: m for m in models}
 
         # Load supersession context for low-confidence units
-        low_conf_ids = [u.id for u in fetched_units.values() if getattr(u, 'confidence', 1.0) < 1.0]
+        low_conf_ids = [
+            u.id for u in fetched_units.values() if extract_confidence_and_count(u)[0] < 1.0
+        ]
         if low_conf_ids:
             from memex_core.memory.sql_models import MemoryLink
 
@@ -1073,21 +1757,97 @@ class RetrievalEngine:
 
         return final_results
 
-    async def _rerank_results(
-        self, query: str, results: list[MemoryUnit], min_score: float | None = None
-    ) -> list[MemoryUnit]:
-        """Re-rank results using a cross-encoder with multiplicative boosts.
+    async def _reranker_score_uncached(self, query: str, texts: list[str]) -> list[float]:
+        """Direct cross-encoder call with the standard semaphore + timeout.
 
-        Applies sigmoid-normalized cross-encoder scores, then multiplies by:
+        Shared reranker cap across both reranker sites — one model, one
+        capacity budget. wait_for cancels the coroutine but the underlying
+        thread keeps running.
+        """
+        if self.reranker is None:
+            raise RuntimeError('reranker required for _reranker_score_uncached')
+        reranker = self.reranker
+        async with get_reranker_semaphore(), _instrument('rerank'):
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(reranker.score, query, texts),
+                timeout=get_reranker_call_timeout(),
+            )
+        return [float(s) for s in raw]
+
+    async def _reranker_score(
+        self,
+        query: str,
+        results: list[MemoryUnit],
+        formatted_texts: list[str],
+    ) -> list[float]:
+        """Score *results* against *query*, serving cache hits where possible.
+
+        When the cache is disabled the call falls through to the cross-encoder
+        directly. Cache key triple is ``(model_version, query_hash, unit_id)``;
+        ``unit_id`` is globally unique per Memex schema so the cache cannot
+        leak across vaults.
+        """
+        if self._rerank_cache is None or self.reranker is None:
+            return await self._reranker_score_uncached(query, formatted_texts)
+
+        # Defensive fallback for out-of-tree rerankers that don't define
+        # ``model_version`` (the protocol now ships a default but duck-typed
+        # implementations may not subclass it). With a constant
+        # version the cache still works; model upgrades will be invalidated
+        # by the TTL backstop rather than structurally.
+        model_version = getattr(self.reranker, 'model_version', 'unknown')
+        query_h = hash_query(query)
+        keys = [(model_version, query_h, unit.id) for unit in results]
+
+        async def _compute(missing_indices: Sequence[int]) -> Sequence[float]:
+            sub_texts = [formatted_texts[i] for i in missing_indices]
+            return await self._reranker_score_uncached(query, sub_texts)
+
+        return await self._rerank_cache.get_or_compute_batch(keys, _compute)
+
+    async def _rerank_results(
+        self,
+        query: str,
+        results: list[MemoryUnit],
+        min_score: float | None = None,
+        *,
+        mw_mode: MWMode = MWMode.STATIONARY,
+    ) -> list[MemoryUnit]:
+        """Re-rank results using a cross-encoder with log-additive bounded boosts.
+
+        Applies sigmoid-normalized cross-encoder scores, then composes five
+        boost factors in log space and clips the sum symmetrically before
+        exponentiating — see :func:`_compose_boosts_logspace` for the
+        mechanism. The five boost factors are:
+
         * **recency boost** -- scaled by ``RetrievalConfig.reranking_recency_alpha``
           (linear decay over 365 days)
         * **temporal proximity boost** -- scaled by
           ``RetrievalConfig.reranking_temporal_alpha`` (uses ``unit.temporal_proximity``
           when available)
+        * **Memory Worth boost** -- scaled by
+          ``RetrievalConfig.reranking_mw_alpha`` (Beta-Bernoulli posterior mean;
+          cold-start mw_boost = 1.0, neutral)
+        * **Contradiction-derived confidence boost** -- scaled by
+          ``RetrievalConfig.confidence_alpha`` (uses ``unit.confidence``;
+          cold-start confidence = 1.0 → boost > 1.0 when alpha > 0; default
+          alpha = 0.0 ships boost = 1.0 for every unit)
+        * **FSFM decay boost** -- scaled by ``RetrievalConfig.decay_alpha``
+          (Ebbinghaus × importance; default alpha = 0.0 ships boost = 1.0)
 
-        Set both alphas to 0 to disable boosts (backward compatible).
+        Set any alpha to 0 to disable that boost (backward compatible). The
+        aggregate metadata multiplier is bounded by
+        ``RetrievalConfig.composite_boost_log_clip`` (``L``): the post-clip
+        multiplier lies in ``[exp(-L), exp(+L)]``. Ship default ``L = math.inf``
+        is a no-op (mathematically identical to the prior multiplicative
+        product for strictly positive boost inputs); set a finite ``L`` to
+        bound the aggregate metadata influence on ``ce_score``.
         """
         if not self.reranker or not results:
+            # Emit zero-input observation so the histogram is always
+            # populated for the no-rerank case (observability comparisons
+            # need the denominator).
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
         try:
@@ -1103,31 +1863,54 @@ class RetrievalEngine:
                     )
                 )
 
-            # Shared reranker cap across both reranker sites — one model,
-            # one capacity budget. wait_for cancels the coroutine but the
-            # underlying thread keeps running.
-            async with get_reranker_semaphore(), _instrument('rerank'):
-                scores = await asyncio.wait_for(
-                    asyncio.to_thread(self.reranker.score, query, formatted_texts),
-                    timeout=get_reranker_call_timeout(),
-                )
+            # Cross-encoder input count post-filter. Validates that the
+            # pre-filter shrinks the reranker working set.
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(len(formatted_texts))
+
+            # Score via cache wrapper. Cache misses fall through to
+            # _reranker_score_uncached, which holds the shared reranker
+            # semaphore and timeout.
+            scores = await self._reranker_score(query, results, formatted_texts)
 
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency and temporal proximity boosts
+            # Compose the five boost factors with log-additive bounded
+            # clip; see ``_compose_boosts_logspace`` above.
+            from memex_core.memory.retrieval.decay import compute_decay_boost
+            from memex_core.services.outcomes import compute_mw_boost
+
             now = datetime.now(timezone.utc)
             recency_alpha = self.retrieval_config.reranking_recency_alpha
             temporal_alpha = self.retrieval_config.reranking_temporal_alpha
+            mw_alpha = self.retrieval_config.reranking_mw_alpha
+            confidence_alpha = self.retrieval_config.confidence_alpha
+            decay_alpha = self.retrieval_config.decay_alpha
+            composite_log_clip = self.retrieval_config.composite_boost_log_clip
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
-                # Recency boost
-                if unit.event_date is not None:
-                    days_ago = (now - unit.event_date).days
+                # Recency boost — keyed on the unit's real authored date, NOT
+                # ``event_date`` (which defaults to ingest time for undated
+                # content, making date-less units read as maximally fresh).
+                # Prefer ``occurred_start`` (a dated event); else fall back to
+                # ``mentioned_at`` *only when it is a genuine date* — a
+                # present-state fact ("currently runs Python 3.13 [Nov 2025]")
+                # parks its real date in ``mentioned_at``, not
+                # ``occurred_start``. ``mentioned_at`` is auto-filled to
+                # ~``created_at`` for truly-undated content, so a real date is
+                # one that differs from ``created_at`` by more than the ingest
+                # tolerance; truly-undated units fall through to neutral (so
+                # they neither flood nor get penalised).
+                # Recency keys on the latest authored date the unit carries
+                # (occurred_start and/or an authored mentioned_at); truly
+                # undated units anchor to None and stay neutral.
+                recency_date = _recency_anchor(unit)
+                if recency_date is not None:
+                    days_ago = (now - recency_date).days
                     recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
                 else:
-                    recency = 0.5  # neutral when no event_date
+                    recency = 0.5  # neutral — no authored date
 
                 recency_boost = 1.0 + recency_alpha * (recency - 0.5)
 
@@ -1137,7 +1920,76 @@ class RetrievalEngine:
                     temporal = 0.5  # neutral
                 temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)
 
-                boosted_scores.append(ce_score * recency_boost * temporal_boost)
+                # Memory Worth boost (additive-marginal composition)
+                mw_boost = compute_mw_boost(
+                    success_co_count=unit.success_co_count,
+                    failure_co_count=unit.failure_co_count,
+                    mw_alpha=mw_alpha,
+                    mw_mode=mw_mode,
+                    last_outcome_at=unit.last_outcome_at,
+                    half_life_days=self.retrieval_config.mw_ema_half_life_days,
+                    now=now,
+                )
+                MW_BOOST_OBSERVED.observe(mw_boost)
+
+                # Contradiction-derived confidence boost.
+                # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
+                # When certainty_modulation_enabled is True, the boost is
+                # additionally multiplied by certainty = 1 - variance/MAX_VARIANCE
+                # (closed-form Beta(1, 1) posterior). Cold-start (count=0) →
+                # certainty = 0 → boost collapses to neutral (preserves cold-start
+                # safety even with the multiplier active).
+                # Single extraction so confidence and evidence_count come
+                # from the same clamped read.
+                confidence, evidence_count = extract_confidence_and_count(unit)
+                # Emit the calibration histogram on every rerank pass —
+                # including when ``certainty_modulation`` is OFF (the ship
+                # default). Operators need the variance distribution BEFORE
+                # flipping the flag to make an informed decision; gating the
+                # metric on the flag would leave them blind. The single
+                # mean_and_variance call serves both the metric and the
+                # (conditional) certainty multiplier.
+                _, variance = mean_and_variance(confidence, evidence_count)
+                CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
+                # Boost-factor range: with ``confidence_alpha`` capped at
+                # 2.0 by the ``RetrievalConfig.confidence_alpha`` ``le=2.0``
+                # field constraint and ``confidence ∈ [0, 1]`` enforced by
+                # ``extract_confidence_and_count``, ``confidence_boost``
+                # lies in ``[0.0, 2.0]`` (further compressed toward 1.0
+                # when ``certainty < 1`` under modulation, and pinned at
+                # 1.0 at cold-start with ``certainty = 0``). Downstream
+                # score multiplication therefore caps at a 2× lift / 0×
+                # pin. The ``max(..., 0.0)`` floor below is the only
+                # explicit guard; no separate ceiling is needed because
+                # the inputs cannot exceed those bounds.
+                if self.retrieval_config.certainty_modulation_enabled:
+                    # Reuse the variance from the metric line above instead
+                    # of round-tripping ``certainty(confidence, count)``
+                    # (which would re-evaluate ``mean_and_variance``).
+                    # The closed form lives in ``certainty_from_variance``
+                    # so both call sites share one source of truth.
+                    certainty_factor = certainty_from_variance(variance)
+                    confidence_boost = max(
+                        1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
+                    )
+                else:
+                    confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
+                CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
+
+                decay_boost = compute_decay_boost(unit, decay_alpha=decay_alpha, now=now)
+                DECAY_BOOST_OBSERVED.observe(decay_boost)
+
+                boosted_scores.append(
+                    _compose_boosts_logspace(
+                        ce_score,
+                        recency=recency_boost,
+                        temporal=temporal_boost,
+                        mw=mw_boost,
+                        confidence=confidence_boost,
+                        decay=decay_boost,
+                        log_clip=composite_log_clip,
+                    )
+                )
 
             scored_results = []
             for unit, boosted, raw_score in zip(results, boosted_scores, scores):
@@ -1152,13 +2004,21 @@ class RetrievalEngine:
             return [item[0] for item in scored_results]
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
+            # Close the observability gap: the early-return path observes 0,
+            # so the exception/fallback path must too. Without this, a
+            # reranker exception silently skips the histogram and the metric
+            # over-represents successful rerank counts.
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
-    @staticmethod
     async def _compute_pairwise_cosine(
-        session: AsyncSession, unit_ids: list[UUID]
+        self, session: AsyncSession, unit_ids: list[UUID]
     ) -> dict[tuple[UUID, UUID], float]:
-        """Compute pairwise cosine similarity for a set of memory units via SQL."""
+        """Compute pairwise cosine similarity for a set of memory units via SQL.
+
+        Raw cosine similarities are normalized through the anisotropy corrector
+        (Z-score → sigmoid) to counteract embedding anisotropy.
+        """
         from sqlalchemy import text
 
         if len(unit_ids) < 2:
@@ -1181,9 +2041,11 @@ class RetrievalEngine:
         result = await conn.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
         matrix: dict[tuple[UUID, UUID], float] = {}
         for row in result:
+            raw_sim = float(row.similarity)
+            corrected = self._anisotropy.normalize(raw_sim)
             key = (row.id_a, row.id_b)
-            matrix[key] = float(row.similarity)
-            matrix[(row.id_b, row.id_a)] = float(row.similarity)
+            matrix[key] = corrected
+            matrix[(row.id_b, row.id_a)] = corrected
         return matrix
 
     @staticmethod
@@ -1348,7 +2210,21 @@ class RetrievalEngine:
                 if mid:
                     evidence_ids.append(str(mid))
 
-            virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
+            # Use the observation's stable id (uuid4, populated by Phase 4 reconstruction
+            # via ObservationProvenance) as the virtual_id. Falls back to the legacy
+            # uuid5 hash for any legacy JSONB rows that predate observation.id being
+            # persisted — every newly-written observation now carries an id.
+            obs_id_raw = obs.get('id') if isinstance(obs, dict) else getattr(obs, 'id', None)
+            virtual_id: UUID
+            if obs_id_raw is not None:
+                try:
+                    virtual_id = (
+                        obs_id_raw if isinstance(obs_id_raw, UUID) else UUID(str(obs_id_raw))
+                    )
+                except (ValueError, AttributeError, TypeError):
+                    virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
+            else:
+                virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
             units.append(
                 MemoryUnit(
                     id=virtual_id,

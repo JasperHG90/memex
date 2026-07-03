@@ -6,8 +6,9 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
+from datetime import datetime
 import mimetypes
 
 import aiofiles
@@ -25,6 +26,19 @@ import json
 from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
+from memex_mcp._layer_primer_descriptions import (
+    LAYER_ROUTING_PRIMER_FRAGMENT as _LAYER_ROUTING_PRIMER,
+)
+from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
+from memex_common.kv_utils import VALID_NAMESPACES
+from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
+from memex_common.tool_descriptions import (
+    MEMEX_CASE_SUBMIT_DESC as _MEMEX_CASE_SUBMIT_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC as _MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_DESC as _MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    MEMEX_PROCEDURAL_SEARCH_DESC as _MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
+    MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
+)
 from memex_mcp.models import (
     McpAddAssetsResult,
     McpAddNoteResult,
@@ -39,7 +53,7 @@ from memex_mcp.models import (
     McpEvent,
     McpFindResult,
     McpKVEntry,
-    McpKVWriteResult,
+    McpKVPutResult,
     _scope_from_key,
     McpLineageNode,
     McpMemoryLink,
@@ -59,17 +73,30 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
+    McpCaseSubmitResult,
+    McpProceduralEntry,
+    McpProceduralPin,
+    McpProceduralSearchHit,
+    McpProceduralSearchResult,
+    McpProceduralSource,
     Staleness,
+)
+from memex_common.procedural_schemas import (
+    CaseSubmit,
+    ProceduralEntryDTO,
+    ProceduralSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
+    IntentLiteral,
     LineageDirection,
     LineageResponse,
     NoteAppendRequest,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
+    RiskLiteral,
     TOCNodeDTO,
     filter_toc,
 )
@@ -143,6 +170,65 @@ def _coerce_int(v: Any) -> Any:
     return v
 
 
+def _coerce_float(v: Any) -> Any:
+    """Coerce a stringified float back to a float."""
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return v
+
+
+def _allowed_asset_roots() -> list[plb.Path]:
+    """Directories that agent-supplied asset paths are confined to.
+
+    Defaults to the server's CWD (the agent's working/project directory).
+    Additional roots can be permitted via the ``MEMEX_MCP_ASSET_ROOTS`` env var
+    (``os.pathsep``-separated absolute paths).
+    """
+    roots = [plb.Path.cwd().resolve()]
+    for raw in os.environ.get('MEMEX_MCP_ASSET_ROOTS', '').split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            roots.append(plb.Path(raw).expanduser().resolve())
+    return roots
+
+
+def _resolve_confined_asset_path(file_path: str) -> plb.Path:
+    """Resolve an agent-supplied asset path, confined to the allowed roots.
+
+    Guards against a prompt-injected agent exfiltrating sensitive local files
+    (``~/.ssh/id_rsa``, ``/etc/passwd``, …) by ingesting them as note assets.
+    Resolves symlinks before the check so they can't escape a permitted root.
+    Raises ``ToolError`` if the path escapes every allowed root.
+    """
+    resolved = plb.Path(file_path).expanduser().resolve()
+    roots = _allowed_asset_roots()
+    if not any(resolved.is_relative_to(root) for root in roots):
+        raise ToolError(
+            f'Asset path {file_path!r} is outside the allowed roots '
+            f'({", ".join(str(r) for r in roots)}). Set MEMEX_MCP_ASSET_ROOTS '
+            'to permit additional directories.'
+        )
+    return resolved
+
+
+def _to_utc_datetime(dt: datetime | None) -> datetime | None:
+    """Convert a parsed datetime to UTC.
+
+    Naive datetimes get UTC assigned. Aware datetimes are converted to UTC.
+    Avoids ``.replace(tzinfo=)`` which silently overwrites existing timezones.
+    """
+    from datetime import timezone as _tz2
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_tz2.utc)
+    return dt.astimezone(_tz2.utc)
+
+
 def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     """Validate vault_ids is a real list, not a stringified JSON array."""
     if isinstance(vault_ids, str):
@@ -168,22 +254,55 @@ def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     return vault_ids
 
 
-async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
-    """Resolve and validate that all vault identifiers exist."""
-    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+async def _resolve_vault_ids(
+    api: Any, vault_ids: list[str], include_system_vaults: bool = False
+) -> list[UUID]:
+    """Resolve vault identifiers to UUIDs.
 
-    if ALL_VAULTS_WILDCARD in vault_ids:
-        vaults = await api.list_vaults()
-        return [v.id for v in vaults]
+    Union semantics: a wildcard ``'*'`` expands to content vaults only; named
+    vaults (content or system) resolve as given; ``include_system_vaults`` adds
+    all system vaults. System vaults never enter implicitly.
 
-    resolved: list[UUID] = []
-    for vid in vault_ids:
+    An empty/None ``vault_ids`` is treated the same as ``['*']`` — it expands
+    to all content vaults. This matches :func:`VaultService.resolve_vault_scope`
+    so a caller that forgets to forward a list still gets the content-only
+    default universe instead of an empty scope.
+
+    Pure scope-expansion logic lives in
+    :func:`memex_common.vault_utils.expand_vault_scope` (shared SSOT with
+    ``VaultService.resolve_vault_scope``). The MCP layer only does the
+    parts that need the API surface — name resolution and the system-vs-
+    content partition.
+    """
+    if not vault_ids:
+        vault_ids = [ALL_VAULTS_WILDCARD]
+    has_wildcard = ALL_VAULTS_WILDCARD in vault_ids
+    named = [v for v in vault_ids if v != ALL_VAULTS_WILDCARD]
+
+    named_ids: list[UUID] = []
+    for vid in named:
         try:
             r = await api.resolve_vault_identifier(vid)
-            resolved.append(UUID(str(r)) if not isinstance(r, UUID) else r)
         except Exception:
             raise ToolError(f'Vault not found: {vid!r}')
-    return resolved
+        named_ids.append(UUID(str(r)) if not isinstance(r, UUID) else r)
+
+    needs_partition = has_wildcard or include_system_vaults
+    content_vault_ids: list[UUID] = []
+    system_vault_ids: list[UUID] = []
+    if needs_partition:
+        for v in await api.list_vaults(include_system=True):
+            (
+                system_vault_ids if getattr(v, 'kind', 'content') == 'system' else content_vault_ids
+            ).append(v.id)
+
+    return expand_vault_scope(
+        named_ids,
+        content_vault_ids,
+        system_vault_ids,
+        has_wildcard=has_wildcard,
+        include_system_vaults=include_system_vaults,
+    )
 
 
 async def _resolve_vault_id(api: Any, vault_id: str) -> 'UUID':
@@ -215,113 +334,7 @@ logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex is a personal knowledge management system.
-
-TOOL DISCOVERY — This server supports progressive disclosure.
-If you see memex_tags/memex_search/memex_get_schema instead of the full tool list:
-  1. `memex_tags()` — see tool categories and counts
-  2. `memex_search(query, tags=[...])` — find tools by keyword, optionally filtered by tag
-  3. `memex_get_schema(tools=[...])` — get parameter details before calling a tool
-You can also call any tool directly by name if you already know it.
-
-VAULT DEFAULTS — vault parameters are optional. Writes default to the active vault;
-reads default to search vaults (from .memex.yaml or global config). Only pass
-vault_id/vault_ids to override.
-
-STORAGE MODEL — three layers:
-- **Notes**: source markdown documents. `note_key` upsert creates new
-  versions; old versions stay queryable. Use `memex_append_note` to
-  extend an existing note instead of re-sending the whole body.
-- **Memory units**: facts/events extracted from notes at ingestion.
-  **Append-only.** Contradiction detection runs at extraction time —
-  it records typed links and lowers an older unit's confidence when a
-  new note conflicts with it; note supersession cascades to stale on
-  its memory units. Do NOT try to edit, replace, or delete memory
-  units — to record a change, ingest a new note via `memex_add_note`.
-- **KV store**: namespaced operational state (preferences, project
-  bindings, conventions). Mutable upsert by exact key; entries support
-  TTL.
-
-Reflection is a separate background loop that reads memory units and
-synthesises observations about entities, bundled into versioned per-entity
-mental models with trend tracking (new/strengthening/stable/weakening/stale).
-Trends live on observations, not on memory units. Reflection output is
-read-only — surface it via search.
-
-ROUTING — select retrieval strategy by query type:
-
-IF you know (part of) the note title:
-  → TITLE SEARCH
-  1. `memex_find_note(query="title fragment")` → note IDs, titles, scores
-  2. Read via `memex_get_page_indices` → `memex_get_nodes` as needed
-
-IF query asks about relationships, connections, "how X fits in", "what relates to X", or landscape:
-  → ENTITY EXPLORATION (can combine with SEARCH)
-  1. `memex_list_entities(query="X")` → entity IDs, types, mention counts
-  2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
-  3. `memex_get_entity_mentions(entity_id)` → source memory units (facts/observations/events) linking back to notes
-  4. Read source notes via SEARCH/READ below as needed
-  Note: search results include `related_notes` and contradiction `links`.
-  For full relationship links (temporal, semantic, causal), use `memex_get_memory_links`.
-
-IF query asks about specific content, topics, or document lookup:
-  → SEARCH
-  1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
-  2. FILTER: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip this.
-  3. READ: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
-  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resources` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
-
-IF query is broad (e.g. "explain X and how it fits the architecture", "what do you know about X?"):
-  → Start with `memex_get_vault_summary(vault_id)` — cheap, precomputed, often answers on its own.
-  → Escalate to `memex_survey(query)` only if the summary is too coarse — survey auto-decomposes
-    into sub-questions, runs parallel retrievals, and returns grouped results, but is much
-    more expensive than the summary.
-  For manual control, use ENTITY EXPLORATION and SEARCH in parallel instead.
-
-IF storing/retrieving namespaced operational pointers (preferences, conventions, project bindings):
-  → KV STORE
-  - `memex_kv_write(value, key)` — store an operational pointer
-  - `memex_kv_get(key)` — exact key lookup
-  - `memex_kv_search(query)` — fuzzy semantic search over KV entries
-  - `memex_kv_list()` — list KV entries
-  When the user states a preference, convention, or binding (e.g. "always use uv", "my role is Staff Engineer", "this repo uses the `tidybit` vault"), proactively store it via `memex_kv_write` (e.g. under `project:github.com/user/repo:vault`).
-  Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
-
-RESPONSE FORMAT — MANDATORY for every response:
-- Cite every claim from Memex with numbered references [1], [2], etc. inline.
-- End response with a reference list. Each entry uses a type prefix:
-  `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID
-- Example: `[1] [note] Detailing the Sys Layer architecture — 2eb202ed-bee6-7b2a-f0b9-917e8d5dd6f0`
-
-IF checking vault overview, topics, or "what's in this vault":
-  → VAULT SUMMARY + SURVEY
-  1. `memex_get_vault_summary(vault_id)` → natural language summary, topics, stats
-  2. `memex_survey(query)` → decompose into sub-questions, parallel search, grouped results
-  Run both in parallel for comprehensive vault overview.
-
-IF user wants to annotate a note or update their commentary:
-  → USER NOTES
-  - `memex_update_user_notes(note_id, user_notes)` — update user annotations on a note
-  - `memex_search_user_notes(query)` — search only user annotations (source_context='user_notes')
-
-IF capturing structured content (architecture decision, RFC, retro, technical brief, learning):
-  → TEMPLATES (capture flow)
-  1. `memex_list_templates()` — see what's available with descriptions
-  2. `memex_get_template(slug)` — fetch the markdown scaffold
-  3. Write your note body following the template structure
-  4. `memex_add_note(..., template=slug)` — pass the slug so the note is tagged
-     and filterable later (`memex_list_notes(template=slug)`, vault summaries).
-  Built-ins: `general_note`, `technical_brief`, `architectural_decision_record`,
-  `request_for_comments`, `agent_reflection`, `quick_note`. Prefer a template over
-  free-form when the content has clear sections.
-
-RULES:
-- Only use IDs from tool output. Never fabricate IDs.
-- Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
-- Never use `memex_recent_notes` for discovery.
-
-`memex_memory_search` strategies: `["semantic"]` vector similarity, `["keyword"]` BM25 full-text, `["graph"]` entity-centric, `["temporal"]` chronological, `["mental_model"]` synthesized. Default (all) is best for general queries.
-""".strip(),
+    instructions=MCP_TRANSPORT_INSTRUCTIONS,
     version='0.1.0',
     lifespan=lifespan,
     on_duplicate='error',
@@ -338,8 +351,9 @@ if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() in ('1', 'true
 @mcp.tool(
     name='memex_list_assets',
     description=(
-        'List file attachments (assets) for a note — images, audio, PDFs, documents. '
-        'REQUIRED when has_assets is true. Feed paths to memex_get_resources to retrieve files.'
+        "List a note's file attachments (images, audio, PDFs, docs). Call when "
+        'has_assets is true to get asset paths, then pass them to '
+        'memex_get_resources to fetch the bytes. Requires note_id.'
     ),
     tags={'assets'},
     annotations={'readOnlyHint': True},
@@ -394,7 +408,12 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500 (use force=True to override). Otherwise: memex_get_page_indices + memex_get_nodes.',
+    description=(
+        'Read a whole note in one shot. Use ONLY when total_tokens < 500. For '
+        'larger notes do NOT set force — page through instead: '
+        'memex_get_page_indices (TOC) then memex_get_nodes (sections). '
+        'Errors if total_tokens >= 500 unless force=True. Requires note_id.'
+    ),
     tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -458,12 +477,17 @@ async def memex_read_note(
 @mcp.tool(
     name='memex_set_note_status',
     description=(
-        'Set note lifecycle status: active, superseded, appended, archived. '
-        '**Cascading side-effect:** marking a note `superseded` flags every '
-        'memory unit extracted from it as stale. Prefer letting contradiction '
-        'detection auto-supersede facts via a new ingested note; reach for '
-        'this tool only for explicit archival or when an immediate state '
-        'change is required. Optionally link to the replacing/parent note.'
+        'Set a note lifecycle status: active, superseded, or archived. '
+        'Use ONLY for explicit archival or an immediate forced state change; '
+        'prefer ingesting a new note and letting contradiction detection '
+        'auto-supersede facts. NOT for adding content (use memex_append_note, '
+        'the only path that sets the appended_to relation). Cascades: '
+        '`superseded` flags every extracted unit as stale; `archived` stamps '
+        '`archived_at` and sets the units `is_deprioritized=true` (FSFM '
+        'suppression) — they stay active, resurface via '
+        '`include_deprioritized=True`, restore one-by-one with '
+        'memex_memory_restore. Optionally pass linked_note_id to point at the '
+        'replacing/parent note.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -472,8 +496,8 @@ async def memex_set_note_status(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
     status: Annotated[
-        str,
-        Field(description='New status: active, superseded, or appended.'),
+        Literal['active', 'superseded', 'archived'],
+        Field(description='New status: active, superseded, or archived.'),
     ],
     linked_note_id: Annotated[
         str | None,
@@ -511,12 +535,11 @@ async def memex_set_note_status(
 @mcp.tool(
     name='memex_update_user_notes',
     description=(
-        'Update the `user_notes` field on an existing note and reprocess it '
-        'into the memory graph. Pass null to clear the field. Note: this is '
-        "one of the few surfaces where a note's extracted memory units are "
-        'deleted rather than superseded — old `user_notes` memory units are '
-        'removed and new ones are extracted from the new text. Use sparingly; '
-        'for content that should remain auditable, ingest a new note instead.'
+        'Replace the `user_notes` field on an existing note and re-extract it '
+        'into the memory graph. Pass null to clear it. DESTRUCTIVE: old '
+        'user_notes units are DELETED (not superseded) and new ones extracted '
+        'from the new text — so history is lost. Use sparingly; for anything '
+        'that must stay auditable, ingest a new note instead.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -549,7 +572,11 @@ async def memex_update_user_notes(
 
 @mcp.tool(
     name='memex_rename_note',
-    description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+    description=(
+        'Rename a note (title only). Updates the title across metadata, page '
+        'index, and doc_metadata; leaves body content and extracted units '
+        'untouched. To change content use memex_append_note. Requires note_id, new_title.'
+    ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
 )
@@ -677,7 +704,12 @@ async def memex_resize_image(
 
 @mcp.tool(
     name='memex_add_assets',
-    description='Add one or more file assets to an existing note. Provide local file paths.',
+    description=(
+        'Attach 1+ file assets (images, audio, PDFs, docs) to an existing note. '
+        'For text content use memex_append_note instead. Requires note_id and '
+        'absolute local file_paths. Errors if the note is not found or no path '
+        'resolves to a file.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=60.0,
@@ -709,7 +741,7 @@ async def memex_add_assets(
 
         files_content: dict[str, bytes] = {}
         for file_path in file_paths:
-            path = plb.Path(file_path)
+            path = _resolve_confined_asset_path(file_path)
             if not path.exists() or not path.is_file():
                 logger.warning(f'Asset file not found or not a file: {file_path}')
                 continue
@@ -750,7 +782,11 @@ async def memex_add_assets(
 
 @mcp.tool(
     name='memex_delete_assets',
-    description='Delete one or more asset files from an existing note. Get paths from memex_list_assets.',
+    description=(
+        'Detach 1+ asset files from a note. Get exact asset_paths from '
+        'memex_list_assets first. Requires note_id. Returns deleted and '
+        'not_found lists; errors if the note is not found.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=30.0,
@@ -953,7 +989,11 @@ async def memex_active_vault(ctx: Context) -> str:
 @mcp.tool(
     name='memex_add_note',
     description=(
-        'Add a new note or document to Memex. Ingest content into a vault. Confirm '
+        'Add a new note or document to Memex — a FACT / DECISION / DOCUMENT '
+        '("what is true"). NOT for how-to workflows, procedures, or worked '
+        'episodes ("how we deploy", "how the run went") — those go to '
+        'memex_case_submit, NEVER here (and never both). Ingest content into a '
+        'vault. Confirm '
         'vault with user first, or pass vault_id. For structured captures (ADRs, '
         'retros, technical briefs, RFCs), call memex_list_templates first and pass '
         'the chosen slug as `template` for provenance and downstream filtering. '
@@ -1036,6 +1076,29 @@ async def memex_add_note(
             description='Template slug used to create this note (e.g. "general_note").',
         ),
     ] = None,
+    intent_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional intent override applied to all extracted facts: '
+                '"permanent" (enduring user preferences/conventions), "durable" '
+                '(default), or "ephemeral" (transient context — drains Memory Worth faster). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional risk override: "none" (default), "private" (PII/secrets), '
+                '"sensitive" (restricted topic), "safety" (refuse persistence). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -1048,7 +1111,7 @@ async def memex_add_note(
         files_content: dict[str, bytes] = {}
         if supporting_files:
             for file_path in supporting_files:
-                path = plb.Path(file_path)
+                path = _resolve_confined_asset_path(file_path)
                 if path.exists() and path.is_file():
                     async with aiofiles.open(path, 'rb') as f:
                         files_content[path.name] = base64.b64encode(await f.read())
@@ -1082,6 +1145,27 @@ async def memex_add_note(
 
         effective_note_key = note_key if note_key else f'mcp:add_note:{title}'
 
+        from memex_common.schemas import IntentClass as _IntentClass, RiskClass as _RiskClass
+
+        parsed_intent: _IntentClass | None = None
+        if intent_class:
+            try:
+                parsed_intent = _IntentClass(intent_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid intent_class={intent_class!r}. '
+                    f'Allowed: {[c.value for c in _IntentClass]}'
+                )
+
+        parsed_risk: _RiskClass | None = None
+        if risk_class:
+            try:
+                parsed_risk = _RiskClass(risk_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid risk_class={risk_class!r}. Allowed: {[c.value for c in _RiskClass]}'
+                )
+
         note = NoteCreateDTO(
             name=title,
             description=description,
@@ -1093,6 +1177,8 @@ async def memex_add_note(
             user_notes=user_notes,
             author=author,
             template=template,
+            intent_class=parsed_intent,
+            risk_class=parsed_risk,
         )
 
         result = await api.ingest(note, background=background)
@@ -1128,12 +1214,12 @@ async def memex_add_note(
 @mcp.tool(
     name='memex_append_note',
     description=(
-        'Atomically append new content to an existing note. Send only the delta '
-        '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_add_note when adding to a '
-        'known existing note (e.g. a session log, an ongoing reflection). '
-        'Identify the note by the note_key you set when creating it (preferred); '
-        'note_id is also accepted if you already have one from a search.'
+        'Atomically append a delta to an existing note. Prefer over '
+        'memex_add_note whenever extending a note you already created (session '
+        'log, ongoing reflection) — send ONLY the new snippet; the server reads '
+        'and concatenates the existing body for you. Identify by note_key + '
+        'vault_id (preferred) or note_id from a search. Reusing an append_id '
+        'with a different delta/parent returns a 409.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -1242,7 +1328,15 @@ async def memex_append_note(
             joiner=joiner,
             user_notes=user_notes,
         )
-        response = await api.append_to_note(request)
+        response = await api.append_to_note(
+            note_id=request.note_id,
+            note_key=request.note_key,
+            vault_id=request.vault_id,
+            delta=request.delta,
+            append_id=request.append_id,
+            joiner=request.joiner,
+            user_notes=request.user_notes,
+        )
 
         return McpAppendNoteResult(
             note_id=response.note_id,
@@ -1271,13 +1365,16 @@ def compute_staleness(
     Priority: CONTESTED > confidence-based STALE > time-based (FRESH / AGING / STALE).
 
     Date fallback chain (resolved in ``_build_memory_unit_model``):
-        1. ``event_date`` — only present on the SQL model (MemoryUnit), not on
-           MemoryUnitDTO. Will be None when the DTO comes from the HTTP API.
-        2. ``mentioned_at`` — set on observations; for world facts the server's
+        1. ``mentioned_at`` — set on observations; for world facts the server's
            ``build_memory_unit_dto`` copies ``event_date`` into this field as a
            fallback (see ``memex_core.server.common``), so it is normally
            populated even for world facts.
-        3. ``occurred_start`` — set on events with a specific occurrence time.
+        2. ``occurred_start`` — set on events with a specific occurrence time.
+
+    ``event_date`` is surfaced on the DTO for output but is deliberately NOT the
+    head of this chain: ``mentioned_at`` already carries the event_date fallback,
+    and anchoring on the raw event_date would shift staleness for units whose
+    ``mentioned_at`` differs from it.
 
     If none of these dates are available (all None), staleness falls back to
     confidence alone: >= 0.7 → AGING, < 0.5 → STALE. This avoids penalising
@@ -1313,8 +1410,7 @@ def compute_staleness(
         return Staleness.STALE
 
     if event_date is not None and isinstance(event_date, _dt):
-        if event_date.tzinfo is None:
-            event_date = event_date.replace(tzinfo=_tz.utc)
+        event_date = _to_utc_datetime(event_date)
         age_days = (now - event_date).days
 
         if age_days > 30:
@@ -1394,6 +1490,14 @@ def _build_memory_unit_model(
         'virtual': is_virtual,
         'mental_model_id': mental_model_id_uuid,
         'evidence_ids': evidence_ids,
+        'success_co_count': getattr(res, 'success_co_count', 0),
+        'failure_co_count': getattr(res, 'failure_co_count', 0),
+        'is_deprioritized': getattr(res, 'is_deprioritized', False),
+        'intent_class': getattr(res, 'intent_class', 'durable'),
+        'risk_class': getattr(res, 'risk_class', 'none'),
+        'exploration': bool(unit_metadata.get('exploration', False)),
+        'created_at': getattr(res, 'created_at', None),
+        'event_date': getattr(res, 'event_date', None),
     }
 
     links_raw = unit_metadata.get('links', [])
@@ -1407,16 +1511,16 @@ def _build_memory_unit_model(
     base_kwargs['links'] = contradiction_links
 
     # Staleness date fallback chain — see compute_staleness docstring for semantics.
-    # event_date: only on SQL model (None on DTO from HTTP API)
     # mentioned_at: observations; also backfilled from event_date for world facts
-    # occurred_start: events with a specific occurrence time
-    event_date = (
-        getattr(res, 'event_date', None)
-        or getattr(res, 'mentioned_at', None)
-        or getattr(res, 'occurred_start', None)
-    )
+    #   (see build_memory_unit_dto), so it already carries the event_date anchor.
+    # occurred_start: events with a specific occurrence time.
+    # NB: res.event_date is now surfaced on the DTO for output, but is deliberately
+    # NOT the head of this chain — feeding it in would shift the staleness anchor
+    # for units whose mentioned_at differs from event_date, changing behavior
+    # product-wide. mentioned_at-first preserves the prior effective behavior.
+    staleness_anchor = getattr(res, 'mentioned_at', None) or getattr(res, 'occurred_start', None)
     base_kwargs['staleness'] = compute_staleness(
-        event_date=event_date,
+        event_date=staleness_anchor,
         confidence=base_kwargs['confidence'],
         superseded_by=getattr(res, 'superseded_by', None) or [],
         links=links_raw,
@@ -1452,6 +1556,7 @@ def _build_memory_unit_model(
         'Contradiction links are always included on returned units. '
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
+        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -1491,6 +1596,18 @@ async def memex_memory_search(
         bool,
         BeforeValidator(_coerce_bool),
         Field(default=False, description='Include superseded (low-confidence) memory units.'),
+    ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=False,
+            description=(
+                'Include deprioritized memories in results. '
+                'Default (false) returns only active, non-deprioritized memories. '
+                'Set to true for "remember when..." queries or explicit recall of past discussions.'
+            ),
+        ),
     ] = False,
     after: Annotated[
         str | None,
@@ -1548,21 +1665,93 @@ async def memex_memory_search(
             ),
         ),
     ] = False,
+    intent_class: Annotated[
+        IntentLiteral | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by intent class: permanent | durable | ephemeral. None disables the filter.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        RiskLiteral | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by risk class: none | sensitive | private | safety. '
+                'None disables the filter.'
+            ),
+        ),
+    ] = None,
+    apply_pre_filter: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=True,
+            description=(
+                'Pre-reranker Memory Worth/FSFM filter at hydration. Default True drops '
+                'obviously-failed (low Memory Worth) or decayed candidates before the '
+                'cross-encoder runs. Set False for HISTORICAL / AUDIT / LINEAGE queries '
+                '("how has my view on X evolved", "show me everything I used to think '
+                'about Y") — every pre-filter branch is bypassed in one go so '
+                'contradicted, behaviorally-failed, and decayed units appear. Post-'
+                'reranker boosts still apply, so contradicted units rank below clean ones.'
+            ),
+        ),
+    ] = True,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
-
-        from datetime import datetime as _dt, timezone as _tz
-
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
         )
+
+        from datetime import datetime as _dt
+
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
+
+        # Defense-in-depth: FastMCP+Pydantic rejects invalid Literal values
+        # upstream (the IntentLiteral / RiskLiteral annotations on the
+        # parameters above), so this check is unreachable for real MCP
+        # callers. We keep it as a safety net for direct-call paths that
+        # bypass schema validation — tests that pass raw strings, internal
+        # Python callers invoking the underlying ``.fn``, etc. — and to
+        # surface a clean ToolError (not a 422) at the boundary. Mirrors
+        # the CLI/Hermes-plugin pattern; canonical sets in memex_common.schemas.
+        from memex_common.schemas import (
+            VALID_INTENT_CLASSES,
+            VALID_RISK_CLASSES,
+            IntentClass,
+            RiskClass,
+        )
+
+        # Widen to ``str`` so mypy doesn't flag the membership check as unreachable.
+        # The Literal annotations on ``intent_class`` / ``risk_class`` constrain
+        # values for FastMCP+Pydantic callers, which would make mypy treat the
+        # ``not in`` branch as dead code; the cast preserves the defense-in-depth
+        # check for direct-call paths (tests, internal Python via ``.fn``) that
+        # bypass schema validation.
+        if intent_class is not None and cast(str, intent_class) not in VALID_INTENT_CLASSES:
+            raise ToolError(
+                f'Invalid intent_class={intent_class!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}'
+            )
+        if risk_class is not None and cast(str, risk_class) not in VALID_RISK_CLASSES:
+            raise ToolError(
+                f'Invalid risk_class={risk_class!r}. Allowed: {sorted(VALID_RISK_CLASSES)}'
+            )
 
         results = await api.search(
             query=query,
@@ -1571,12 +1760,16 @@ async def memex_memory_search(
             token_budget=token_budget,
             strategies=strategies,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+            apply_pre_filter=apply_pre_filter,
             after=after_dt,
             before=before_dt,
             tags=tags,
             source_context=source_context,
             reference_date=ref_dt,
             expand_query=expand_query,
+            intent_class=IntentClass(intent_class) if intent_class is not None else None,
+            risk_class=RiskClass(risk_class) if risk_class is not None else None,
         )
 
         if not results:
@@ -1609,6 +1802,27 @@ async def memex_memory_search(
         # Session-level dedup
         dedup = _get_session_dedup(ctx.session_id)
         output: list[McpFact | McpEvent | McpObservation] = []
+
+        # Surface a degradation warning if a search timeout forced retrieval to drop
+        # the graph/keyword signals — the agent must know the set is INCOMPLETE.
+        # (``is True`` guards against truthy MagicMock attrs in unit tests.)
+        if any(getattr(res, 'degraded', False) is True for res in results):
+            _dropped = sorted(
+                {s for res in results for s in getattr(res, 'dropped_strategies', None) or []}
+            )
+            output.append(
+                McpFact(
+                    id=UUID(int=0),
+                    text=(
+                        f'⚠️ Partial results — a statement timeout forced retrieval to drop the '
+                        f'{", ".join(_dropped) or "graph/keyword"} signal(s); these results are '
+                        'INCOMPLETE. Consider re-running the search or narrowing the query.'
+                    ),
+                    confidence=0.0,
+                    tags=['system-hint', 'degraded'],
+                )
+            )
+
         for res in results:
             mid = str(res.id)
             if not include_seen and mid in dedup.seen_memory_ids:
@@ -1683,6 +1897,7 @@ async def memex_search_user_notes(
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
+        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -1755,21 +1970,28 @@ async def memex_note_search(
             ),
         ),
     ] = None,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpNoteSearchResult]:
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
-
-        from datetime import datetime as _dt, timezone as _tz
-
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
         )
+
+        from datetime import datetime as _dt
+
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         search_limit = limit * 3 if has_assets else limit
         results = await api.search_notes(
@@ -1806,6 +2028,27 @@ async def memex_note_search(
         # Session-level dedup
         dedup = _get_session_dedup(ctx.session_id)
         output: list[McpNoteSearchResult] = []
+
+        # Surface a degradation warning if a search timeout forced retrieval to drop
+        # the graph/keyword signals — the agent must know the set is INCOMPLETE.
+        if any(getattr(d, 'degraded', False) is True for d in results):
+            _dropped = sorted(
+                {s for d in results for s in getattr(d, 'dropped_strategies', None) or []}
+            )
+            output.append(
+                McpNoteSearchResult(
+                    note_id=UUID(int=0),
+                    title='⚠️ Partial results — search degraded',
+                    score=0.0,
+                    description=(
+                        f'A statement timeout forced retrieval to drop the '
+                        f'{", ".join(_dropped) or "graph/keyword"} signal(s); these results are '
+                        'INCOMPLETE. Consider re-running the search or narrowing the query.'
+                    ),
+                    tags=['system-hint', 'degraded'],
+                )
+            )
+
         for doc in results:
             nid = str(doc.note_id)
             if not include_seen and nid in dedup.seen_note_ids:
@@ -1880,6 +2123,8 @@ async def memex_note_search(
                         tags=metadata.get('tags', []),
                         source_uri=metadata.get('source_uri'),
                         has_assets=metadata.get('has_assets', False),
+                        created_at=metadata.get('created_at'),
+                        publish_date=metadata.get('publish_date'),
                         related_notes=related_notes,
                         links=links,
                     )
@@ -1997,7 +2242,8 @@ async def _get_single_page_index(
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
-        'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content.'
+        'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content. '
+        'Each node carries assets[] — embedded image refs (path, alt_text, filename) parsed at ingest.'
     ),
     tags={'read'},
     annotations={'readOnlyHint': True},
@@ -2133,6 +2379,8 @@ async def memex_get_notes_metadata(
                     vault_name=meta.get('vault_name'),
                     tags=meta.get('tags', []),
                     has_assets=meta.get('has_assets', False),
+                    created_at=meta.get('created_at'),
+                    publish_date=meta.get('publish_date'),
                 )
             )
 
@@ -2149,7 +2397,8 @@ async def memex_get_notes_metadata(
     name='memex_get_nodes',
     description=(
         'Read note sections by node IDs. Get node IDs from memex_get_page_indices. '
-        'Accepts 1 or more IDs — use for single and batch reads.'
+        'Accepts 1 or more IDs — use for single and batch reads. '
+        'Each node carries block_id (pass to memex_get_memory_units) and assets[] (alt_text + path per section).'
     ),
     tags={'read'},
     annotations={'readOnlyHint': True},
@@ -2201,6 +2450,8 @@ async def memex_get_nodes(
                     title=node.title,
                     text=node.text,
                     level=node.level,
+                    block_id=node.block_id,
+                    assets=node.assets,
                 )
             )
 
@@ -2215,25 +2466,29 @@ async def memex_get_nodes(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all vaults with note counts. Each vault includes is_active and note_count.',
+    description=(
+        'List content vaults with note counts (is_active, note_count, kind). '
+        'Pass include_system_vaults=true to also list system vaults (inbox etc.).'
+    ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
 )
-async def memex_list_vaults(ctx: Context) -> list[McpVault]:
-    """List all available vaults with active status and note counts."""
+async def memex_list_vaults(ctx: Context, include_system_vaults: bool = False) -> list[McpVault]:
+    """List vaults with active status and note counts (content vaults by default)."""
     try:
         api = get_api(ctx)
         config = get_config(ctx)
 
         # Use list_vaults_with_counts for local API, fall back for remote
         try:
-            rows = await api.list_vaults_with_counts()
+            rows = await api.list_vaults_with_counts(include_system=include_system_vaults)
             active_vault_id = await api.resolve_vault_identifier(config.server.default_active_vault)
             return [
                 McpVault(
                     id=row['vault'].id,
                     name=row['vault'].name,
                     description=row['vault'].description,
+                    kind=getattr(row['vault'], 'kind', 'content'),
                     is_active=(row['vault'].id == active_vault_id),
                     note_count=row['note_count'],
                     last_note_added_at=row.get('last_note_added_at'),
@@ -2242,12 +2497,13 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
             ]
         except AttributeError:
             # Remote API — fall back to list_vaults (VaultDTO with is_active)
-            vaults = await api.list_vaults()
+            vaults = await api.list_vaults(include_system=include_system_vaults)
             return [
                 McpVault(
                     id=v.id,
                     name=v.name,
                     description=v.description,
+                    kind=getattr(v, 'kind', 'content'),
                     is_active=v.is_active,
                     last_note_added_at=v.last_note_added_at,
                     access=v.access,
@@ -2263,10 +2519,10 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
 @mcp.tool(
     name='memex_list_notes',
     description=(
-        'List notes with optional date, tag, and status filters. '
-        "Use after/before for temporal queries like 'documents from 2026'. "
-        'Use tags for topic filtering (AND semantics). '
-        'Use status to filter by lifecycle (active, archived, etc.).'
+        'List notes in one vault with optional date/tag/status/template filters. '
+        'Use for "documents from 2026" (after/before), topic filtering (tags, AND '
+        'semantics), or lifecycle (status: active, archived). For a cross-vault '
+        'newest-first feed use memex_recent_notes.'
     ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
@@ -2276,7 +2532,12 @@ async def memex_list_notes(
     ctx: Context,
     vault_id: Annotated[
         str | None,
-        Field(description='Vault UUID or name. Omit to use config defaults.'),
+        Field(
+            description=(
+                'Vault UUID or name to scope to, or "*" for ALL content vaults. '
+                'Omit to use config defaults.'
+            )
+        ),
     ] = None,
     after: Annotated[
         str | None,
@@ -2325,6 +2586,12 @@ async def memex_list_notes(
             ),
         ),
     ] = 'created_at',
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop per-note summaries to keep the response under hook-output caps.',
+        ),
+    ] = False,
 ) -> list[McpNote]:
     """List notes with optional date, tag, and status filters."""
     from datetime import datetime as _dt
@@ -2332,7 +2599,15 @@ async def memex_list_notes(
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_read_vaults(ctx)[0]
-        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        # "*" scopes across ALL content vaults (plural path); a named/UUID vault
+        # resolves to a single scope. Keeps browse flows honest about cross-vault
+        # listing instead of silently pinning the first default read vault.
+        resolved_vault_id: UUID | None = None
+        resolved_vault_ids: list[UUID] | None = None
+        if vault_id == ALL_VAULTS_WILDCARD:
+            resolved_vault_ids = await _resolve_vault_ids(api, [ALL_VAULTS_WILDCARD])
+        else:
+            resolved_vault_id = await _resolve_vault_id(api, vault_id)
 
         parsed_after = None
         parsed_before = None
@@ -2351,12 +2626,14 @@ async def memex_list_notes(
             limit=limit,
             offset=0,
             vault_id=resolved_vault_id,
+            vault_ids=resolved_vault_ids,
             after=parsed_after,
             before=parsed_before,
             template=template,
             tags=tags,
             status=status,
             date_field=date_by,
+            slim=slim,
         )
 
         return [
@@ -2384,8 +2661,12 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_recent_notes',
-    description='Browse recent notes. Defaults to all vaults. '
-    'Filter by vault names/UUIDs and optional date range.',
+    description=(
+        'Browse the most recently added notes (newest first), all vaults by '
+        'default. Use for "what did I capture lately". For tag/status/template '
+        'filtering within one vault use memex_list_notes. Optional vault_ids and '
+        'after/before date range.'
+    ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -2431,6 +2712,19 @@ async def memex_recent_notes(
             ),
         ),
     ] = 'created_at',
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop per-note summaries to keep the response under hook-output caps.',
+        ),
+    ] = False,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpNote]:
     """List recent notes."""
     from datetime import datetime as _dt
@@ -2440,7 +2734,9 @@ async def memex_recent_notes(
         resolved_vids = None
         if vault_ids:
             _validate_vault_ids(vault_ids)
-            resolved_vids = await _resolve_vault_ids(api, vault_ids)
+            resolved_vids = await _resolve_vault_ids(
+                api, vault_ids, include_system_vaults=include_system_vaults
+            )
 
         parsed_after = None
         parsed_before = None
@@ -2462,6 +2758,7 @@ async def memex_recent_notes(
             before=parsed_before,
             template=template,
             date_field=date_by,
+            slim=slim,
         )
 
         return [
@@ -2526,6 +2823,12 @@ async def memex_list_entities(
             ),
         ),
     ] = None,
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop entity description to keep the response under hook-output caps.',
+        ),
+    ] = False,
 ) -> list[McpEntity]:
     """List or search entities."""
     try:
@@ -2545,7 +2848,10 @@ async def memex_list_entities(
             entities = [
                 e
                 async for e in api.list_entities_ranked(
-                    limit=limit, vault_ids=resolved_vids, entity_type=entity_type
+                    limit=limit,
+                    vault_ids=resolved_vids,
+                    entity_type=entity_type,
+                    slim=slim,
                 )
             ]
 
@@ -2555,7 +2861,9 @@ async def memex_list_entities(
                 name=e.name,
                 type=e.entity_type,
                 mention_count=e.mention_count,
-                description=(e.metadata or {}).get('description'),
+                description=None
+                if slim
+                else (getattr(e, 'metadata', None) or {}).get('description'),
             )
             for e in entities
         ]
@@ -2641,7 +2949,13 @@ async def memex_get_entities(
 
 @mcp.tool(
     name='memex_get_entity_mentions',
-    description='Get facts, observations, and events that mention an entity. Each mention links to its source note, revealing cross-note connections.',
+    description=(
+        'Get facts, observations, and events that mention an entity. '
+        'Each mention links to its source note, revealing cross-note connections. '
+        'Defaults to active, non-superseded, non-deprioritized memory units; '
+        'set the include_* flags to widen to the historical record.'
+        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+    ),
     tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -2652,6 +2966,21 @@ async def memex_get_entity_mentions(
     limit: Annotated[
         int, BeforeValidator(_coerce_int), Field(description='Max mentions to return.')
     ] = 10,
+    include_stale: Annotated[
+        bool,
+        Field(description='Include archived/deleted units (default: active only).'),
+    ] = False,
+    include_superseded: Annotated[
+        bool,
+        Field(
+            description='Include units whose confidence has decayed below the '
+            'superseded threshold (default: exclude).'
+        ),
+    ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        Field(description='Include units the user/agent has deprioritized (default: exclude).'),
+    ] = False,
 ) -> list[McpEntityMention]:
     """Get memory units mentioning an entity."""
     try:
@@ -2661,7 +2990,13 @@ async def memex_get_entity_mentions(
         except ValueError:
             raise ToolError(f'Invalid Entity UUID: {entity_id}')
 
-        mentions = await api.get_entity_mentions(uuid_obj, limit=limit)
+        mentions = await api.get_entity_mentions(
+            uuid_obj,
+            limit=limit,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
 
         output: list[McpEntityMention] = []
         for m in mentions:
@@ -2696,7 +3031,17 @@ async def memex_get_entity_mentions(
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
-    description='Find entities that frequently appear alongside a given entity — the fastest way to map relationships and discover connected concepts. Returns entity names, types, and co-occurrence counts inline (no follow-up calls needed). Use this for "what relates to X?" questions.',
+    description=(
+        'Find entities that frequently appear alongside a given entity — the fastest '
+        'way to map relationships and discover connected concepts. Returns entity '
+        'names, types, and co-occurrence counts inline (no follow-up calls needed). '
+        'Use this for "what relates to X?" questions. '
+        'Counts are corpus frequency across the entire historical record (including '
+        'superseded / deprioritized / archived units) — a high count says "these have '
+        'been mentioned together a lot", NOT "the current best understanding links '
+        'them". For currency, follow up with memex_get_entity_mentions (which '
+        'defaults to active, non-superseded units).'
+    ),
     tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -2837,7 +3182,12 @@ async def memex_get_lineage(
 
 @mcp.tool(
     name='memex_get_memory_units',
-    description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+    description=(
+        'Batch lookup of memory units. Provide exactly one of '
+        '`unit_ids` (direct ID lookup) or `chunk_ids` (returns all units '
+        'extracted from the named chunks, vault-scoped). Includes '
+        'contradiction links and supersession info.'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -2845,31 +3195,84 @@ async def memex_get_lineage(
 async def memex_get_memory_units(
     ctx: Context,
     unit_ids: Annotated[
-        list[str], BeforeValidator(_coerce_list), Field(description='List of memory unit UUIDs.')
-    ],
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(default=None, description='List of memory unit UUIDs.'),
+    ] = None,
+    chunk_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'List of chunk UUIDs. Returns all memory units extracted from '
+                'these chunks, scoped to `vault_id`. Mutually exclusive with `unit_ids`.'
+            ),
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Vault UUID or name. Required when `chunk_ids` is set; ignored '
+                'for the `unit_ids` path. Defaults to the active read vault.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Retrieve multiple memory units with their contradiction context."""
+    if (unit_ids is None) == (chunk_ids is None):
+        raise ToolError('Provide exactly one of `unit_ids` or `chunk_ids` (not both, not neither).')
+
     try:
         api = get_api(ctx)
         output: list[McpFact | McpEvent | McpObservation] = []
-        for uid_str in unit_ids:
+
+        if unit_ids is not None:
+            for uid_str in unit_ids:
+                try:
+                    uuid_obj = UUID(uid_str)
+                except ValueError:
+                    continue
+
+                try:
+                    unit = await api.get_memory_unit(uuid_obj)
+                except Exception:
+                    continue
+
+                if unit is None:
+                    continue
+
+                output.append(_build_memory_unit_model(unit))
+
+            return output
+
+        chunk_uuids: list[UUID] = []
+        for cid_str in chunk_ids or []:
             try:
-                uuid_obj = UUID(uid_str)
+                chunk_uuids.append(UUID(cid_str))
             except ValueError:
                 continue
 
-            try:
-                unit = await api.get_memory_unit(uuid_obj)
-            except Exception:
-                continue
+        if not chunk_uuids:
+            return []
 
-            if unit is None:
-                continue
+        # Chunk traversal is a read operation — default to the active read
+        # vault (matches the convention used by other MCP read tools, e.g.
+        # memex_list_notes). Use the first read vault when multiple are
+        # configured; the agent can pass `vault_id` explicitly to override.
+        vault_str = vault_id or _default_read_vaults(ctx)[0]
+        resolved_vault = await _resolve_vault_id(api, vault_str)
 
+        units = await api.get_memory_units_by_chunks(chunk_uuids, resolved_vault)
+        for unit in units:
             output.append(_build_memory_unit_model(unit))
 
         return output
 
+    except ToolError:
+        raise
     except Exception as e:
         logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
@@ -2948,6 +3351,88 @@ async def memex_get_memory_links(
 
 
 @mcp.tool(
+    name='memex_get_unit_history',
+    description=(
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    tags={'storage'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_unit_history(
+    ctx: Context,
+    unit_id: Annotated[
+        str,
+        Field(description='Memory unit UUID to start the walk from (root, depth=0).'),
+    ],
+    vault_id: Annotated[
+        str,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. REQUIRED for per-vault '
+                'auth scoping (vault-scoping invariant). Cross-vault '
+                'links are filtered out.'
+            ),
+        ),
+    ],
+    max_depth: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(
+            description=(
+                'Maximum recursion depth for the contradiction walk. Nodes '
+                'reached at the cap are returned with truncated=True.'
+            ),
+        ),
+    ] = 10,
+) -> dict[str, Any]:
+    """Walk the contradiction graph backward from ``unit_id`` (newer -> older).
+
+    v1 returns supersession history (negative-evidence path:
+    contradicts/weakens links), NOT full confidence evolution. A future
+    ``forward=True`` extension can walk ``reinforces`` separately.
+
+    Returns a JSON-serialised ``UnitHistoryNodeDTO`` tree rooted at
+    ``unit_id`` (depth=0). Predecessors are nested under each node and
+    sorted oldest-first by ``event_date``. ``link_type`` on each
+    non-root node names the supersession edge from that node to its
+    parent (the newer authoritative unit).
+    """
+    try:
+        api = get_api(ctx)
+
+        try:
+            unit_uuid = UUID(unit_id)
+        except (ValueError, TypeError):
+            raise ToolError(f'Invalid unit_id: {unit_id!r}')
+
+        resolved_vault = await _resolve_vault_id(api, vault_id)
+
+        if max_depth < 0:
+            raise ToolError('max_depth must be >= 0.')
+
+        history = await api.get_unit_history(
+            unit_uuid,
+            max_depth=max_depth,
+            vault_id=resolved_vault,
+        )
+
+        return cast(dict[str, Any], history.model_dump(mode='json'))
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Get unit history failed: {e}', exc_info=True)
+        raise ToolError(f'Get unit history failed: {e}')
+
+
+@mcp.tool(
     name='memex_find_note',
     description=(
         'Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. '
@@ -2965,10 +3450,17 @@ async def memex_find_note(
         BeforeValidator(_coerce_list),
         Field(
             default=None,
-            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. Use "*" for all vaults. None = all vaults.',
+            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. "*" or None = all content vaults.',
         ),
     ] = None,
     limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpFindResult]:
     """Find notes by approximate title match."""
     try:
@@ -2977,7 +3469,9 @@ async def memex_find_note(
         resolved_vids: list[UUID] | None = None
         if vault_ids:
             _validate_vault_ids(vault_ids)
-            resolved_vids = await _resolve_vault_ids(api, vault_ids)
+            resolved_vids = await _resolve_vault_ids(
+                api, vault_ids, include_system_vaults=include_system_vaults
+            )
 
         results = await api.find_notes_by_title(
             query=query,
@@ -3004,25 +3498,13 @@ async def memex_find_note(
 
 
 @mcp.tool(
-    name='memex_kv_write',
-    description=(
-        'Write a namespaced operational pointer to the key-value store — a '
-        'preference, project binding, or convention. Generates an embedding '
-        'for fuzzy lookup. NOT for facts learned from content (events, '
-        'observations, claims) — those become memory units when you call '
-        '`memex_add_note`. '
-        'Key MUST start with a namespace prefix: '
-        '"global:" (always loaded), "user:" (personal prefs), '
-        '"project:<project-id>:" (project-scoped), or '
-        '"app:<app-id>:" (application-scoped). '
-        'Examples: "global:tool:python:pkg_mgr", "user:work:employer", '
-        '"project:github.com/user/repo:vault", "app:claude-code:theme".'
-    ),
+    name='memex_kv_put',
+    description=_MEMEX_KV_PUT_DESCRIPTION,
     tags={'storage'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
 )
-async def memex_kv_write(
+async def memex_kv_put(
     ctx: Context,
     value: Annotated[
         str,
@@ -3048,9 +3530,17 @@ async def memex_kv_write(
             ),
         ),
     ] = None,
-) -> McpKVWriteResult:
+) -> McpKVPutResult:
     """Write an operational pointer to the KV store with embedding generation."""
     try:
+        # Mirror the server-side namespace gate (services/kv.py) client-side so
+        # the LLM gets a fast, clear error instead of a round-trip 4xx.
+        if not key.startswith(tuple(f'{ns}:' for ns in VALID_NAMESPACES)):
+            raise ToolError(
+                f'Invalid key {key!r}: must start with one of '
+                f'{", ".join(f"{ns}:" for ns in VALID_NAMESPACES)}'
+            )
+
         api = get_api(ctx)
 
         # Generate embedding for semantic search via the API layer
@@ -3064,20 +3554,24 @@ async def memex_kv_write(
         )
 
         scope = _scope_from_key(entry.key)
-        return McpKVWriteResult(
+        return McpKVPutResult(
             key=entry.key, value=entry.value, scope=scope, expires_at=entry.expires_at
         )
 
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'KV write failed: {e}', exc_info=True)
-        raise ToolError(f'KV write failed: {e}')
+        logger.error(f'KV put failed: {e}', exc_info=True)
+        raise ToolError(f'KV put failed: {e}')
 
 
 @mcp.tool(
     name='memex_kv_get',
-    description='Get a KV entry by exact key.',
+    description=(
+        'Fetch one KV entry by its exact full key (e.g. "global:preferences:editor"). '
+        'Returns null if absent. When you do not know the exact key, use '
+        'memex_kv_search (fuzzy) or memex_kv_list (browse by namespace).'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -3115,6 +3609,7 @@ async def memex_kv_get(
         'Fuzzy search KV entries by semantic similarity. '
         'Returns the closest matching entries. '
         'Optionally filter by namespace prefixes (global, user, project).'
+        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3135,7 +3630,7 @@ async def memex_kv_search(
     """Semantic search over KV store entries."""
     try:
         api = get_api(ctx)
-        results = await api.kv_search(query=query, namespaces=namespaces, limit=limit)
+        results = await api.kv_search_text(query=query, namespaces=namespaces, limit=limit)
 
         return [
             McpKVEntry(
@@ -3158,8 +3653,10 @@ async def memex_kv_search(
 @mcp.tool(
     name='memex_kv_list',
     description=(
-        'List KV entries (preferences, project bindings, conventions). '
-        'Optionally filter by namespace prefixes (global, user, project).'
+        'Browse KV entries (preferences, project bindings, conventions) by '
+        'namespace. Filter via namespaces (global, user, project) or a trailing-'
+        'wildcard pattern. For exact-key fetch use memex_kv_get; for fuzzy lookup '
+        'use memex_kv_search.'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3212,6 +3709,7 @@ async def memex_kv_list(
         'runs parallel searches, deduplicates, and returns facts grouped by source note. '
         'Use for panoramic queries like "what do you know about X?" instead of '
         'making many manual search calls.'
+        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -3237,19 +3735,57 @@ async def memex_survey(
         BeforeValidator(_coerce_int),
         Field(description='Max token budget for all results. Truncates when exceeded.'),
     ] = None,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None, description='Only results before this ISO 8601 date (e.g. 2025-12-31).'
+        ),
+    ] = None,
+    reference_date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'ISO-8601 timestamp. Relative dates in the query (e.g. "last week") '
+                'resolve against this instead of now(). Use for historical queries.'
+            ),
+        ),
+    ] = None,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> McpSurveyResult:
     """Survey a broad topic — decompose, parallel search, grouped results."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
+        )
+
+        from datetime import datetime as _dt
+
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         result = await api.survey(
             query=query,
             vault_ids=resolved_vids,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after_dt,
+            before=before_dt,
+            reference_date=ref_dt,
         )
 
         topics = [
@@ -3330,6 +3866,115 @@ async def memex_get_vault_summary(
         raise ToolError(f'Get vault summary failed: {e}')
 
 
+from memex_mcp._resolution_flow_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _DEPRIORITIZE_DESCRIPTION,
+    MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_record_outcome',
+    description=_RECORD_OUTCOME_DESCRIPTION,
+    tags={'write'},
+    annotations={'readOnlyHint': False},
+)
+async def memex_record_outcome(
+    ctx: Context,
+    success: Annotated[
+        bool | None,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=None,
+            description=(
+                'Legacy shape (FutureWarning). True if the task succeeded, false '
+                'if it failed. Prefer the `units` parameter with per-unit verbs.'
+            ),
+        ),
+    ] = None,
+    units: Annotated[
+        list[dict] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'Per-unit verb classifications. Each entry: '
+                '{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
+                'reason: str}. `reason` is required for helpful and not_helpful. '
+                'Examples — good: [{"unit_id": "...", "verb": "helpful", '
+                '"reason": "named the right module"}, {"unit_id": "...", '
+                '"verb": "not_used", "reason": null}]. Bad: classifying everything '
+                'helpful or omitting reason for credit-bearing verbs.'
+            ),
+        ),
+    ] = None,
+    unit_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'Legacy shape (FutureWarning). UUIDs of memory units '
+                'you actually used. Prefer the `units` parameter.'
+            ),
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
+    outcome_confidence: Annotated[
+        float,
+        BeforeValidator(_coerce_float),
+        Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description='Weight for this outcome signal (0.0-1.0). Default 1.0.',
+        ),
+    ] = 1.0,
+    reason: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Optional free-text reason for the outcome (logged, not stored on units).',
+        ),
+    ] = None,
+    retrieved_set_size: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                'Size of the retrieved set the caller was asked to classify. '
+                'Drives coverage_ratio on the audit log. Pass explicitly to '
+                'enable coverage tracking; omitting leaves coverage_ratio NULL.'
+            ),
+        ),
+    ] = None,
+) -> dict:
+    """Record an outcome for memory units to train Memory Worth scoring."""
+    try:
+        api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
+        resolved_vid = await _resolve_vault_id(api, vault_id)
+
+        return await api.record_outcome(
+            unit_ids=unit_ids,
+            success=success,
+            vault_id=str(resolved_vid),
+            outcome_confidence=outcome_confidence,
+            reason=reason,
+            units=units,
+            retrieved_set_size=retrieved_set_size,
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Record outcome failed: {e}', exc_info=True)
+        raise ToolError(f'Record outcome failed: {e}')
+
+
 def entrypoint():
     """Entrypoint for the MCP server.
 
@@ -3349,3 +3994,898 @@ def entrypoint():
 
 if __name__ == '__main__':
     entrypoint()
+
+
+# ============================================================
+# Tier A — Tool registry
+# ============================================================
+
+# --- Deprioritize / Restore ---
+
+from memex_mcp._deprioritize_descriptions import (
+    MEMEX_MEMORY_RESTORE_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_memory_deprioritize',
+    description=_DEPRIORITIZE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_deprioritize(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+    reason: Annotated[
+        str,
+        Field(description='Why this unit is being deprioritized. Free text; logged to audit_logs.'),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. Defaults to the active '
+                'write vault. Required for vault-scoping; cross-vault calls '
+                'are rejected.'
+            ),
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    """Deprioritize a memory unit (non-destructive)."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        resolved_vault = await _resolve_vault_id(
+            api, vault_id if vault_id is not None else _default_write_vault(ctx)
+        )
+        try:
+            unit = await api.deprioritize_memory_unit(
+                uuid_obj, reason=reason, vault_id=resolved_vault
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            if exc.response.status_code == 403:
+                raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
+            if exc.response.status_code == 400:
+                # The server redirects observation-id targets to their source
+                # MUs via a structured 400 (ObservationReadOnlyError →
+                # {'detail': {'error': ..., 'source_memory_units': [...]}}).
+                # httpx's raise_for_status flattens the body to a bare message
+                # string, so the redirect must be re-surfaced HERE or the agent
+                # loses the retry target the tool contract promises. Other 400s
+                # (ambiguous/validation) carry a plain-string detail and fall
+                # through to the bare raise unchanged.
+                try:
+                    detail = exc.response.json().get('detail')
+                except Exception:
+                    detail = None
+                if isinstance(detail, dict) and detail.get('source_memory_units'):
+                    sources = ', '.join(str(u) for u in detail['source_memory_units'])
+                    raise ToolError(
+                        f'{unit_id} is a read-only observation (a projection of '
+                        f'mental-model evidence), not a deprioritizable memory unit. '
+                        f'Deprioritize its source memory unit(s) instead: {sources}.'
+                    )
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Deprioritize failed: {e}', exc_info=True)
+        raise ToolError(f'Deprioritize failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_restore',
+    description=MEMEX_MEMORY_RESTORE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_restore(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. Defaults to the active '
+                'write vault. Required for vault-scoping; cross-vault calls '
+                'are rejected.'
+            ),
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    """Restore a deprioritized memory unit."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        resolved_vault = await _resolve_vault_id(
+            api, vault_id if vault_id is not None else _default_write_vault(ctx)
+        )
+        try:
+            unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            if exc.response.status_code == 403:
+                raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': False}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Restore failed: {e}', exc_info=True)
+        raise ToolError(f'Restore failed: {e}')
+
+
+# --- Summarize ---
+
+from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_memory_summarize_node',
+    description=MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=120.0,
+)
+async def memex_memory_summarize_node(
+    ctx: Context,
+    entity_id: Annotated[str, Field(description='Entity UUID to reflect on.')],
+    scope: Annotated[
+        str,
+        Field(
+            description=(
+                "'incremental' (default — only new evidence) or 'full' "
+                '(re-evaluate all evidence; capped at 100 units).'
+            ),
+        ),
+    ] = 'incremental',
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID; defaults to the global vault when None.'),
+    ] = None,
+) -> dict[str, Any]:
+    """Synchronously consolidate memories on an entity into its mental model."""
+    from memex_common.client import RateLimitExceeded, ReflectionAbandoned
+
+    try:
+        api = get_api(ctx)
+        try:
+            entity_uuid = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid entity UUID: {entity_id}')
+        vault_uuid: UUID | None
+        if vault_id is None:
+            vault_uuid = None
+        else:
+            try:
+                vault_uuid = UUID(vault_id)
+            except ValueError:
+                raise ToolError(f'Invalid vault UUID: {vault_id}')
+        if scope not in ('incremental', 'full'):
+            raise ToolError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        try:
+            result = await api.summarize_node(entity_uuid, scope=scope, vault_id=vault_uuid)
+        except RateLimitExceeded as exc:
+            return {
+                'error': 'rate_limit_exceeded',
+                'entity_id': entity_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        except ReflectionAbandoned as exc:
+            envelope: dict[str, Any] = {
+                'error': 'reflection_abandoned',
+                'entity_id': entity_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+            if exc.hint:
+                envelope['hint'] = exc.hint
+            return envelope
+        return {
+            'entity_id': str(result.entity_id),
+            'observation_count': len(result.new_observations),
+            'status': result.status,
+            'scope': scope,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_summarize_node failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_summarize_node failed: {e}')
+
+
+# --- Lint ---
+
+from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_get_lint_flags',
+    description=MEMEX_GET_LINT_FLAGS_DESCRIPTION,
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_lint_flags(
+    ctx: Context,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name to scope the query. When omitted, falls '
+                'through to the active write vault from session config (per '
+                'vault-scoping invariant — never falls through to a '
+                'global all-vault view).'
+            ),
+        ),
+    ] = None,
+    lint_type: Annotated[
+        str | None,
+        Field(description='structural | quality | governance | schema | routing'),
+    ] = None,
+    status: Annotated[
+        str,
+        Field(description='pending | resolved | dismissed (default: pending)'),
+    ] = 'pending',
+    limit: Annotated[int, Field(ge=1, le=200, description='Page size (default 20, max 200).')] = 20,
+    cursor: Annotated[
+        str | None,
+        Field(description='Opaque cursor from a prior page; omit on first call.'),
+    ] = None,
+) -> dict[str, Any]:
+    """Read-only surface: list pending memory-hygiene findings.
+
+    Previously a missing ``vault_id`` would fall through to a
+    global all-vault view, leaking findings across tenants. The tool now
+    binds to the session's active write vault when no ``vault_id`` is
+    provided. Cross-tenant probing requires an explicit ``vault_id`` that
+    the principal's auth context allows.
+    """
+    try:
+        api = get_api(ctx)
+        # Never fall through to all-vault — always scope to a concrete vault.
+        # Default to the session's active write vault when vault_id is omitted.
+        effective_vault = vault_id if vault_id is not None else _default_write_vault(ctx)
+        resolved_vault = str(await _resolve_vault_id(api, effective_vault))
+        try:
+            return await api.lint_get_flags(
+                vault_id=resolved_vault,
+                lint_type=lint_type,
+                status=status,
+                limit=limit,
+                cursor=cursor,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 503:
+                # translate the server's structured envelope.
+                detail = exc.response.json().get('detail', {})
+                if (
+                    isinstance(detail, dict)
+                    and detail.get('error') == 'lint_subsystem_not_initialized'
+                ):
+                    return detail
+            raise
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_get_lint_flags failed: {e}', exc_info=True)
+        raise ToolError(f'memex_get_lint_flags failed: {e}')
+
+
+from memex_mcp._lint_resolution_descriptions import (
+    MEMEX_LINT_APPLY_WINNER_DESCRIPTION,
+    MEMEX_LINT_REVERSE_WINNER_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_lint_apply_winner',
+    description=MEMEX_LINT_APPLY_WINNER_DESCRIPTION,
+    tags={'write', 'storage', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_lint_apply_winner(
+    ctx: Context,
+    finding_id: Annotated[
+        str,
+        Field(description='UUID of the pending winner-proposal finding to apply.'),
+    ],
+) -> dict[str, Any]:
+    """Write surface: apply the recommended action on a winner-proposal finding."""
+    try:
+        api = get_api(ctx)
+        return await api.lint_apply_winner(finding_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_lint_apply_winner failed: {e}', exc_info=True)
+        raise ToolError(f'memex_lint_apply_winner failed: {e}')
+
+
+@mcp.tool(
+    name='memex_lint_reverse_winner',
+    description=MEMEX_LINT_REVERSE_WINNER_DESCRIPTION,
+    tags={'write', 'storage', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_lint_reverse_winner(
+    ctx: Context,
+    finding_id: Annotated[
+        str,
+        Field(description='UUID of the previously applied winner-proposal finding to reverse.'),
+    ],
+) -> dict[str, Any]:
+    """Write surface: reverse a previously applied winner-proposal."""
+    try:
+        api = get_api(ctx)
+        return await api.lint_reverse_winner(finding_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_lint_reverse_winner failed: {e}', exc_info=True)
+        raise ToolError(f'memex_lint_reverse_winner failed: {e}')
+
+
+# --- External lint proposals (closed action catalogue) ---
+
+from memex_common.tool_descriptions import (
+    MEMEX_LIST_LINT_ACTIONS_DESC,
+    MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+)
+
+
+@mcp.tool(
+    name='memex_list_lint_actions',
+    description=MEMEX_LIST_LINT_ACTIONS_DESC,
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_list_lint_actions(ctx: Context) -> dict[str, Any]:
+    """Read-only catalogue dump; the registry only grows with core releases."""
+    try:
+        api = get_api(ctx)
+        return await api.list_lint_actions()
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_list_lint_actions failed: {e}', exc_info=True)
+        raise ToolError(f'memex_list_lint_actions failed: {e}')
+
+
+@mcp.tool(
+    name='memex_submit_lint_proposal',
+    description=MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+    tags={'write', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False},
+    timeout=30.0,
+)
+async def memex_submit_lint_proposal(
+    ctx: Context,
+    rule_name: Annotated[
+        str,
+        Field(
+            description=(
+                'Caller-owned lowercase slug; internal rule names and the llm_ prefix are reserved.'
+            ),
+        ),
+    ],
+    lint_type: Annotated[
+        str,
+        Field(description='structural | quality | governance | schema | routing'),
+    ],
+    target_type: Annotated[
+        str,
+        Field(description="Construct kind: 'note' | 'memory_unit' | 'entity' | 'kv' | ..."),
+    ],
+    target_id: Annotated[
+        str,
+        Field(description='UUID of the targeted construct (KV key for kv targets).'),
+    ],
+    description: Annotated[
+        str,
+        Field(description='Why the rule fired — shown to the reviewer (max 500 chars).'),
+    ],
+    suggested_action: Annotated[
+        str,
+        Field(description='Free-text remediation summary (max 500 chars).'),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name. Defaults to the active write vault when '
+                'omitted (vault-scoping invariant).'
+            ),
+        ),
+    ] = None,
+    evidence: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                'Supporting payload; keys resolution / rule_metadata / '
+                'proposed_action are server-owned and rejected.'
+            ),
+        ),
+    ] = None,
+    proposed_action: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                '{action_name, params} from memex_list_lint_actions; must '
+                'apply to target_type and pass its params schema.'
+            ),
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    """File one pending finding for human review; mutates nothing else.
+
+    The per-item submission contract (created / deduplicated /
+    cooldown_suppressed / rejected) is surfaced verbatim from the server
+    so retry-happy callers can branch on it.
+    """
+    try:
+        api = get_api(ctx)
+        effective_vault = vault_id if vault_id is not None else _default_write_vault(ctx)
+        resolved_vault = str(await _resolve_vault_id(api, effective_vault))
+        proposal: dict[str, Any] = {
+            'vault_id': resolved_vault,
+            'rule_name': rule_name,
+            'lint_type': lint_type,
+            'target_type': target_type,
+            'target_id': target_id,
+            'description': description,
+            'suggested_action': suggested_action,
+        }
+        if evidence is not None:
+            proposal['evidence'] = evidence
+        if proposed_action is not None:
+            proposal['proposed_action'] = proposed_action
+        result = await api.submit_lint_proposals([proposal])
+        # Non-2xx responses already raise httpx.HTTPStatusError upstream
+        # (client._handle_response -> raise_for_status) and are surfaced as a
+        # ToolError by the outer handler. A 200-with-error-body envelope, by
+        # contrast, would slip through silently: the prior code returned the
+        # raw dict whenever `results` was absent/empty, so an error payload
+        # like {'error': 'rate_limited'} reached the caller masquerading as a
+        # success. Detect the error envelope here and fail loudly instead.
+        # Mirrors the structured-envelope handling in memex_get_lint_flags
+        # (detail.get('error')).
+        if not isinstance(result, dict):
+            raise ToolError(
+                f'memex_submit_lint_proposal: unexpected response (expected an '
+                f'object with a results list, got {type(result).__name__})'
+            )
+        items = result.get('results')
+        if not isinstance(items, list) or not items:
+            # No usable result row: either an error envelope (e.g.
+            # {'error': 'rate_limited'}) or a 200 with an empty/missing
+            # results list. We submitted exactly one proposal, so a missing
+            # row is never a normal success — surface the server's detail.
+            error_detail = result.get('error') or result.get('detail') or result
+            raise ToolError(f'memex_submit_lint_proposal failed: {error_detail}')
+        return items[0]
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_submit_lint_proposal failed: {e}', exc_info=True)
+        raise ToolError(f'memex_submit_lint_proposal failed: {e}')
+
+
+# --- Consolidation ---
+
+from memex_mcp._reconsolidate_descriptions import (
+    MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
+    MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_memory_reconsolidate',
+    description=MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=120.0,
+)
+async def memex_memory_reconsolidate(
+    ctx: Context,
+    entity_id: Annotated[str, Field(description='Entity UUID to reconsolidate.')],
+    vault_id: Annotated[
+        str, Field(description='Vault UUID — required for vault-scoped resolution.')
+    ],
+) -> dict[str, Any]:
+    """Re-evaluate memories on an entity under a per-entity advisory lock."""
+    try:
+        api = get_api(ctx)
+        try:
+            entity_uuid = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid entity UUID: {entity_id}')
+        try:
+            vault_uuid = UUID(vault_id)
+        except ValueError:
+            raise ToolError(f'Invalid vault UUID: {vault_id}')
+        try:
+            return await api.reconsolidate_entity(entity_uuid, vault_uuid)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                return {
+                    'error': 'lock_contention',
+                    'entity_id': entity_id,
+                    'message': 'another reconsolidation is in progress; retry in a moment',
+                }
+            raise
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_reconsolidate failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_reconsolidate failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_consolidate',
+    description=MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=300.0,
+)
+async def memex_memory_consolidate(
+    ctx: Context,
+    vault_id: Annotated[str, Field(description='Vault UUID to consolidate.')],
+    dry_run: Annotated[
+        bool,
+        Field(description='If true, return preview without making changes.'),
+    ] = False,
+) -> dict[str, Any]:
+    """Vault-wide low-Memory-Worth unit consolidation.
+
+    Rate-limited per vault (default 1 call per vault per
+    hour). On 429 the tool returns a structured envelope with
+    ``retry_after_seconds`` rather than raising — mirrors the
+    summarize-node contract so agents can back off without retry loops.
+    """
+    from memex_common.client import RateLimitExceeded
+
+    try:
+        api = get_api(ctx)
+        try:
+            vault_uuid = UUID(vault_id)
+        except ValueError:
+            raise ToolError(f'Invalid vault UUID: {vault_id}')
+        try:
+            return await api.consolidate_vault(vault_uuid, dry_run=dry_run)
+        except RateLimitExceeded as exc:
+            return {
+                'error': 'rate_limit_exceeded',
+                'vault_id': vault_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_consolidate failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_consolidate failed: {e}')
+
+
+# --- Diagnostics ---
+@mcp.tool(
+    name='memex_get_diagnostics_summary',
+    description=(
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg Memory Worth score, '
+        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces '
+        'manifold status without waiting on compute.'
+    ),
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_diagnostics_summary(
+    ctx: Context,
+    vault_id: Annotated[
+        str,
+        Field(description='Vault UUID or name.'),
+    ],
+) -> dict[str, Any]:
+    """Return the diagnostics summary for a vault."""
+    try:
+        api = get_api(ctx)
+        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        return await api.get_diagnostics_summary(resolved_vault_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Diagnostics summary failed: {e}', exc_info=True)
+        raise ToolError(f'Diagnostics summary failed: {e}')
+
+
+# --- Procedural plane  ---
+
+
+def _dto_to_mcp_entry(dto: ProceduralEntryDTO) -> McpProceduralEntry:
+    """Convert a MemexAPI ProceduralEntryDTO to the MCP-facing shape.
+
+    The DTO is the cross-package envelope; the MCP model is the
+    tool-boundary shape. They share the same column set EXCEPT ``vault_id``,
+    which is deliberately dropped at this boundary (the backing system vault
+    must not leak to agents — see McpProceduralEntry). The McpProceduralEntry
+    model uses ``extra='forbid'`` so any new DTO field added without a
+    corresponding MCP field surfaces here rather than silently shipping to
+    clients.
+    """
+    return McpProceduralEntry(
+        id=dto.id,
+        # vault_id intentionally NOT copied — the backing `procedural` system
+        # vault is storage plumbing the agent must not see (see McpProceduralEntry).
+        kind=dto.kind,
+        scope=dto.scope,
+        verb=dto.verb,
+        context=dto.context,
+        title=dto.title,
+        summary=dto.summary,
+        body=dto.body,
+        trigger=dto.trigger,
+        tags=list(dto.tags),
+        extra_metadata=dict(dto.extra_metadata),
+        status=dto.status,
+        origin=dto.origin,
+        supersedes_id=dto.supersedes_id,
+        superseded_by_id=dto.superseded_by_id,
+        published_at=dto.published_at,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+        sources=[
+            McpProceduralSource(
+                entry_id=s.source_entry_id,
+                note_id=s.source_note_id,
+                memory_unit_id=s.source_memory_unit_id,
+                role=str(s.role),
+            )
+            for s in dto.sources
+        ],
+        pins=[McpProceduralPin(context_key=p.context_key, position=p.position) for p in dto.pins],
+    )
+
+
+# NOTE: There is deliberately NO agent-facing procedural WRITE tool
+# (create/update/upsert/deprecate). Procedures and strategies are
+# DERIVED from cases (design §5/§8/§9) — the agent's only procedural
+# write is `memex_case_submit` (file the worked episode); the derivation
+# pipeline + §18.6 governance produce and update entries. Direct
+# authoring/editing stays on the operator surfaces (CLI `memex
+# procedural create/update`, the curation TUI) and the HTTP/client CRUD
+# the derivation worker uses. Agents only READ the plane (search / get /
+# get_by_identity) and SUBMIT cases.
+
+
+@mcp.tool(
+    name='memex_procedural_get',
+    description=_MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_procedural_get(
+    ctx: Context,
+    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description="Optional vault UUID or name. Mismatch with the entry's "
+            'vault → 404. Omit to skip vault-scope enforcement.'
+        ),
+    ] = None,
+) -> McpProceduralEntry | None:
+    """Fetch a single entry by UUID. Returns null if not found."""
+    try:
+        api = get_api(ctx)
+        try:
+            entry_uuid = UUID(entry_id)
+        except ValueError:
+            raise ToolError(f'Invalid entry UUID: {entry_id}')
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        dto = await api.procedural_get(entry_uuid, vault_id=resolved_vault)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural get failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get failed: {e}')
+
+
+@mcp.tool(
+    name='memex_procedural_get_by_identity',
+    description=_MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_procedural_get_by_identity(
+    ctx: Context,
+    kind: Annotated[
+        Literal['procedure', 'strategy'],
+        Field(description='Entity kind. Cases are notes — not on this plane.'),
+    ],
+    scope: Annotated[
+        str,
+        Field(description='Scope label: "global" | "project:<id>" | "app:<id>" (no user scope).'),
+    ],
+    verb: Annotated[
+        str | None,
+        Field(description='Anchor verb — required for both kinds.'),
+    ] = None,
+    context: Annotated[
+        str | None,
+        Field(
+            description='Anchor context — required for procedures; MUST be null for '
+            'strategies (a strategy groups all procedures sharing scope+verb).'
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Optional vault UUID or name for vault-scope enforcement.'),
+    ] = None,
+) -> McpProceduralEntry | None:
+    """Fetch a single entry by its (kind, scope, verb, context) identity anchor."""
+    try:
+        api = get_api(ctx)
+        if not verb:
+            raise ToolError(f'kind="{kind}" requires a non-empty verb.')
+        if kind == 'procedure' and not context:
+            raise ToolError('kind="procedure" requires a non-empty context.')
+        if kind == 'strategy' and context is not None:
+            raise ToolError(
+                'kind="strategy" requires context=null — strategies anchor on scope+verb.'
+            )
+
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        # Direct identity-anchor SELECT against the partial unique index
+        # ``uq_procedural_identity`` (not a fuzzy search). A previous
+        # implementation routed through ``api.procedural.search`` with
+        # an empty query, which short-circuited to an empty response and
+        # silently returned ``None`` for every anchor — the same
+        # regression the HTTP route had before its fix. The facade
+        # exposes a dedicated ``get_by_identity`` method (see
+        # ``MemexAPIProceduralFacade.get_by_identity``) so the LLM hot
+        # path is a single partial-index lookup, not a search +
+        # post-filter round-trip.
+        dto = await api.procedural_get_by_identity(
+            kind=kind,
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=resolved_vault,
+        )
+        if dto is None:
+            return None
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural get_by_identity failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get_by_identity failed: {e}')
+
+
+@mcp.tool(
+    name='memex_procedural_search',
+    description=_MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_procedural_search(
+    ctx: Context,
+    request: ProceduralSearchRequest,
+) -> McpProceduralSearchResult:
+    """Hybrid BM25 + vector search with RRF aggregation."""
+    try:
+        api = get_api(ctx)
+        response = await api.procedural_search(request)
+        return McpProceduralSearchResult(
+            hits=[
+                McpProceduralSearchHit(
+                    # The ProceduralSearchHit DTO nests the entry
+                    # under .entry (so the agent can see both the
+                    # RRF score and the full DTO). The MCP tool
+                    # boundary wants a flat shape, so project
+                    # entry.* into the hit fields. Reading these
+                    # off the hit itself raised AttributeError on
+                    # every search call before the fix.
+                    entry_id=h.entry.id,
+                    kind=h.entry.kind,
+                    score=h.score,
+                    matched_via=h.matched_via,
+                    title=h.entry.title,
+                    summary=h.entry.summary,
+                    scope=h.entry.scope,
+                    verb=h.entry.verb,
+                    context=h.entry.context,
+                    trigger=h.entry.trigger,
+                    pin_position=h.pin_position,
+                )
+                for h in response.hits
+            ],
+            total=response.total,
+            truncated=response.truncated,
+            took_ms=response.took_ms,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural search failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural search failed: {e}')
+
+
+@mcp.tool(
+    name='memex_case_submit',
+    description=_MEMEX_CASE_SUBMIT_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': False, 'idempotentHint': False},
+    timeout=120.0,
+)
+async def memex_case_submit(
+    ctx: Context,
+    payload: CaseSubmit,
+    background: Annotated[
+        bool,
+        Field(
+            description='Queue the file+assign flow as a durable background job and '
+            'return immediately (assignment_mode="queued" + job_id) instead of '
+            'blocking on the assignment judge; assignment then resolves async and any '
+            'escalation surfaces in the lint queue. Pass false to wait inline and get '
+            'the assignment outcome in the response. The Claude Code plugin defaults '
+            'this to true so capture never blocks the agent.',
+        ),
+    ] = False,
+) -> McpCaseSubmitResult:
+    """File a worked episode as a case note + run assignment.
+
+    The note lands in the hidden `procedural` system vault with
+    role='case'; the caller never names the vault. Assignment runs
+    synchronously (explicit case_of / judge auto-assign / lint
+    escalation) — see the result's assignment block — UNLESS
+    ``background=true``, which queues the whole flow as a tracked job and
+    returns ``assignment_mode='queued'`` + ``job_id`` without blocking.
+    """
+    try:
+        api = get_api(ctx)
+        result = await api.case_submit(payload, background=background)
+        # background=true → the route returns 202 + a BatchJobStatus; the case
+        # is filed off the request path and assignment resolves async.
+        if isinstance(result, BatchJobStatus):
+            return McpCaseSubmitResult(assignment_mode='queued', job_id=result.job_id)
+        return McpCaseSubmitResult(
+            note_id=result.note_id,
+            assignment_mode=result.assignment.mode,
+            entry_id=result.assignment.entry_id,
+            finding_id=result.assignment.finding_id,
+            separation=result.assignment.separation,
+            reasoning=result.assignment.reasoning,
+            scope=result.assignment.scope,
+            scope_reasoning=result.assignment.scope_reasoning,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Case submit failed: {e}', exc_info=True)
+        raise ToolError(f'Case submit failed: {e}')

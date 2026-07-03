@@ -1,0 +1,151 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "9f1ff9f469e1f16eb2b5cf0047b65991",
+  "created_at": "2026-06-12T19:48:09.494354+00:00",
+  "description": "Sarah Chen's Leadership and Technical Achievements at Acme Corp",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "9f1ff9f469e1f16eb2b5cf0047b65991",
+      "filestore_path": null,
+      "note_description": "Professional profile of Sarah Chen, engineering leader at Acme Corp.",
+      "note_name": "Sarah Chen Professional Profile",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "profile",
+        "leadership",
+        "acme-corp"
+      ],
+      "template": null,
+      "uuid": "4017364391e7c01be8ea401293b64674"
+    },
+    "tags": [
+      "profile",
+      "leadership",
+      "acme-corp",
+      "engineering leadership",
+      "project management",
+      "software engineering",
+      "technical architecture",
+      "postgresql",
+      "api development"
+    ]
+  },
+  "filestore_path": null,
+  "id": "40173643-91e7-c01b-e8ea-401293b64674",
+  "page_index": {
+    "metadata": {
+      "description": "Sarah Chen's Leadership and Technical Achievements at Acme Corp",
+      "publish_date": "2025-04-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "profile",
+        "leadership",
+        "acme-corp",
+        "engineering leadership",
+        "project management",
+        "software engineering",
+        "technical architecture",
+        "postgresql",
+        "api development"
+      ],
+      "title": "Sarah Chen Professional Profile",
+      "total_tokens": 195
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "7c329c71c5b783ac33969a55883aff68",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "7c329c71c5b783ac33969a55883aff68",
+            "children": [],
+            "end_index": 383,
+            "id": "82e27ab98e24f6e1e65b07f9474c0f3a",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 159,
+            "subtree_tokens": 48,
+            "summary": {
+              "how": "By leading the project from inception to delivery.",
+              "what": "Successful Phase 1 delivery of Project Alpha and professional background.",
+              "when": "Q2 2025 (delivery) and over a 12-year career.",
+              "where": "Acme Corp.",
+              "who": "Sarah Chen, a senior engineering leader."
+            },
+            "title": "Background",
+            "token_estimate": 48
+          },
+          {
+            "assets": [],
+            "block_id": "7c329c71c5b783ac33969a55883aff68",
+            "children": [],
+            "end_index": 646,
+            "id": "f7400111d4cd915586a1a0000560fb2f",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 383,
+            "subtree_tokens": 53,
+            "summary": {
+              "how": "By organizing focused pods with weekly syncs and utilizing data-driven decision making.",
+              "what": "Leadership and team alignment strategies.",
+              "when": "Quarterly board presentations and weekly syncs.",
+              "where": "Acme Corp.",
+              "who": "The subject (leader) reporting to the CTO."
+            },
+            "title": "Leadership Style",
+            "token_estimate": 53
+          },
+          {
+            "assets": [],
+            "block_id": "7c329c71c5b783ac33969a55883aff68",
+            "children": [],
+            "end_index": 911,
+            "id": "feae528c14cc3f6cff7a92273bf3e317",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 646,
+            "subtree_tokens": 63,
+            "summary": {
+              "how": "By implementing an API layer and data pipeline while selecting PostgreSQL 16 for its vector support features.",
+              "what": "Successful delivery of Project Alpha Phase 1 and exceeding performance benchmarks.",
+              "when": "Phase 1 completion period.",
+              "where": "Internal technical project environment.",
+              "who": "The Project Alpha development team."
+            },
+            "title": "Key Achievements",
+            "token_estimate": 63
+          }
+        ],
+        "end_index": 911,
+        "id": "039846bd691d6dd38a25afead3de2767",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 195,
+        "summary": {
+          "how": "By summarizing her 12 years of software engineering and technical leadership experience.",
+          "what": "A professional profile overview including her tenure and leadership role.",
+          "when": "Current (based on her 12-year career history)",
+          "where": "Acme Corp",
+          "who": "Sarah Chen, Senior Engineering Leader at Acme Corp"
+        },
+        "title": "Sarah Chen — Professional Profile",
+        "token_estimate": 31
+      }
+    ]
+  },
+  "publish_date": "2025-04-01T00:00:00+00:00",
+  "session_id": "84176004-fbad-4dc0-a9cc-3bc319390ac5",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Sarah Chen Professional Profile",
+  "updated_at": "2026-06-12T19:48:09.494354+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

@@ -437,10 +437,15 @@ async def test_migrate_note_preserves_mental_models_with_remaining_units(
     assert mm_after is not None
 
 
-async def test_migrate_note_deletes_cooccurrences_in_source_vault(
+async def test_migrate_note_recomputes_source_cooccurrences(
     svc: NoteService, session, source_vault: Vault, target_vault: Vault
 ):
-    """EntityCooccurrence rows in the source vault are deleted for affected entities."""
+    """Source-vault EntityCooccurrence is recomputed from ground truth on migrate.
+
+    The seeded note's units each mention a single entity (no co-mention), so the
+    synthetic seed cooccurrence has no ground-truth backing and the recompute
+    removes it — leaving the source vault with zero rows for these entities.
+    """
     data = await _seed_full_note(session, source_vault, n_units=2)
 
     # Verify cooccurrences exist before migration
@@ -461,6 +466,97 @@ async def test_migrate_note_deletes_cooccurrences_in_source_vault(
         )
     ).all()
     assert len(co_after) == 0
+
+
+async def _seed_comention_note(session, vault: Vault, e1: Entity, e2: Entity) -> dict:
+    """Seed a note whose single unit co-mentions both entities, plus the matching
+    per-vault EntityCooccurrence row (count=1)."""
+    note_id = uuid4()
+    note = Note(
+        id=note_id,
+        vault_id=vault.id,
+        original_text=f'text {uuid4().hex}',
+        content_hash=uuid4().hex,
+        filestore_path=f'assets/{vault.name}/{note_id}',
+        title='Co-mention note',
+    )
+    session.add(note)
+    unit = MemoryUnit(
+        id=uuid4(),
+        vault_id=vault.id,
+        note_id=note_id,
+        text=f'Fact {uuid4().hex}',
+        fact_type=FactTypes.WORLD,
+        embedding=EMBEDDING,
+        event_date=NOW,
+        status=ContentStatus.ACTIVE,
+    )
+    session.add(unit)
+    await session.flush()
+    session.add(UnitEntity(unit_id=unit.id, entity_id=e1.id, vault_id=vault.id))
+    session.add(UnitEntity(unit_id=unit.id, entity_id=e2.id, vault_id=vault.id))
+    lo, hi = sorted([e1.id, e2.id])
+    session.add(
+        EntityCooccurrence(
+            entity_id_1=lo,
+            entity_id_2=hi,
+            vault_id=vault.id,
+            cooccurrence_count=1,
+            last_cooccurred=NOW,
+        )
+    )
+    await session.commit()
+    return {'note': note, 'unit': unit}
+
+
+async def test_migrate_note_cooccurrence_is_per_vault(
+    svc: NoteService, session, source_vault: Vault, target_vault: Vault
+):
+    """The same entity pair is tracked independently per vault (PK includes
+    vault_id). Migrating a note recomputes only its source and destination
+    vaults, leaving an unrelated vault's edge for the SAME pair untouched.
+
+    This is the regression guard for the cross-vault cooccurrence corruption:
+    under the old (entity_id_1, entity_id_2) PK the pair could occupy only one
+    row, so the two vaults' edges collided.
+    """
+    e1 = Entity(id=uuid4(), canonical_name=f'Ent-{uuid4().hex[:8]}', mention_count=2)
+    e2 = Entity(id=uuid4(), canonical_name=f'Ent-{uuid4().hex[:8]}', mention_count=2)
+    session.add(e1)
+    session.add(e2)
+    await session.flush()
+    lo, hi = sorted([e1.id, e2.id])
+
+    # The pair co-occurs in BOTH the source vault and an unrelated (target) vault.
+    src = await _seed_comention_note(session, source_vault, e1, e2)
+    await _seed_comention_note(session, target_vault, e1, e2)
+
+    pair_filter = select(EntityCooccurrence).where(
+        col(EntityCooccurrence.entity_id_1) == lo,
+        col(EntityCooccurrence.entity_id_2) == hi,
+    )
+
+    # Pre-migrate: two distinct rows, one per vault — only representable under the
+    # 3-column PK.
+    rows_before = (await _fresh_query(session, pair_filter)).all()
+    assert {r.vault_id for r in rows_before} == {source_vault.id, target_vault.id}
+
+    # Migrate the source note into a fresh third vault.
+    third = Vault(id=uuid4(), name=f'third-{uuid4().hex[:8]}', description='Third')
+    session.add(third)
+    await session.commit()
+
+    await svc.migrate_note(src['note'].id, third.id)
+
+    rows_after = (await _fresh_query(session, pair_filter)).all()
+    by_vault = {r.vault_id: r.cooccurrence_count for r in rows_after}
+
+    # Unrelated vault's edge is untouched.
+    assert by_vault.get(target_vault.id) == 1
+    # Source vault's edge is gone — its only co-mentioning note left.
+    assert source_vault.id not in by_vault
+    # Destination vault gained the edge with the correct per-vault count.
+    assert by_vault.get(third.id) == 1
 
 
 # ---------------------------------------------------------------------------

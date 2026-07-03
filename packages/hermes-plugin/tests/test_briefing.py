@@ -1,4 +1,17 @@
-"""Tests for briefing cache + block formatting."""
+"""Tests for briefing cache + block formatting.
+
+After 2026-05-14 (three-tier agent-surface architecture): the briefing
+composes ``memex_common.agent_surface.compose_with_procedural()`` (Tier 1b
+universal + procedural-plane doctrine) plus a hermes-specific harness
+block (Tier 2). Universal content lives in
+``memex_common.agent_surface``; this file pins how Hermes assembles it
+on top of agent-specific framing.
+
+Regression fences for the universal content live in
+``packages/common/tests/test_agent_surface.py``. Regression fences for
+per-tool descriptions live in
+``packages/common/tests/test_tool_descriptions.py``.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +21,7 @@ from uuid import uuid4
 
 from memex_hermes_plugin.memex.briefing import (
     BriefingCache,
-    _ROUTING_GUIDE,
-    _STORAGE_MODEL_PRIMER,
+    _HERMES_HARNESS,
     format_briefing_block,
 )
 
@@ -32,7 +44,6 @@ def test_cache_returns_result():
     api = Mock()
     api.get_session_briefing = AsyncMock(return_value='# Briefing\nRecent work: X.')
     cache.start_fetch(api, vault_id=uuid4(), budget=2000, project_id='p')
-    # Block up to 5s for the single-call coroutine to finish.
     assert 'Briefing' in cache.get(timeout=5.0)
 
 
@@ -70,9 +81,10 @@ def test_format_block_with_vault_and_briefing():
     assert '# Recent activity' in block
 
 
-def test_format_block_contains_routing_guidance():
-    """Routing advice (parallel for content lookup, survey for broad, etc.) lives here,
-    not in per-tool descriptions."""
+def test_format_block_carries_universal_block_from_agent_surface():
+    """The briefing must include the Tier 1b universal content. This is the
+    primary architecture wire — universal content arrives via
+    `compose_universal()`, not redeclared locally."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -80,9 +92,25 @@ def test_format_block_contains_routing_guidance():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert 'How to use Memex tools' in block
-    assert 'memex_survey' in block
-    assert 'memex_list_entities' in block
+    # Header from agent_surface
+    assert '## Memex — system instructions' in block
+    # Load-bearing universal-content markers
+    assert 'units=[{unit_id, verb, reason}]' in block
+    assert 'unit_metadata.virtual' in block
+    assert 'scope qualifier' in block
+
+
+def test_format_block_carries_hermes_harness():
+    """The Tier 2 hermes-specific framing must layer on top of the universal block."""
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    assert 'Hermes-specific framing' in block
+    assert 'memex_add_note' in block
 
 
 def test_format_block_without_vault_adds_kv_guidance():
@@ -105,172 +133,181 @@ def test_format_block_skips_briefing_section_when_empty():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert '---' not in block
+    # The `\n---\n` literal is the briefing-section separator added in
+    # format_briefing_block only when the `briefing` argument is non-empty.
+    assert '\n---\n' not in block
 
 
-# --- Routing-guide bullets (AC-087..AC-092) ---
+# ---------------------------------------------------------------------------
+# Compression invariants: things that should NO LONGER be locally declared
+# in the briefing module (they live in agent_surface).
+# ---------------------------------------------------------------------------
 
 
-def test_routing_guide_explains_vault_scoping():
-    """AC-087: Vault scoping bullet must name vault_ids and warn against tags."""
-    assert '**Vault scoping**' in _ROUTING_GUIDE
-    assert 'vault_ids' in _ROUTING_GUIDE
-    assert 'Do NOT use `tags`' in _ROUTING_GUIDE
+def test_hermes_briefing_reexports_ssot_harness_by_identity() -> None:
+    """Hermes' in-process briefing path must use the same harness object as
+    the CLI bridge — drift across paths is the bug this SSOT prevents.
 
-
-def test_routing_guide_documents_vault_discovery():
-    """AC-088: Vault discovery bullet names list_vaults and get_vault_summary."""
-    assert '**Vault discovery**' in _ROUTING_GUIDE
-    assert 'memex_list_vaults' in _ROUTING_GUIDE
-    assert 'memex_get_vault_summary' in _ROUTING_GUIDE
-
-
-def test_routing_guide_title_bullet_uses_find_note():
-    """AC-089: Title known bullet must reference memex_find_note, not memex_note_search."""
-    assert '**Title known**' in _ROUTING_GUIDE
-    assert 'memex_find_note' in _ROUTING_GUIDE
-    # Title-known bullet must no longer point at note_search for title lookups.
-    title_idx = _ROUTING_GUIDE.index('**Title known**')
-    next_bullet = _ROUTING_GUIDE.find('\n- **', title_idx)
-    title_bullet = (
-        _ROUTING_GUIDE[title_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[title_idx:]
-    )
-    assert 'memex_note_search' not in title_bullet
-
-
-def test_routing_guide_documents_kv_store():
-    """AC-090: KV store bullet names all 4 KV tools and 4 namespace prefixes."""
-    assert '**KV store**' in _ROUTING_GUIDE
-    for tool in ('memex_kv_write', 'memex_kv_get', 'memex_kv_search', 'memex_kv_list'):
-        assert tool in _ROUTING_GUIDE
-    for prefix in ('`global:`', '`user:`', '`project:<id>:`', '`app:<id>:`'):
-        assert prefix in _ROUTING_GUIDE
-    assert 'CLI-only' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_lineage():
-    """AC-091: Lineage bullet names get_memory_links and get_lineage."""
-    assert '**Lineage / relationships**' in _ROUTING_GUIDE
-    assert 'memex_get_memory_links' in _ROUTING_GUIDE
-    assert 'memex_get_lineage' in _ROUTING_GUIDE
-    # Mention of typed-link kinds and provenance chain.
-    assert 'temporal' in _ROUTING_GUIDE
-    assert 'causal' in _ROUTING_GUIDE
-    assert 'mental_model' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_batch_fetch():
-    """AC-092: Batch fetch bullet names get_entities and get_memory_units."""
-    assert '**Batch fetch**' in _ROUTING_GUIDE
-    assert 'memex_get_entities' in _ROUTING_GUIDE
-    assert 'memex_get_memory_units' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_templates():
-    """Templates bullet must surface the list → get → retain(template=) flow.
-
-    Without this, agents skip templates even for content that maps cleanly onto
-    a built-in (ADR, RFC, retro, technical brief).
+    Lives in hermes-plugin tests (not common tests) because importing
+    ``memex_hermes_plugin.memex.briefing`` transitively imports
+    ``agent.memory_provider``, a Hermes-only module stubbed by this
+    package's conftest.
     """
-    assert '**Templates for structured captures**' in _ROUTING_GUIDE
-    assert 'memex_list_templates' in _ROUTING_GUIDE
-    assert 'memex_get_template' in _ROUTING_GUIDE
-    assert 'template=slug' in _ROUTING_GUIDE
+    from memex_common.agent_harnesses import HERMES_HARNESS
+    from memex_hermes_plugin.memex.briefing import _HERMES_HARNESS
 
-
-def test_routing_guide_bullets_render_in_formatted_block():
-    """Guide must flow through format_briefing_block end-to-end."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
+    assert _HERMES_HARNESS is HERMES_HARNESS, (
+        '`briefing._HERMES_HARNESS` is not the canonical '
+        '`memex_common.agent_harnesses.HERMES_HARNESS` object — '
+        'this means a local copy was re-introduced; replace with a re-export.'
     )
-    for marker in (
-        '**Vault scoping**',
-        '**Vault discovery**',
-        '**Batch fetch**',
-        '**Lineage / relationships**',
-        '**KV store**',
-        '**Templates for structured captures**',
-        'memex_find_note',
+
+
+def test_briefing_does_not_locally_declare_universal_constants():
+    """The briefing module must not re-declare universal-tier content
+    locally. compose_universal() is the only source."""
+    from memex_hermes_plugin.memex import briefing as br
+
+    # The renamed constants from earlier compression (_CITATION_DISCIPLINE,
+    # _AGENT_NUDGE, _ROUTING_GUIDE, _STORAGE_MODEL_PRIMER,
+    # _RESOLUTION_FLOW_PRIMER) must not exist anymore; their content moved
+    # to agent_surface.
+    for name in (
+        '_CITATION_DISCIPLINE',
+        '_AGENT_NUDGE',
+        '_ROUTING_GUIDE',
+        '_STORAGE_MODEL_PRIMER',
+        '_RESOLUTION_FLOW_PRIMER',
     ):
-        assert marker in block
+        assert not hasattr(br, name), (
+            f'briefing.py still declares {name} locally. Universal content '
+            'moved to memex_common.agent_surface (Tier 1b).'
+        )
 
 
-# --- Storage-model primer (the OrangeHermes regression fence) ---
+# ---------------------------------------------------------------------------
+# Hermes-harness content (Tier 2 only).
+# ---------------------------------------------------------------------------
 
 
-def test_storage_model_primer_names_three_layers():
-    """The primer must teach all three storage layers by name."""
-    assert '**Notes**' in _STORAGE_MODEL_PRIMER
-    assert '**Memory units**' in _STORAGE_MODEL_PRIMER
-    assert '**KV store**' in _STORAGE_MODEL_PRIMER
+def test_hermes_harness_carries_outcome_lexicon():
+    """Hermes-specific harness: map user-signal phrases to record_outcome verbs.
+    The universal block teaches the verb shape; this block teaches the lexicon."""
+    assert 'helpful' in _HERMES_HARNESS
+    assert 'not_helpful' in _HERMES_HARNESS
+    assert 'that worked' in _HERMES_HARNESS.lower() or 'that fixed it' in _HERMES_HARNESS.lower()
 
 
-def test_storage_model_primer_states_append_only_invariant():
-    """Memory units are append-only; the primer must say so and forbid mutation."""
-    assert 'Append-only' in _STORAGE_MODEL_PRIMER or 'append-only' in _STORAGE_MODEL_PRIMER
-    # The verbs must appear inside an explicit prohibition. A revert that
-    # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
-    # would still satisfy a bare "verb in primer" check yet leak the
-    # OrangeHermes regression — so require a negation phrase too.
-    negation_phrases = (
-        "Don't try to edit, replace, or delete",
-        'Do NOT try to edit, replace, or delete',
-        'Do not try to edit, replace, or delete',
+def test_hermes_harness_carries_capture_cadence():
+    """The capture nudge is hermes-specific (capture is generally agent-specific;
+    Claude Code has its own capture nudge with author='claude-code')."""
+    assert 'memex_add_note' in _HERMES_HARNESS
+    assert '300 tokens' in _HERMES_HARNESS
+
+
+def test_hermes_harness_within_budget():
+    """Tier 2 hermes harness ≤1,600 chars / ≤400 tokens."""
+    assert len(_HERMES_HARNESS) <= 1_600, (
+        f'_HERMES_HARNESS is {len(_HERMES_HARNESS)} chars; cap is 1,600. '
+        'Move agent-specific content here; universal content belongs in agent_surface.'
     )
-    # The negation phrase already names ``edit``, ``replace``, and ``delete`` —
-    # checking the verbs separately would only hide a regression that splits
-    # the prohibition into one sentence per verb.
-    assert any(p in _STORAGE_MODEL_PRIMER for p in negation_phrases), (
-        f'primer must contain an explicit prohibition like {negation_phrases[0]!r}'
-    )
 
 
-def test_storage_model_primer_describes_reflection_as_read_only():
-    """The primer must teach that reflection's output is read-only — observations and
-    mental models are produced by reflection, not written by the agent."""
-    assert 'reflection' in _STORAGE_MODEL_PRIMER.lower()
-    assert 'observations' in _STORAGE_MODEL_PRIMER.lower()
-    assert 'read-only' in _STORAGE_MODEL_PRIMER
+# ---------------------------------------------------------------------------
+# procedural-plane doctrine in the briefing block.
+# The briefing composes `compose_with_procedural()` (universal + procedural
+# block) on top of the Hermes-specific harness. These tests pin that the
+# procedural routing rules are visible to the agent — a regression that
+# silently fell back to `compose_universal()` would break procedural write routing
+# for every Hermes session.
+# ---------------------------------------------------------------------------
 
 
-def test_storage_model_primer_renders_in_formatted_block():
-    """Primer must render in the system-prompt block."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
-    )
-    assert '### How Memex stores knowledge' in block
-    assert '**Memory units**' in block
-    assert 'Append-only' in block or 'append-only' in block
-
-
-def test_storage_model_primer_precedes_routing_guide():
-    """Primer must appear before the routing guide so the agent reads the model first."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
-    )
-    assert block.index('### How Memex stores knowledge') < block.index('### How to use Memex tools')
-
-
-def test_kv_bullet_no_longer_persists_facts():
-    """The KV bullet in the routing guide must not advertise itself as a fact store.
-
-    Regression fence for the OrangeHermes muddle: agents previously read 'persist
-    facts and preferences across sessions' and wrote system-status flags into KV
-    to mark stale memory units 'resolved'.
+def test_format_block_carries_v7_procedural_doctrine():
+    """The procedural-plane doctrine MUST appear in the briefing
+    block. Without it, a Hermes agent has no doctrine for routing
+    ``"this is how to do X"`` write intents to the procedural plane —
+    the eval-driven failure mode is that the agent falls back to
+    ``memex_add_note`` (note plane) or ``memex_kv_put`` (KV plane),
+    both of which silently route the wrong way.
     """
-    kv_idx = _ROUTING_GUIDE.index('**KV store**')
-    next_bullet = _ROUTING_GUIDE.find('\n- **', kv_idx)
-    kv_bullet = _ROUTING_GUIDE[kv_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[kv_idx:]
-    assert 'persist facts' not in kv_bullet
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The doctrine block identity marker.
+    assert '## Procedural plane' in block
+    # The two plane kinds — both route through the procedural plane,
+    # not the note/KV plane. Cases are NOTES (memex_case_submit).
+    assert '`procedure`' in block
+    assert '`strategy`' in block
+    # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    assert '(kind, scope, verb, context)' in block
+    # Tool-name markers — at least one of the memex_procedural_* tools
+    # must be visible so the agent knows the routing surface exists.
+    # Anchor on a READ tool: the procedural WRITE tools were removed from
+    # the agent surface (procedures are derived from cases), so this marker
+    # stays valid as the SSOT prose evolves.
+    assert 'memex_procedural_search' in block
+    # Case routing — worked episodes go through memex_case_submit, and
+    # the removed briefing tool must NOT be advertised: pinned cards
+    # arrive inside the session briefing automatically.
+    assert 'memex_case_submit' in block
+    assert 'memex_procedural_briefing_cards' not in block
+
+
+def test_format_block_uses_compose_with_procedural_not_universal():
+    """Defence-in-depth trip-wire: a regression that swaps
+    ``compose_with_procedural()`` back to ``compose_universal()``
+    in ``briefing.py`` would still pass the universal-block presence
+    tests but silently drop the doctrine. This test pins the
+    procedural block ITSELF (which is not in the universal block) as
+    a positive marker — if the procedural heading is absent, the
+    swap has happened.
+    """
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The block lives BELOW the universal block in
+    # ``compose_with_procedural()``. It is NOT in ``compose_universal()``.
+    # If the briefing falls back to the universal-only composition,
+    # this heading vanishes.
+    assert '## Procedural plane' in block
+
+
+def test_format_block_carries_procedural_block_after_universal():
+    """The composition order is universal → procedural → harness.
+    A regression that puts the procedural block AFTER the Hermes
+    harness would still pass the presence test above but break the
+    cacheable-prompt-prefix invariant — the harness is dynamic-ish
+    (per-vault state in a real flow) and the universal + procedural
+    blocks are the cacheable prefix.
+
+    We pin the order by checking the procedural heading's offset
+    relative to the universal block's footer marker.
+    """
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The universal block ends with the CITATIONS section (CRITICAL_FOOTER
+    # was removed in the register-rebalance); the procedural block lives
+    # BELOW it. Find both headings and check the relative order.
+    universal_footer = '## Citations'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in block, 'universal block missing — pre-test setup error'
+    assert procedural_heading in block
+    assert block.index(universal_footer) < block.index(procedural_heading), (
+        'Procedural block must come AFTER the universal block; the '
+        'composition order in briefing.py is reversed.'
+    )

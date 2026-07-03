@@ -72,7 +72,12 @@ class JobManager:
             return
         exc = task.exception()
         if exc is not None:
-            logger.error('Batch job %s raised unhandled exception: %s', job_id, exc, exc_info=exc)
+            logger.error(
+                'Batch job %s raised unhandled exception: %s',
+                job_id,
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
 
     async def create_job(
         self,

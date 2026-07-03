@@ -11,10 +11,10 @@ ENV NVM_DIR="$HOME/.nvm"
 ARG NODE_VERSION="22"
 ENV PATH="${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${PATH}"
 
-RUN pipx install --force uv==0.10.1
+RUN pipx install --force uv==0.11.16
 
 RUN apt-get update && \
-    apt-get install -y gh \
+    apt-get install -y gh zstd \
     && rm -rf /var/lib/apt/lists/*
 
 USER vscode
@@ -39,24 +39,9 @@ ENV PATH="/home/vscode/.nvm/versions/node/v${NODE_VERSION}/bin:${PATH}"
 # Install claude code
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Install opencode
-RUN curl -fsSL https://opencode.ai/install | bash
-
-# Install bun
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="$HOME/.bun/bin:$PATH"
-
-# Install qmd https://github.com/tobi/qmd
-RUN bun install -g @tobilu/qmd
-# Rebuild better-sqlite3 for the nvm Node.js version (bun compiles against its own)
-#RUN cd /home/vscode/.bun/install/global/node_modules/better-sqlite3 && npm rebuild
-# Fix qmd GPU detection: getLlamaGpuTypes() without "supported" arg always returns
-# ["cuda","vulkan",false] on Linux regardless of hardware, causing a slow failed CUDA
-# build on every vector search. Patch to pass "supported" so it only returns actually
-# available GPU types.
-RUN sed -i 's/await getLlamaGpuTypes()/await getLlamaGpuTypes("supported")/' \
-    /home/vscode/.bun/install/global/node_modules/@tobilu/qmd/dist/llm.js
-
 # Install rtk
 RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
 ENV PATH="$HOME/.local/bin:$PATH"
+
+# Install ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh

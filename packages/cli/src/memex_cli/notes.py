@@ -30,7 +30,17 @@ from memex_common.schemas import (
 )
 import httpx
 
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
+    VaultOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+    parse_uuid,
+    resolve_list_format,
+)
 
 console = Console()
 
@@ -50,7 +60,7 @@ try:
 except ImportError:
     _sync_stub = typer.Typer(
         name='sync',
-        help='Sync a folder of Markdown notes to Memex. (requires: pip install memex-cli[sync])',
+        help="Sync a folder of Markdown notes to Memex. (requires: uv pip install 'memex-cli[sync]')",
         invoke_without_command=True,
     )
 
@@ -58,7 +68,7 @@ except ImportError:
     def _sync_not_installed(ctx: typer.Context) -> None:
         console.print(
             '[bold red]Error:[/bold red] Missing dependencies for note sync.\n'
-            'Install with: [cyan]pip install memex-cli\\[sync][/cyan]'
+            "Install with: [cyan]uv pip install 'memex-cli\\[sync]'[/cyan]"
         )
         raise typer.Exit(1)
 
@@ -82,9 +92,7 @@ async def add_note(
         list[pathlib.Path] | None,
         typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
     ] = None,
-    vault: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Target vault (write).')
-    ] = None,
+    vault: VaultOption = None,
     key: Annotated[
         str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
     ] = None,
@@ -101,7 +109,7 @@ async def add_note(
     ] = None,
     description_opt: Annotated[
         str | None,
-        typer.Option('--description', help='Note description/summary.'),
+        typer.Option('--description', '-d', help='Note description/summary.'),
     ] = None,
     author: Annotated[
         str | None,
@@ -113,7 +121,7 @@ async def add_note(
     ] = None,
     date: Annotated[
         str | None,
-        typer.Option('--date', '-d', help='Note date in ISO 8601 format (e.g. 2026-03-15).'),
+        typer.Option('--date', help='Note date in ISO 8601 format (e.g. 2026-03-15).'),
     ] = None,
     template: Annotated[
         str | None,
@@ -126,9 +134,6 @@ async def add_note(
     Use --asset to attach auxiliary files (images, PDFs) to a note.
     """
     config: MemexConfig = ctx.obj
-    # Override active vault if specified
-    if vault:
-        config.vault.active = vault
 
     # Determine input source
     if file:
@@ -142,7 +147,9 @@ async def add_note(
         pass
     else:
         console.print('[red]Error: Must provide content, --file, or --url.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
+
+    effective_vault = vault if vault is not None else config.write_vault
 
     console.print('[bold green]Adding Note[/bold green]')
 
@@ -168,7 +175,7 @@ async def add_note(
                 req = IngestURLRequest(
                     url=url,
                     assets=assets_dict,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                 )
                 result = await api.ingest_url(req, background=background)
@@ -207,8 +214,8 @@ async def add_note(
                     f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
                 )
                 metadata = {}
-                if config.write_vault:
-                    metadata['vault_id'] = str(config.write_vault)
+                if effective_vault:
+                    metadata['vault_id'] = str(effective_vault)
                 if user_notes:
                     metadata['user_notes'] = user_notes
 
@@ -229,7 +236,7 @@ async def add_note(
                         console.print(
                             '[red]Error: --asset cannot be used with a directory --file. Point --file to a markdown file instead.[/red]'
                         )
-                        raise typer.Exit(1)
+                        raise typer.Exit(2)
 
                     console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
                     async with aiofiles.open(file, 'r', encoding='utf-8') as f:
@@ -282,7 +289,7 @@ async def add_note(
                     files=assets_dict,
                     tags=effective_tags,
                     note_key=key,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                     author=author,
                     template=template,
@@ -321,10 +328,7 @@ async def append_note(
             '--key', '-k', help='Stable note key set at creation time. Preferred identifier.'
         ),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope. Required when --key is given.'),
-    ] = None,
+    vault: VaultOption = None,
     delta: Annotated[
         str | None,
         typer.Option('--delta', '-d', help='Content snippet to append.'),
@@ -363,7 +367,7 @@ async def append_note(
     # Resolve delta from --delta, --delta-file, or stdin
     if delta and delta_file:
         console.print('[red]Cannot pass both --delta and --delta-file.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     delta_text: str | None = delta
     if delta_text is None and delta_file is not None:
@@ -373,11 +377,11 @@ async def append_note(
         delta_text = sys.stdin.read()
     if not delta_text:
         console.print('[red]Provide a delta via --delta, --delta-file, or stdin.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     if not note_id and not key:
         console.print('[red]Pass either a note_id argument or --key.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
     if note_id and key:
         # Both ways of identifying the note were supplied. The schema would
         # silently let note_id win, which is hostile if the user genuinely
@@ -386,33 +390,32 @@ async def append_note(
             '[red]Pass either a note_id argument or --key, not both. '
             'If you meant --key, drop the positional note_id.[/red]'
         )
-        raise typer.Exit(1)
-    if key and not vault:
-        console.print('[red]--vault is required when identifying by --key.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
+
+    config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.write_vault
 
     try:
         resolved_append_id = UUID(append_id) if append_id else uuid4()
     except ValueError:
         console.print(f'[red]--append-id must be a UUID. Got: {append_id!r}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
     try:
         resolved_note_id: UUID | None = UUID(note_id) if note_id else None
     except ValueError:
         console.print(f'[red]note_id must be a UUID. Got: {note_id!r}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     request = NoteAppendRequest(
         note_id=resolved_note_id,
         note_key=key,
-        vault_id=vault,
+        vault_id=effective_vault,
         delta=delta_text,
         append_id=resolved_append_id,
         joiner=joiner,
         user_notes=user_notes,
     )
 
-    config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
             response = await api.append_to_note(request)
@@ -435,11 +438,15 @@ async def append_note(
 @async_command
 async def list_notes(
     ctx: typer.Context,
-    limit: int = 50,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of notes to return.')
+    ] = 50,
     offset: int = 0,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     after: Annotated[
         str | None,
@@ -460,21 +467,25 @@ async def list_notes(
             ),
         ),
     ] = 'created_at',
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one note ID per line.')
-    ] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per note: title, date, description.')
-    ] = False,
     template: Annotated[
         str | None,
         typer.Option('--template', help='Filter by template slug (e.g. "general_note").'),
     ] = None,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim',
+            '-s',
+            help='Drop per-note summaries from the response (only affects --format json output).',
+        ),
+    ] = False,
 ):
     """
     List all notes.
     """
+    fmt = resolve_list_format(output_format, json_output)
     from datetime import datetime
 
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
@@ -518,22 +529,23 @@ async def list_notes(
                 before=parsed_before,
                 template=template,
                 date_field=date_by,
+                slim=slim,
             )
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for d in notes:
             console.print(str(d.id))
         return
 
-    if compact:
+    if fmt == ListFormat.line:
         for d in notes:
             _print_compact_note(d)
         return
 
-    if json_output:
-        console.print_json(json.dumps([d.model_dump() for d in notes], default=str))
+    if fmt == ListFormat.json:
+        emit_json([d.model_dump() for d in notes])
         return
 
     table = Table(title='Notes')
@@ -557,10 +569,14 @@ async def list_notes(
 @async_command
 async def list_recent(
     ctx: typer.Context,
-    limit: int = 10,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of notes to return.')
+    ] = 10,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     after: Annotated[
         str | None,
@@ -581,12 +597,15 @@ async def list_recent(
             ),
         ),
     ] = 'created_at',
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one note ID per line.')
-    ] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per note: title, date, description.')
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim',
+            '-s',
+            help='Drop per-note summaries from the response (only affects --format json output).',
+        ),
     ] = False,
 ):
     """
@@ -597,6 +616,7 @@ async def list_recent(
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
     config: MemexConfig = ctx.obj
+    fmt = resolve_list_format(output_format, json_output)
 
     if date_by not in ('coalesce', 'created_at', 'publish_date'):
         console.print(
@@ -633,22 +653,23 @@ async def list_recent(
                 after=parsed_after,
                 before=parsed_before,
                 date_field=date_by,
+                slim=slim,
             )
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for d in notes:
             console.print(str(d.id))
         return
 
-    if compact:
+    if fmt == ListFormat.line:
         for d in notes:
             _print_compact_note(d)
         return
 
-    if json_output:
-        console.print_json(json.dumps([d.model_dump() for d in notes], default=str))
+    if fmt == ListFormat.json:
+        emit_json([d.model_dump() for d in notes])
         return
 
     table = Table(title='Recent Notes')
@@ -679,7 +700,9 @@ def _print_compact_note(d: Any) -> None:
     if len(desc) > 120:
         desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    console.print(f'- **{title}**{vault_tag} ({date}) [{note_id}]{suffix}')
+    # Escape the id brackets so Rich does not parse [uuid] as a markup tag and
+    # swallow the id (matches the escaping in memory search's line view).
+    console.print(f'- **{title}**{vault_tag} ({date}) \\[{note_id}]{suffix}')
 
 
 @app.command('find')
@@ -687,10 +710,14 @@ def _print_compact_note(d: Any) -> None:
 async def find_note(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Approximate title to search for.')],
-    limit: int = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of matches to return.')
+    ] = 5,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
@@ -716,7 +743,7 @@ async def find_note(
         return
 
     if json_output:
-        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        emit_json([r.model_dump() for r in results])
         return
 
     table = Table(title=f'Notes matching "{query}"')
@@ -734,7 +761,7 @@ async def find_note(
             date = str(date)[:10] if date else ''
         table.add_row(
             r.title or 'Untitled',
-            f'{r.score:.2f}',
+            f'{r.score:.3f}',
             date,
             r.status or '',
             str(r.note_id),
@@ -752,7 +779,9 @@ async def note_links(
         str | None,
         typer.Option('--type', '-t', help='Filter by link type (e.g. contradicts).'),
     ] = None,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max links to return.')] = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of links to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -774,7 +803,7 @@ async def note_links(
         return
 
     if json_output:
-        console.print_json(json.dumps([lnk.model_dump() for lnk in links], default=str))
+        emit_json([lnk.model_dump() for lnk in links])
         return
 
     table = Table(title=f'Links for note {note_id[:8]}...')
@@ -948,7 +977,7 @@ async def view_note(
             return
 
     if json_output:
-        console.print_json(json.dumps(note.model_dump(), default=str))
+        emit_json(note.model_dump())
         return
 
     name = note.name or 'Untitled Note'
@@ -1011,7 +1040,7 @@ async def view_metadata(
             console.print('[dim]Only notes with a page index have metadata.[/dim]')
             return
         if json_output:
-            console.print_json(json.dumps(metadata, default=str))
+            emit_json(metadata)
             return
         _render_metadata_table(metadata, note_ids[0])
         return
@@ -1022,7 +1051,7 @@ async def view_metadata(
         return
 
     if json_output:
-        console.print_json(json.dumps(metadata_list, default=str))
+        emit_json(metadata_list)
         return
 
     for i, metadata in enumerate(metadata_list):
@@ -1073,7 +1102,7 @@ async def view_page_index(
             )
             return
         if json_output:
-            console.print_json(json.dumps(page_index, default=str))
+            emit_json(page_index)
             return
         nodes = page_index if isinstance(page_index, list) else page_index.get('toc', [])
         tree = Tree(f'[bold cyan]Page Index[/bold cyan] [dim]({nid})[/dim]')
@@ -1086,7 +1115,7 @@ async def view_page_index(
         out = []
         for nid, pi in results:
             out.append({'note_id': nid, 'page_index': pi})
-        console.print_json(json.dumps(out, default=str))
+        emit_json(out)
         return
 
     for i, (nid, page_index) in enumerate(results):
@@ -1145,9 +1174,9 @@ async def view_node(
 
     if json_output:
         if len(uuids) == 1:
-            console.print_json(json.dumps(nodes[0].model_dump(), default=str))
+            emit_json(nodes[0].model_dump())
         else:
-            console.print_json(json.dumps([n.model_dump() for n in nodes], default=str))
+            emit_json([n.model_dump() for n in nodes])
         return
 
     for i, node in enumerate(nodes):
@@ -1177,23 +1206,29 @@ def _render_toc_nodes(nodes: list[dict[str, Any]], parent: Tree) -> None:
 async def search_notes(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Search query.')],
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of notes.')] = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of notes to return.')
+    ] = 5,
     expand: Annotated[bool, typer.Option('--expand', help='Enable query expansion.')] = False,
     blend: Annotated[bool, typer.Option('--blend', help='Enable position-aware blending.')] = False,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to search. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     reason: Annotated[
         bool,
-        typer.Option('--reason', help='Run skeleton-tree identification; shows relevant sections.'),
+        typer.Option(
+            '--reason', '-r', help='Run skeleton-tree identification; shows relevant sections.'
+        ),
     ] = False,
     summarize: Annotated[
         bool,
         typer.Option('--summarize', help='Synthesize a full answer (implies --reason).'),
     ] = False,
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[bool, typer.Option('--minimal', help='Output note IDs only.')] = False,
     no_semantic: Annotated[
         bool, typer.Option('--no-semantic', help='Exclude semantic (vector) strategy.')
     ] = False,
@@ -1264,13 +1299,29 @@ async def search_notes(
         console.print('[yellow]No notes found.[/yellow]')
         return
 
-    if minimal:
+    fmt = resolve_list_format(output_format, json_output)
+
+    if fmt == ListFormat.ids:
         for doc in results:
             console.print(str(doc.note_id))
         return
 
-    if json_output:
-        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+    if fmt == ListFormat.line:
+        for doc in results:
+            metadata = doc.metadata or {}
+            title = (
+                metadata.get('name')
+                or metadata.get('title')
+                or metadata.get('filename')
+                or 'Untitled'
+            )
+            score_str = f'{doc.score:.3f}' if doc.score > 0 else '-'
+            # Escape the id brackets so Rich does not parse [uuid] as markup.
+            console.print(f'{score_str}  {title}  \\[{doc.note_id}]')
+        return
+
+    if fmt == ListFormat.json:
+        emit_json([r.model_dump() for r in results])
         return
 
     table = Table(title=f'Search Results: "{query}"', show_lines=True)
@@ -1296,7 +1347,7 @@ async def search_notes(
         if len(preview) > 300:
             preview = preview[:297] + '...'
 
-        score_str = f'{doc.score:.2f}' if doc.score > 0 else '-'
+        score_str = f'{doc.score:.3f}' if doc.score > 0 else '-'
 
         table.add_row(score_str, title, preview, str(doc.note_id))
 
@@ -1409,7 +1460,9 @@ async def export_notes(
     ] = './memex-export',
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
 ):
     """
@@ -1461,8 +1514,9 @@ async def export_notes(
 
 def _get_template_registry(ctx: typer.Context) -> TemplateRegistry:
     """Build a TemplateRegistry from the CLI config."""
-    import logging as _log
+    import logging
 
+    _log = logging.getLogger(__name__)
     config: MemexConfig = ctx.obj
     dirs: list[tuple[str, pathlib.Path]] = [('builtin', BUILTIN_PROMPTS_DIR)]
     root = config.server.file_store.root
@@ -1616,12 +1670,12 @@ def template_delete(
     local: Annotated[
         bool, typer.Option('--local', help='Delete from project-local scope instead of global.')
     ] = False,
-    yes: Annotated[bool, typer.Option('--yes', '-y', help='Skip confirmation prompt.')] = False,
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ) -> None:
     """Delete a user template. Cannot delete built-in templates."""
     scope = 'local' if local else 'global'
 
-    if not yes:
+    if not force:
         confirm = typer.confirm(
             f'Delete template "{slug}" from {scope} scope? This cannot be undone.'
         )
@@ -1702,7 +1756,7 @@ async def update_user_notes(
             handle_api_error(e)
 
     if json_output:
-        console.print_json(json.dumps(result, default=str))
+        emit_json(result)
         return
 
     console.print(f'[green]User notes updated for note {nid}.[/green]')

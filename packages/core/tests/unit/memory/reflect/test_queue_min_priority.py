@@ -98,7 +98,7 @@ async def test_process_reflection_queue_claims_above_threshold():
 
     with patch('memex_core.memory.engine.ReflectionEngine') as mock_reflector_cls:
         mock_reflector = MagicMock()
-        mock_reflector.reflect_batch = AsyncMock(return_value=[mock_model])
+        mock_reflector.reflect_batch = AsyncMock(return_value=([mock_model], [], []))
         mock_reflector_cls.return_value = mock_reflector
 
         processed = await engine.process_reflection_queue(session, limit=10)

@@ -1,0 +1,613 @@
+"""Procedural Plane eval suite.
+
+10 scenarios gate the procedural-plane contract. The plane has TWO
+kinds (procedure / strategy — cases are NOTES filed via case_submit),
+scopes global | project:<id> | app:<id> (no user scope), an identity
+anchor ``(kind, scope, verb, context)`` UNIQUE NULLS NOT DISTINCT
+(procedure ≡ scope+verb+context; strategy ≡ scope+verb), and the
+create/upsert/get/get_by_identity/update/deprecate/search/
+briefing-cards/pins/versions HTTP surface. This suite covers the
+routing, identity, lifecycle, pin-chain, and case-submission
+contracts that an agent depends on.
+
+Order matters — scenarios that depend on seeded state (search
+hits, briefing cards, deprecate-drops-from-search) appear AFTER
+their setup actions seed the relevant entries.
+
+IMPORTANT (import order): the imports of ``_outcomes`` and
+``_setup_actions`` MUST appear before any ``suite.register(...)``
+call. The ``@register_outcome`` and ``@register_setup_action``
+decorators fire at import time; scenarios reference
+``ProceduralEntryRoundtrip(...)`` /
+``ProceduralSearchResults(...)`` /
+``SetupAction(kind='procedural_upsert', ...)`` by name and those
+registrations must already exist.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from memex_eval.suite import SetupAction, SuiteMetadata, SuiteSources
+from memex_eval.suite.decorator import Suite
+
+logger = logging.getLogger('memex_eval.suites.procedural_plane')
+
+# Side-effect imports — DO NOT MOVE. These decorator registrations
+# populate the framework's outcome and setup-action registries before
+# any scenario reference resolves.
+from . import _outcomes  # noqa: F401 — decorator side effect
+from . import _setup_actions  # noqa: F401 — decorator side effect
+from ._outcomes import (
+    CaseSubmitRoundtrip,
+    ProceduralEntryRoundtrip,
+    ProceduralSearchResults,
+)
+
+_ROOT = Path(__file__).parent
+
+
+METADATA = SuiteMetadata(
+    name='procedural_plane',
+    schema_version='1',
+    suite_version='1.0.0',
+    description=(
+        'procedural-plane contract — 10 scenarios pinning the '
+        '(kind, scope, verb, context) identity anchor, the 2 kinds '
+        '(procedure / strategy), the write/read lifecycle '
+        '(create/upsert/get_by_identity/deprecate), the hybrid '
+        'BM25+vector+RRF search, the pin-chain briefing-cards '
+        'union, and the case_submit notes path. Every scenario '
+        'exercises the public surface — no internals, no shortcuts.'
+    ),
+    tags=[
+        'procedural',
+        'identity-anchor',
+        'pin-chain',
+        'lifecycle',
+        'search',
+    ],
+    primary_metrics=['suite.pass_rate'],
+    components_under_test=[
+        'procedural.identity_anchor',
+        'procedural.create',
+        'procedural.upsert',
+        'procedural.get_by_identity',
+        'procedural.deprecate',
+        'procedural.search',
+        'procedural.briefing_cards',
+        'cases.submit',
+    ],
+    knobs=[
+        'server.memory.procedural.enabled',
+        'server.memory.procedural.search_default_bm25_weight',
+        'server.memory.procedural.search_default_vector_weight',
+        'server.memory.procedural.identity_conflict_mode',
+        'server.memory.procedural.briefing_default_limit_per_context',
+    ],
+    requires_llm_judge=False,
+    default_answer_mode='api',
+)
+
+suite = Suite(
+    metadata=METADATA,
+    sources=SuiteSources(notes=[]),  # no source corpus is its own write surface
+    readme_path=_ROOT / 'README.md',
+)
+
+
+# ---------------------------------------------------------------------------
+# 1. Identity-anchor uniqueness: create with the same (kind, scope, verb, context)
+#    as an existing entry MUST 409. The procedural plane's UNIQUE NULLS NOT
+#    DISTINCT constraint is the load-bearing piece — without it, two agents
+#    could write contradictory procedures under the same anchor and search
+#    would return ambiguous hits.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='identity_anchor_collision_returns_409',
+    description=(
+        'A second procedural_create on the same (kind, scope, verb, context) '
+        'anchor returns 409 — the identity-anchor UNIQUE NULLS NOT DISTINCT '
+        'constraint is the contract that prevents two agents from writing '
+        'contradictory procedures under the same name.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='create',
+        kind='procedure',
+        scope='global',
+        verb='rotate',
+        context='api_key',
+        expect_status='conflict',
+        title='procedural-suite-rotate-key',
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='api_key',
+            kind_title='procedural-suite-rotate-key',
+            kind_trigger='rotating the project API key',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 2. Upsert idempotency: re-submitting the same anchor updates the existing
+#    entry rather than 409ing. The procedural contract is the GET-then-INSERT-or-UPDATE
+#    pattern; if the GET path is broken (e.g. wrong identity-anchor parsing),
+#    upsert silently creates a new row and breaks search.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='upsert_on_existing_anchor_updates_in_place',
+    description=(
+        'A second procedural_upsert on the same (kind, scope, verb, context) '
+        'anchor is a no-op conflict — the entry is the SAME row, not a new one. '
+        'identity-anchor resolution correctly maps the second call to the '
+        'existing row.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='upsert',
+        kind='procedure',
+        scope='global',
+        verb='deploy',
+        context='staging',
+        expect_status='success',
+        expect_kind='procedure',
+        expect_scope='global',
+        expect_verb='deploy',
+        title='procedural-suite-deploy-staging',
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='staging',
+            kind_title='procedural-suite-deploy-staging',
+            kind_trigger='deploying the service to staging',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 3. get_by_identity returns the entry when bound. The route is the cheap
+#    "did we already learn this?" probe every agent runs before creating.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='get_by_identity_returns_seeded_entry',
+    description=(
+        'procedural_get_by_identity with the seeded anchor returns the entry '
+        'with the correct (kind, scope, verb) shape. The probe is the cheap '
+        '"did we already learn this?" check that agents use before '
+        'procedural_create.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='get_by_identity',
+        kind='procedure',
+        scope='app:eval',
+        verb='commit',
+        context='prefix',
+        expect_status='success',
+        expect_kind='procedure',
+        expect_scope='app:eval',
+        expect_verb='commit',
+        title='procedural-suite-commit-prefix',
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='app:eval',
+            kind_verb='commit',
+            kind_context='prefix',
+            kind_title='procedural-suite-commit-prefix',
+            kind_trigger='choosing the commit message prefix',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 4. get_by_identity returns 404 when unbound. The cheap
+#    "have we learned this?" probe is the gate to the create path.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='get_by_identity_returns_404_when_unbound',
+    description=(
+        'procedural_get_by_identity with an unbound anchor returns 404 / '
+        'not-found. The cheap probe is the gate to the create path — '
+        'misclassifying "unbound" as "bound" would skip the create step '
+        'and silently drop the new procedure.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='get_by_identity',
+        kind='strategy',
+        scope='global',
+        verb='unbound-anchor-probe',
+        context=None,  # strategy anchor ≡ (scope, verb) — context forbidden
+        expect_status='not_found',
+        title='procedural-suite-never-seeded',
+    ),
+    # No setup action — the anchor is intentionally unbound.
+)
+
+
+# ---------------------------------------------------------------------------
+# 5. Hybrid search returns the seeded entry. The BM25 + vector + RRF
+#    composition is the procedural retrieval surface; a regression that drops
+#    either stream would surface here.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='search_returns_seeded_procedure',
+    description=(
+        'procedural_search with a query that matches the seeded entry '
+        'returns at least one hit. The hybrid BM25 + vector + RRF '
+        'composition is the procedural retrieval surface; a regression that '
+        'drops either stream would silently surface zero hits.'
+    ),
+    query='rollback database migration',
+    top_k=10,
+    expected=ProceduralSearchResults(
+        type='procedural_search_results',
+        operation='search',
+        query='rollback database migration',
+        min_hits=1,
+        expect_kind='procedure',
+        expect_scope='project:proc-eval',
+        expect_verb='rollback',
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='project:proc-eval',
+            kind_verb='rollback',
+            kind_context='db_migration',
+            kind_title='procedural-suite-rollback-migration',
+            kind_trigger='rolling back a failed database migration',
+            kind_summary=(
+                'Roll back the database migration by running alembic downgrade '
+                '-1 from the proc-eval project root, then verify the schema with '
+                'memex database verify.'
+            ),
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 6. Briefing-cards pin-chain union. The pin chain ``global → project → app``
+#    is the precedence rule for which entry surfaces for a given context.
+#    A regression that drops the union (e.g. only the most-specific pin
+#    wins) would lose the global rule that applies to every project.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='briefing_cards_pin_chain_union',
+    description=(
+        'procedural_briefing_cards with [global, project:proc-eval, app:eval] '
+        'returns the pin-chain union — both the global-scope rule AND the '
+        'project:proc-eval-specific rule. The chain is the precedence rule '
+        'that drives which entry surfaces for a given context; a regression '
+        'that drops the union (e.g. only most-specific wins) would lose the '
+        'global rule that applies to every project.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralSearchResults(
+        type='procedural_search_results',
+        operation='briefing_cards',
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
+        min_hits=2,
+        expect_scope='global',
+    ),
+    setup_actions=[
+        # The global-scope rule that every project inherits.
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='test',
+            kind_context='before_commit',
+            kind_title='procedural-suite-test-before-commit-global',
+            kind_trigger='about to commit changes',
+            kind_summary='Run the test suite before every commit.',
+            pin_to='global',
+        ),
+        # The project-specific rule that overrides the global one.
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='project:proc-eval',
+            kind_verb='test',
+            kind_context='before_commit',
+            kind_title='procedural-suite-test-before-commit-project',
+            kind_trigger='about to commit changes in proc-eval',
+            kind_summary=(
+                'Run the test suite AND the procedural-plane eval gate '
+                'before every commit in proc-eval.'
+            ),
+            pin_to='project:proc-eval',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 7. Briefing-cards pin-position contract. The card list is sorted by
+#    pin order — most-general pin (global) first. A regression that
+#    sorts by something else (e.g. creation time) would scramble
+#    the briefing's precedence narrative.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='briefing_cards_pin_position_order',
+    description=(
+        'The briefing-cards list is sorted by pin position: global first, '
+        'then project, then app. A regression that sorts by creation '
+        'time or entry ID would scramble the briefing precedence narrative '
+        'and surface the project rule before the global rule.'
+    ),
+    query='',
+    top_k=10,
+    expected=ProceduralSearchResults(
+        type='procedural_search_results',
+        operation='briefing_cards',
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
+        min_hits=2,
+        expect_scope='global',
+        expect_first_pin_pos=0,  # global is the first pin in the chain
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='lint',
+            kind_context='pre_push',
+            kind_title='procedural-suite-lint-pre-push-global',
+            kind_trigger='about to push a branch',
+            kind_summary='Run lint before every push.',
+            pin_to='global',
+        ),
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='project:proc-eval',
+            kind_verb='lint',
+            kind_context='pre_push',
+            kind_title='procedural-suite-lint-pre-push-project',
+            kind_trigger='about to push a branch in proc-eval',
+            kind_summary=('Run lint AND the spec-fence test before every push in proc-eval.'),
+            pin_to='project:proc-eval',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 8. Deprecate drops the entry from default search (status='published' filter)
+#    but keeps the entry reachable via get. The deprecate-drops-from-search
+#    contract is what makes the "superseded by" pattern work — old
+#    procedures fade out of search hits but remain inspectable.
+#
+#    Note: scenario 8 uses ``deprecate_after=True`` on the upsert setup
+#    action so the entry lands in ``status='deprecated'`` BEFORE the
+#    query fires. The runner does NOT substitute ``$context.key``
+#    references between sequential setup actions, so combining
+#    upsert+deprecate into a single action is the simplest way to
+#    sequence them. The ``deprecate_after`` flag is suite-private.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='deprecate_drops_from_published_search',
+    description=(
+        'After procedural_deprecate, the default search (status="published") '
+        'does NOT return the entry — the lifecycle exit is the soft-delete '
+        'that drives the "superseded by" pattern. The entry remains '
+        'reachable via procedural_get so audit can still surface it.'
+    ),
+    query='deprecate-test-handle',
+    top_k=10,
+    expected=ProceduralSearchResults(
+        type='procedural_search_results',
+        operation='search',
+        query='deprecate-test-handle',
+        min_hits=0,  # expect ZERO published hits — the entry is deprecated
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='project:proc-eval',
+            kind_verb='deprecate-test-handle',
+            kind_context='deprecate-test-context',
+            kind_title='procedural-suite-deprecate-handle',
+            kind_trigger='exercising the deprecate-test-handle',
+            kind_summary=(
+                'Test handle for the deprecate-drops-from-search scenario — '
+                'this entry MUST disappear from default search after '
+                'deprecate_after=True fires immediately after the upsert.'
+            ),
+            # Flip status='published' → 'deprecated' immediately after
+            # upsert, BEFORE the search call. The runner doesn't chain
+            # action returns, so this single action handles both.
+            deprecate_after=True,
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 9. Status filter contract: status='published' (default) hides drafts. The
+#    default-published filter is what makes the deprecate-and-fade pattern
+#    work, and it MUST also hide drafts so the draft-review flow doesn't
+#    surface unvetted entries. The full status='all' override would
+#    require extending the StatusLiteral in ``procedural_schemas``;
+#    that's deferred to a follow-up — for now, we test the
+#    "drafts-are-hidden-by-default" half of the contract, which is the
+#    load-bearing piece for agentic surfaces.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='status_published_hides_drafts',
+    description=(
+        'A default search (status="published") does NOT return a draft '
+        'entry — the default filter hides drafts so the draft-review '
+        'flow does not surface unvetted entries to the agent.'
+    ),
+    query='draft-review-handle',
+    top_k=10,
+    expected=ProceduralSearchResults(
+        type='procedural_search_results',
+        operation='search',
+        query='draft-review-handle',
+        # Default status='published' — drafts are hidden.
+        min_hits=0,  # expect ZERO published hits — the entry is a draft
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='project:proc-eval',
+            kind_verb='draft-review-handle',
+            kind_context='draft-review-context',
+            kind_title='procedural-suite-draft-handle',
+            kind_trigger='exercising the draft-review-handle',
+            kind_summary=(
+                'Draft entry for the status-published-hides-drafts scenario. '
+                'This entry has status="draft" and MUST NOT surface in '
+                'the default status="published" search results.'
+            ),
+            kind_status='draft',
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 10. Case submission: a worked episode files as a NOTE (role='case') in
+#     the hidden system vault — never a plane entry — and the explicit
+#     case_of assignment attaches it to the seeded procedure
+#     (provenance edge + derivation enqueue). Deterministic: with
+#     case_of the LLM judge never runs.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='case_submit_files_note_with_explicit_assignment',
+    description=(
+        'case_submit files the episode as a note (the caller never names '
+        'the vault) and the explicit case_of resolves to '
+        'assignment.mode="explicit". Cases are NOTES, not plane entries — '
+        'a regression that re-adds kind="case" to the plane or breaks the '
+        'notes path surfaces here.'
+    ),
+    query='',
+    top_k=10,
+    expected=CaseSubmitRoundtrip(
+        type='case_submit_roundtrip',
+        title='procedural-suite-case-episode',
+        trigger='database connection pool exhausted during deploy',
+        outcome_value='failure',
+        case_of_scope='global',
+        case_of_verb='restart',
+        case_of_context='db_pool',
+        expect_assignment_modes=['explicit'],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='restart',
+            kind_context='db_pool',
+            kind_title='procedural-suite-restart-db-pool',
+            kind_trigger='database connection pool exhausted',
+            kind_summary=(
+                'Restart the service and re-run the migration with '
+                '--pool-size=20 when the connection pool is exhausted.'
+            ),
+        ),
+    ],
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# 9. Derivation: case → procedure (design §9, amended JG 2026-06-11). Submit
+#    a SINGLE worked episode, run distillation, and assert the derived
+#    procedure (a) exists and is retrievable once confirmed, and (b) preserved
+#    the quantitative anchors from the case (§9 rule 6 / §19.5 — gated inside
+#    the required setup action). One case is enough. This is the end-to-end
+#    gate on the derivation pipeline.
+# ---------------------------------------------------------------------------
+
+suite.register(
+    id='derivation_distills_procedure_from_cases',
+    description=(
+        'Case → procedure: submitting a SINGLE worked episode under one anchor '
+        'and running derivation distils a grounded procedure that PRESERVES the '
+        'quantitative anchors from the case (§9 rule 6) and becomes retrievable '
+        'once confirmed (draft → published). One case is enough (§9 amended, '
+        'JG 2026-06-11). A regression that erases anchors or fails to distil '
+        'errors the required setup action.'
+    ),
+    query='',
+    top_k=5,
+    group='derivation',
+    setup_actions=[
+        SetupAction(
+            kind='derive_from_cases',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='canary',
+            kind_trigger='about to deploy a service via canary rollout',
+            kind_n_cases=1,
+            kind_anchors=['10%', '15 minutes'],
+        ),
+    ],
+    expected=ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='get_by_identity',
+        kind='procedure',
+        scope='global',
+        verb='deploy',
+        context='canary',
+        expect_status='success',
+    ),
+    mutating_scenario=True,
+)
+
+
+SUITE = suite.build()

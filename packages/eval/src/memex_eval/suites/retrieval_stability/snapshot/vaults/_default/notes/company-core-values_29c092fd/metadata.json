@@ -1,0 +1,109 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "3df2312337f4040bc0878271b9f5569f",
+  "created_at": "2026-06-12T19:47:30.754211+00:00",
+  "description": "Company Core Values and Guiding Principles",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "3df2312337f4040bc0878271b9f5569f",
+      "filestore_path": null,
+      "note_description": "Permanent company principles and values.",
+      "note_name": "Company Core Values",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "company",
+        "values",
+        "permanent"
+      ],
+      "template": null,
+      "uuid": "29c092fdfdb44cc2e4ab47aeb219f199"
+    },
+    "tags": [
+      "company",
+      "values",
+      "permanent",
+      "corporate culture",
+      "core values",
+      "strategic principles",
+      "engineering excellence",
+      "transparency"
+    ]
+  },
+  "filestore_path": null,
+  "id": "29c092fd-fdb4-4cc2-e4ab-47aeb219f199",
+  "page_index": {
+    "metadata": {
+      "description": "Company Core Values and Guiding Principles",
+      "publish_date": "2018-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "company",
+        "values",
+        "permanent",
+        "corporate culture",
+        "core values",
+        "strategic principles",
+        "engineering excellence",
+        "transparency"
+      ],
+      "title": "Company Core Values",
+      "total_tokens": 113
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "1c3504a04101a70b91494fe051b4341b",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "1c3504a04101a70b91494fe051b4341b",
+            "children": [],
+            "end_index": 565,
+            "id": "7993a752019471b7467f372b4b7989f0",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 79,
+            "subtree_tokens": 93,
+            "summary": {
+              "how": "By prioritizing customer impact, investing in quality craftsmanship, and defaulting to open information sharing.",
+              "what": "Three permanent core principles (Customer First, Engineering Excellence, and Transparent Communication).",
+              "when": "Since the company's founding.",
+              "where": "Across all product decisions, hiring, and strategic directions.",
+              "who": "The company and its employees."
+            },
+            "title": "Principles",
+            "token_estimate": 93
+          }
+        ],
+        "end_index": 565,
+        "id": "3b9b35b3e1fbdd57a3232f0e68453607",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 113,
+        "summary": {
+          "how": "By establishing a framework of foundational principles.",
+          "what": "Introduction to the company's core values and guiding principles.",
+          "when": null,
+          "where": "Internal corporate framework.",
+          "who": "The company and its employees."
+        },
+        "title": "Company Core Values",
+        "token_estimate": 20
+      }
+    ]
+  },
+  "publish_date": "2018-01-01T00:00:00+00:00",
+  "session_id": "addad9b9-ed8e-4d17-a484-b03b03b5f0e6",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Company Core Values",
+  "updated_at": "2026-06-12T19:47:30.754211+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

@@ -4,12 +4,38 @@ from typing import Any, Self
 from pydantic import Field, model_validator
 from sqlmodel import SQLModel
 
+from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+
+__all__ = [
+    'RetrievalRequest',
+    'VALID_STRATEGIES',
+]
+# ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` are imported above for use
+# in the ``model_validator`` below but deliberately NOT re-exported. The
+# canonical home is ``memex_common.schemas`` — re-exporting here would create
+# a second public import path and risk future drift.
+
 VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'mental_model'})
 
 
 class RetrievalRequest(SQLModel):
     """
     Unified request object for memory retrieval.
+
+    NOTE — dual-model architecture (intentional):
+    This is the **internal / storage** ``RetrievalRequest`` (SQLModel),
+    distinct from the wire/protocol model in
+    ``memex_common.schemas.RetrievalRequest``. The wire model is enum-typed
+    (``IntentClass`` / ``RiskClass``) for the public API; this model carries
+    ``intent_class: str | None`` / ``risk_class: str | None`` because it is
+    constructed inside ``SearchService`` from already-validated primitives
+    (the FastAPI route in ``memex_core/server/retrieval.py`` unpacks the
+    wire-model enums via ``.value`` at the boundary).
+
+    Value parity is enforced by the ``model_validator`` below against the
+    canonical ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` frozensets,
+    which are derived from the same ``IntentClass`` / ``RiskClass`` enums in
+    ``memex_common.schemas``. Add new class values there, not here.
     """
 
     query: str = Field(..., description='The search query or context string.')
@@ -58,15 +84,25 @@ class RetrievalRequest(SQLModel):
     fusion_strategy: str = Field(
         default='rrf', description='The fusion strategy to use (e.g., rrf, position_aware).'
     )
-    include_vectors: bool = Field(
-        default=False, description='Whether to include embeddings in the result (slower).'
-    )
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
+    )
+    include_deprioritized: bool = Field(
+        default=False,
+        description='Whether to include deprioritized memory units in results.',
     )
     include_superseded: bool = Field(
         default=False,
         description='Whether to include superseded (low-confidence) memory units in results.',
+    )
+    apply_pre_filter: bool = Field(
+        default=True,
+        description=(
+            'Pre-reranker Memory Worth/FSFM filter at hydration. Default ON drops obviously-failed '
+            'or decayed candidates before the cross-encoder runs. Set False for '
+            'historical / audit / lineage queries that need to see contradicted, '
+            'behaviorally-failed, or decayed units — every branch is bypassed in one go.'
+        ),
     )
     debug: bool = Field(
         default=False,
@@ -108,13 +144,35 @@ class RetrievalRequest(SQLModel):
         ),
     )
 
+    # Intent / risk class filtering (write-time classifier)
+    intent_class: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by intent_class (permanent | durable | ephemeral). '
+            'None disables the filter.'
+        ),
+    )
+    risk_class: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by risk_class (none | sensitive | private | safety). '
+            'None disables the filter.'
+        ),
+    )
+
     # Tag filtering
     tags: list[str] | None = Field(
         default=None, description='Only return results from notes with ALL of these tags.'
     )
 
     @model_validator(mode='after')
-    def validate_strategies(self) -> Self:
+    def validate_request_fields(self) -> Self:
+        """Cross-field validator: strategies, intent_class, risk_class.
+
+        Originally named ``validate_strategies`` when only ``strategies`` was
+        validated; renamed to reflect that it now also
+        validates intent/risk class membership against the canonical enum sets.
+        """
         if self.strategies is not None:
             if len(self.strategies) == 0:
                 raise ValueError('strategies list must not be empty')
@@ -124,4 +182,14 @@ class RetrievalRequest(SQLModel):
                     f'Invalid strategy names: {sorted(invalid)}. '
                     f'Valid strategies: {sorted(VALID_STRATEGIES)}'
                 )
+        if self.intent_class is not None and self.intent_class not in VALID_INTENT_CLASSES:
+            raise ValueError(
+                f'Invalid intent_class: {self.intent_class!r}. '
+                f'Valid values: {sorted(VALID_INTENT_CLASSES)}'
+            )
+        if self.risk_class is not None and self.risk_class not in VALID_RISK_CLASSES:
+            raise ValueError(
+                f'Invalid risk_class: {self.risk_class!r}. '
+                f'Valid values: {sorted(VALID_RISK_CLASSES)}'
+            )
         return self

@@ -130,11 +130,12 @@ async def test_mcp_list_assets_invalid_uuid(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_mcp_add_assets(mock_api, mcp_client, tmp_path):
+async def test_mcp_add_assets(mock_api, mcp_client, tmp_path, monkeypatch):
     """Test memex_add_assets adds files to a note."""
     note_id = uuid4()
 
-    # Create temp file
+    # Create temp file (and permit reads from its dir — confinement guard).
+    monkeypatch.setenv('MEMEX_MCP_ASSET_ROOTS', str(tmp_path))
     asset_file = tmp_path / 'photo.png'
     asset_file.write_bytes(b'fake image data')
 
@@ -169,10 +170,11 @@ async def test_mcp_add_assets(mock_api, mcp_client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_mcp_add_assets_with_skipped_duplicates(mock_api, mcp_client, tmp_path):
+async def test_mcp_add_assets_with_skipped_duplicates(mock_api, mcp_client, tmp_path, monkeypatch):
     """Test memex_add_assets reports skipped duplicates."""
     note_id = uuid4()
 
+    monkeypatch.setenv('MEMEX_MCP_ASSET_ROOTS', str(tmp_path))
     asset_file = tmp_path / 'existing.pdf'
     asset_file.write_bytes(b'pdf content')
 
@@ -200,12 +202,13 @@ async def test_mcp_add_assets_with_skipped_duplicates(mock_api, mcp_client, tmp_
 
 
 @pytest.mark.asyncio
-async def test_mcp_add_assets_not_found(mock_api, mcp_client, tmp_path):
+async def test_mcp_add_assets_not_found(mock_api, mcp_client, tmp_path, monkeypatch):
     """Test memex_add_assets raises ToolError when note not found."""
     from fastmcp.exceptions import ToolError
 
     note_id = uuid4()
 
+    monkeypatch.setenv('MEMEX_MCP_ASSET_ROOTS', str(tmp_path))
     asset_file = tmp_path / 'img.png'
     asset_file.write_bytes(b'data')
 
@@ -244,18 +247,24 @@ async def test_mcp_add_assets_invalid_uuid(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_mcp_add_assets_no_valid_files(mock_api, mcp_client):
-    """Test memex_add_assets raises ToolError when no valid files exist."""
+async def test_mcp_add_assets_no_valid_files(mock_api, mcp_client, tmp_path, monkeypatch):
+    """Test memex_add_assets raises ToolError when no valid files exist.
+
+    The path is inside an allowed root but does not exist, so it exercises the
+    existence check (not the confinement guard, which is covered separately in
+    test_asset_path_confinement.py).
+    """
     from fastmcp.exceptions import ToolError
 
     note_id = uuid4()
+    monkeypatch.setenv('MEMEX_MCP_ASSET_ROOTS', str(tmp_path))
 
     with pytest.raises(ToolError, match='No valid asset files'):
         await mcp_client.call_tool(
             'memex_add_assets',
             {
                 'note_id': str(note_id),
-                'file_paths': ['/nonexistent/file.png'],
+                'file_paths': [str(tmp_path / 'nonexistent.png')],
                 'vault_id': 'test-vault',
             },
         )

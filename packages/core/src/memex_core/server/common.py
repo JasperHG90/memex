@@ -18,21 +18,45 @@ from memex_common.exceptions import (
     FeatureDisabledError,
     MemexError,
     NoteNotAppendableError,
+    ObservationReadOnlyError,
     ResourceNotFoundError,
     VaultNotFoundError,
 )
 from memex_common.schemas import (
+    EntityDTO,
+    IntentClass,
     MemoryUnitDTO,
     NoteDTO,
     NoteListItemDTO,
-    EntityDTO,
+    RiskClass,
     StrategyDebugInfo,
+    SupersessionInfo,
 )
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
+from memex_core.metrics import DTO_ENUM_COERCION_TOTAL
+from memex_core.services.procedural_repository import (
+    ProceduralConstraintViolation,
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
+)
 
 logger = logging.getLogger('memex.core.server')
+
+# Exception types whose 4xx responses ride a high-volume polling pattern
+# (hermes-plugin's 10 Hz readback). Logging these at ERROR with full
+# tracebacks floods the log and obscures real incidents; demote to INFO.
+# ObservationReadOnlyError is intentionally excluded by the inline guard
+# in `_handle_error` — defense in depth so an inheritance refactor doesn't
+# silently demote a typed 400-detail response. Add a new type here only
+# after confirming its volume and that an INFO-level log is sufficient
+# for ops visibility.
+_DEMOTE_TO_INFO_TYPES: tuple[type[Exception], ...] = (
+    ResourceNotFoundError,
+    VaultNotFoundError,
+    AmbiguousResourceError,
+)
 
 
 def get_api(request: Request) -> MemexAPI:
@@ -52,12 +76,27 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     if isinstance(e, HTTPException):
         raise e
 
-    # Log 404s (not-found) at info level without traceback — these are expected
-    # client paths, not server errors (e.g. GET /notes/{id} before note is visible)
-    if isinstance(e, (VaultNotFoundError, ResourceNotFoundError)):
+    # Log-level: demote high-volume client errors to INFO (see
+    # _DEMOTE_TO_INFO_TYPES). `exc_info=e` (vs True) pulls the traceback from
+    # the passed exception rather than `sys.exc_info()`, so the log line
+    # carries the right stack even if a future caller routes here outside
+    # an active `except` block.
+    if isinstance(e, _DEMOTE_TO_INFO_TYPES) and not isinstance(e, ObservationReadOnlyError):
         logger.info(f'{context}: {e}')
     else:
-        logger.error(f'{context}: {e}', exc_info=True)
+        logger.error(f'{context}: {e}', exc_info=e)
+
+    # ObservationReadOnlyError must precede every other isinstance check.
+    # It is a MemexError subclass; the generic `isinstance(e, MemexError)`
+    # branch below would otherwise flatten its structured `source_memory_units`
+    # detail to a string and silently break the agent contract. Defense in
+    # depth: route handlers also catch this explicitly, but this clause
+    # closes the gap for any future call site that routes through
+    # `_handle_error` directly.
+    if isinstance(e, ObservationReadOnlyError):
+        # Shape owned by ObservationReadOnlyError.to_http_detail() — same
+        # SSOT as the explicit route handler in server/memories.py.
+        return HTTPException(status_code=400, detail=e.to_http_detail())
 
     if isinstance(e, VaultNotFoundError):
         return HTTPException(status_code=404, detail=str(e))
@@ -67,6 +106,17 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, (AppendIdConflictError, NoteNotAppendableError)):
         return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, ProceduralIdentityConflict):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, ProceduralConstraintViolation):
+        # CHECK / FK / non-anchor UNIQUE → 422 (caller-correctable).
+        # The constraint name rides in the exception's ``constraint``
+        # attribute so the agent's log surface can tell which rule
+        # fired (e.g. ``ck_strategy_context`` vs an FK on
+        # ``vault_id``).
+        return HTTPException(status_code=422, detail=str(e))
+    if isinstance(e, ProceduralEntryNotFound):
+        return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, AppendLockTimeoutError):
         return HTTPException(
             status_code=503,
@@ -128,6 +178,8 @@ def build_note_dto(doc: Any) -> NoteDTO:
             assets=doc.get('assets', []),
             doc_metadata=metadata,
             template=metadata.get('template'),
+            status=doc.get('status', 'active'),
+            archived_at=doc.get('archived_at'),
         )
 
     metadata = doc.doc_metadata or {}
@@ -145,6 +197,8 @@ def build_note_dto(doc: Any) -> NoteDTO:
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
         template=metadata.get('template'),
+        status=getattr(doc, 'status', 'active'),
+        archived_at=getattr(doc, 'archived_at', None),
     )
 
 
@@ -165,6 +219,8 @@ def build_note_list_item_dto(doc: Any) -> NoteListItemDTO:
         doc_metadata=metadata,
         template=metadata.get('template'),
         summaries=getattr(doc, 'summaries', []),
+        status=getattr(doc, 'status', 'active'),
+        archived_at=getattr(doc, 'archived_at', None),
     )
 
 
@@ -192,16 +248,84 @@ def build_entity_dto(entity: Any) -> EntityDTO:
     )
 
 
+def _coerce_intent_class(value: Any) -> IntentClass:
+    """Coerce a raw intent_class string to an IntentClass enum.
+
+    SQL CHECK constraint at sql_models.py blocks invalid writes today; this
+    is defense-in-depth for future schema drift. Unrecognised values are
+    mapped to DURABLE with a warning + Prometheus counter increment.
+    """
+    if value is None:
+        return IntentClass.DURABLE
+    try:
+        return IntentClass(value)
+    except (ValueError, TypeError):
+        logger.warning('Unrecognised intent_class %r in DTO ctor → durable.', value)
+        DTO_ENUM_COERCION_TOTAL.labels(field='intent_class', reason='invalid').inc()
+        return IntentClass.DURABLE
+
+
+def _coerce_risk_class(value: Any) -> RiskClass:
+    if value is None:
+        return RiskClass.NONE
+    try:
+        return RiskClass(value)
+    except (ValueError, TypeError):
+        logger.warning('Unrecognised risk_class %r in DTO ctor → none.', value)
+        DTO_ENUM_COERCION_TOTAL.labels(field='risk_class', reason='invalid').inc()
+        return RiskClass.NONE
+
+
+def _extract_superseded_by(unit: Any) -> list[SupersessionInfo] | None:
+    """Read supersession entries from unit.unit_metadata['superseded_by'].
+
+    Populated only by the search engine (engine.py:1340-1362) which writes a
+    list of dicts ``{unit_id, unit_text, note_title, relation}``. Single-unit
+    fetch endpoints don't populate this — None is the correct default there.
+    """
+    meta = getattr(unit, 'unit_metadata', None) or {}
+    raw = meta.get('superseded_by') if isinstance(meta, dict) else None
+    if not raw:
+        return None
+    out: list[SupersessionInfo] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            out.append(SupersessionInfo(**entry))
+        except (ValueError, TypeError) as exc:
+            logger.warning('Skipping malformed supersession entry: %s', exc)
+    return out or None
+
+
+def vector_to_list(vec: Any) -> list[float] | None:
+    """Normalize a pgvector/numpy/sequence vector to a JSON-serializable list."""
+    if vec is None:
+        return None
+    if hasattr(vec, 'tolist'):
+        return list(vec.tolist())
+    return [float(x) for x in vec]
+
+
 def build_memory_unit_dto(
     unit: Any,
     *,
     debug: bool = False,
+    include_vectors: bool = False,
 ) -> MemoryUnitDTO:
     """Build a MemoryUnitDTO from a MemoryUnit ORM/model object.
 
     Handles all field variations across retrieval, mentions, and single-unit
     endpoints.  Optional ``debug`` flag controls whether per-strategy
     attribution data is included.
+
+    ``include_vectors`` may only be True on paths whose rows were loaded
+    eagerly (the unit getters); retrieval-path rows defer the embedding
+    column, and touching it on a detached row raises.
+
+    Confidence-variance is intentionally NOT passed: the DTO defaults to
+    _MAX_VARIANCE, preserving the cold-start invariant (variance derived
+    from confidence + evidence_count via mean_and_variance, not stored).
     """
     doc_id = getattr(unit, 'note_id', None)
     source_docs: list[UUID] = [doc_id] if doc_id else []
@@ -225,17 +349,28 @@ def build_memory_unit_dto(
         id=unit.id,
         note_id=doc_id,
         source_note_ids=source_docs,
+        embedding=vector_to_list(getattr(unit, 'embedding', None)) if include_vectors else None,
         text=unit.text,
         fact_type=unit.fact_type,
         status=unit.status,
         mentioned_at=unit.mentioned_at or getattr(unit, 'event_date', None),
         occurred_start=unit.occurred_start,
         occurred_end=unit.occurred_end,
+        created_at=getattr(unit, 'created_at', None),
+        event_date=getattr(unit, 'event_date', None),
         vault_id=unit.vault_id,
         metadata=unit.unit_metadata,
         score=getattr(unit, 'score', None),
         chunk_id=getattr(unit, 'chunk_id', None),
         confidence=getattr(unit, 'confidence', 1.0) or 1.0,
+        confidence_evidence_count=getattr(unit, 'confidence_evidence_count', 0) or 0,
+        intent_class=_coerce_intent_class(getattr(unit, 'intent_class', None)),
+        risk_class=_coerce_risk_class(getattr(unit, 'risk_class', None)),
+        last_outcome_at=getattr(unit, 'last_outcome_at', None),
+        success_co_count=getattr(unit, 'success_co_count', 0) or 0,
+        failure_co_count=getattr(unit, 'failure_co_count', 0) or 0,
+        is_deprioritized=bool(getattr(unit, 'is_deprioritized', False)),
+        superseded_by=_extract_superseded_by(unit),
         debug_info=debug_info,
     )
 

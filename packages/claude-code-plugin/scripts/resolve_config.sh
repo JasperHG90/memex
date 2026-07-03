@@ -1,27 +1,376 @@
 #!/usr/bin/env bash
-# resolve_config.sh — defines the memex() shell function via uvx.
+# resolve_config.sh — Memex CLI wrapper + project / vault resolution helpers.
 #
-# Source this from hook scripts. All CLI config resolution (server URL,
-# API key, vault selection) is handled internally by the memex CLI.
+# Source this from hook scripts. Defines:
+#   memex                           — wrapper around the installed Memex CLI.
+#   memex_resolve_project_id        — derive a portable project identifier.
+#   memex_resolve_active_vault      — Hermes-style hierarchical vault lookup.
+#   memex_kv_namespace_migrate      — one-time migration of the project vault key.
 
-if ! command -v uvx >/dev/null 2>&1; then
-    cat <<'EOF'
-{"systemMessage": "❌ `uvx` is not on PATH. Hooks require it to run the Memex CLI.\n\nInstall uv: https://docs.astral.sh/uv/getting-started/installation/"}
+# When sourced from a hook that emits its own JSON on stdout (e.g., a
+# PreToolUse hook returning ``updatedInput``), an early system message here
+# would corrupt the hook output. Surface CLI-not-installed errors
+# *only* when the caller explicitly opts in via MEMEX_RESOLVE_VERBOSE=1, or
+# from the SessionStart hook (where the message is the only output anyway).
+_memex_emit_systemMessage() {
+    if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ]; then
+        cat
+        # Signal to the sourcing hook script that we already emitted a JSON
+        # document on stdout; the outer script must NOT emit a second one
+        # (Claude Code expects exactly one per hook invocation). Set ONLY
+        # when emission actually happened — the variable name encodes the
+        # invariant "emitted ↔ flag set", and a non-verbose code path that
+        # set the flag without emitting would be a silent lie.
+        export MEMEX_HOOK_ALREADY_EMITTED=1
+    fi
+}
+
+# MEMEX_LOCAL_PATH escape hatch — point at a local Memex workspace checkout
+# instead of the PATH-installed CLI. Used by the eval suite to run
+# claude-code against the same code path Hermes runs against.
+if [ -n "${MEMEX_LOCAL_PATH:-}" ]; then
+    if ! command -v uv >/dev/null 2>&1; then
+        _memex_emit_systemMessage <<'EOF'
+{"systemMessage": "❌ MEMEX_LOCAL_PATH is set but `uv` is not on PATH."}
 EOF
-    exit 0
-fi
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
+    fi
+    if [ ! -d "$MEMEX_LOCAL_PATH" ]; then
+        if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ] && command -v jq >/dev/null 2>&1; then
+            _diag_msg=$(printf "❌ MEMEX_LOCAL_PATH='%s' is not a directory." "$MEMEX_LOCAL_PATH")
+            jq -n --arg msg "$_diag_msg" '{systemMessage: $msg}'
+            unset _diag_msg
+            export MEMEX_HOOK_ALREADY_EMITTED=1
+        fi
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
+    fi
+    _memex_local_path="$MEMEX_LOCAL_PATH"
+else
+    _memex_local_path=""
 
-_memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
-_memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
-
-# Validate ref exists when user overrides the default
-if [ "$_memex_ref" != "latest" ]; then
-    if ! git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_memex_ref" 2>/dev/null | grep -q .; then
-        cat <<EOF
-{"systemMessage": "❌ MEMEX_PLUGIN_VERSION='${_memex_ref}' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)."}
+    # Use the `memex` you installed (`uv tool install "memex-cli[mcp,server] @ …"`,
+    # see the plugin README). The hook does NOT build its own copy from a git ref:
+    # that produced a SECOND, divergent install — possibly stale (older than your
+    # real one) or missing extras like `click` — and every such failure was
+    # misreported as "server unreachable". The installed CLI is the single source
+    # of truth; there is no version pinning here.
+    if ! command -v memex >/dev/null 2>&1; then
+        _memex_emit_systemMessage <<'EOF'
+{"systemMessage": "❌ Memex CLI not found on PATH.\n\nThe Claude Code plugin uses the `memex` you install yourself — it does not bundle one. Install it with uv:\n\n  uv tool install \"memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli\"\n\nThen restart Claude Code. Full setup: https://github.com/JasperHG90/memex/blob/main/packages/claude-code-plugin/README.md"}
 EOF
-        exit 0
+        # Stub out memex so callers can still source us safely; calls just fail.
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
     fi
 fi
 
-memex() { uvx --from "$_memex_pkg" memex "$@"; }
+# Wrap CLI calls in a hard timeout so a hung server can't block hooks
+# indefinitely. SessionEnd / PreCompact are particularly sensitive: the
+# Claude Code host may force-kill ``async`` hooks after ~10s, so we cap our
+# call latency well below that. Individual call sites can override via
+# MEMEX_CC_TIMEOUT (seconds).
+memex() {
+    local _timeout="${MEMEX_CC_TIMEOUT:-8}"
+    # Validate: positive integer in [1..600]. Anything else falls back to 8s
+    # so a misconfigured env var cannot turn `timeout` into an invalid-arg
+    # error (exit 125), which is indistinguishable from a real CLI failure.
+    case "$_timeout" in
+        ''|*[!0-9]*) _timeout=8 ;;
+    esac
+    # Reject obvious overflow before bash's [ -gt ] hits its INT64 ceiling.
+    [ "${#_timeout}" -gt 4 ] && _timeout=8
+    [ "$_timeout" -lt 1 ]    && _timeout=8
+    [ "$_timeout" -gt 600 ]  && _timeout=600
+
+    # macOS doesn't ship GNU coreutils — `timeout(1)` is absent there but
+    # `gtimeout(1)` is the homebrew/coreutils name. Probe both before
+    # falling back to an unbounded call so a hung server can't quietly
+    # stall hooks on Apple machines.
+    #
+    # `timeout`/`gtimeout` exec the program named in their argv against PATH,
+    # so `timeout … memex …` runs the INSTALLED binary, not this shell function
+    # (functions are invisible to a separate exec). The unbounded fallback would
+    # re-enter this function, so it uses `command memex` to bypass the function
+    # and reach the real binary.
+    if [ -n "$_memex_local_path" ]; then
+        local _runner=(uv run --project "$_memex_local_path" --package memex-cli memex)
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$_timeout" "${_runner[@]}" "$@"
+        elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout "$_timeout" "${_runner[@]}" "$@"
+        else
+            "${_runner[@]}" "$@"
+        fi
+    else
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$_timeout" memex "$@"
+        elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout "$_timeout" memex "$@"
+        else
+            command memex "$@"
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Git remote URL normalisation
+#
+# Shared by `memex_resolve_project_id` (KV key) and `inject_memex_tags.sh`
+# (git:repo tag). Both want the same `host/owner/repo` shape regardless of
+# whether the remote is HTTPS, basic-auth HTTPS, SCP-style SSH, or `ssh://`.
+# Worked examples:
+#
+#   https://github.com/acme/myapp.git           → github.com/acme/myapp
+#   https://oauth2:t0k@github.com/acme/myapp    → github.com/acme/myapp
+#   git@github.com:acme/myapp.git               → github.com/acme/myapp
+#   ssh://git@github.com/acme/myapp.git         → github.com/acme/myapp
+#   https://gitlab.com/org/subgroup/repo.git    → gitlab.com/org/subgroup/repo
+#
+# Pipeline:
+#   1. strip trailing `.git`
+#   2. strip HTTPS basic-auth (`user:password@`)
+#   3. strip `<scheme>://`
+#   4. strip an explicit `:NNNN/` port from the host segment so SSH URLs
+#      like `ssh://git@github.com:22/acme/myapp` don't leak the port into
+#      the project ID. This MUST run before step 5 — otherwise step 5
+#      would treat the port-colon as the SCP user@host: separator and
+#      drag the port digits into the path.
+#   5. collapse `user@host[:/]path` → `host/path` (handles both the SCP-style
+#      colon separator and the post-scheme-strip slash)
+# ---------------------------------------------------------------------------
+memex_normalize_git_remote_url() {
+    printf '%s' "$1" | sed '
+        s/\.git$//
+        s|https://[^@]*@|https://|
+        s|^[a-zA-Z][a-zA-Z0-9+.-]*://||
+        s|@\([^:/]*\):[0-9][0-9]*/|@\1/|
+        s|^[^@]*@\([^:/]*\)[:/]|\1/|
+    '
+}
+
+# ---------------------------------------------------------------------------
+# Project identifier
+#
+# Stable across machines: prefer the git remote (normalized via
+# `memex_normalize_git_remote_url`), fall back to a path relative to $HOME,
+# then $PWD.
+# ---------------------------------------------------------------------------
+memex_resolve_project_id() {
+    local _id=""
+    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local _remote
+        _remote=$(git remote get-url origin 2>/dev/null) || true
+        if [ -n "$_remote" ]; then
+            _id=$(memex_normalize_git_remote_url "$_remote")
+        fi
+    fi
+    if [ -z "$_id" ]; then
+        local _home="${HOME:-}"
+        case "$PWD" in
+            "${_home}"/*) _id="${PWD#"$_home"/}" ;;
+            *)            _id="$PWD" ;;
+        esac
+    fi
+    printf '%s' "$_id"
+}
+
+# ---------------------------------------------------------------------------
+# KV helpers
+# ---------------------------------------------------------------------------
+_memex_kv_get_value() {
+    # $1: key. Echoes the value (or empty string) on stdout, never errors.
+    memex kv get "$1" --value-only 2>/dev/null || true
+}
+
+_memex_kv_put_value() {
+    # $1: key, $2: value. Returns 0 on success, non-zero on failure.
+    memex kv put "$1" "$2" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# KV namespace migration
+#
+# CC plugin historically wrote `project:<id>:vault`. The plugin now namespaces
+# under `app:claude-code:project:<id>:vault` to mirror the Hermes plugin's
+# `app:hermes:*` discipline and avoid collisions with other tools.
+#
+# On first call with a legacy bare key, copy its value to the new key. The
+# bare key is left in place — deletions in KV are user-only — but the
+# new key wins on subsequent reads.
+#
+# Echoes the resolved value on stdout (empty string if neither key is set).
+# ---------------------------------------------------------------------------
+memex_kv_namespace_migrate() {
+    local _project_id="$1"
+    [ -z "$_project_id" ] && return 0
+
+    local _new_key="app:claude-code:project:${_project_id}:vault"
+    local _old_key="project:${_project_id}:vault"
+
+    local _new_val
+    _new_val=$(_memex_kv_get_value "$_new_key")
+    if [ -n "$_new_val" ]; then
+        printf '%s' "$_new_val"
+        return 0
+    fi
+
+    local _old_val
+    _old_val=$(_memex_kv_get_value "$_old_key")
+    if [ -n "$_old_val" ]; then
+        # Forward-migrate. If the write fails (server down, missing perms),
+        # the next session will retry; the legacy key remains as a safety
+        # net. Log the failure to stderr so it surfaces in CC's hook trace.
+        if ! _memex_kv_put_value "$_new_key" "$_old_val"; then
+            echo "memex resolve_config: forward-migration of '${_old_key}' → '${_new_key}' failed; continuing with legacy value. Will retry next session." >&2
+        fi
+        printf '%s' "$_old_val"
+        return 0
+    fi
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Hierarchical active vault resolver
+#
+# Order (mirrors Hermes' chain at packages/hermes-plugin/src/memex_hermes_plugin/memex/project.py):
+#   1. app:claude-code:project:<project_id>:vault   (project binding)
+#   2. app:claude-code:user:$USER:vault             (per-user default)
+#   3. app:claude-code:agent:<agent_id>:vault       (per-subagent — only if MEMEX_CC_AGENT_ID is set)
+#   4. $MEMEX_VAULT environment variable
+#   5. server-side default (echoes empty; the server picks the configured default)
+#
+# In-process result cached in MEMEX_CC_RESOLVED_VAULT to avoid repeated KV
+# round-trips within a single hook invocation.
+# ---------------------------------------------------------------------------
+memex_resolve_active_vault() {
+    if [ -n "${MEMEX_CC_RESOLVED_VAULT:-}" ]; then
+        printf '%s' "$MEMEX_CC_RESOLVED_VAULT"
+        return 0
+    fi
+
+    local _project_id
+    _project_id=$(memex_resolve_project_id)
+
+    local _vault=""
+
+    # 1. Project-level (with one-time legacy migration)
+    if [ -n "$_project_id" ]; then
+        _vault=$(memex_kv_namespace_migrate "$_project_id")
+    fi
+
+    # 2. User-level
+    if [ -z "$_vault" ] && [ -n "${USER:-}" ]; then
+        _vault=$(_memex_kv_get_value "app:claude-code:user:${USER}:vault")
+    fi
+
+    # 3. Agent-level (only if subagent identity is set)
+    if [ -z "$_vault" ] && [ -n "${MEMEX_CC_AGENT_ID:-}" ]; then
+        _vault=$(_memex_kv_get_value "app:claude-code:agent:${MEMEX_CC_AGENT_ID}:vault")
+    fi
+
+    # 4. Environment override
+    if [ -z "$_vault" ] && [ -n "${MEMEX_VAULT:-}" ]; then
+        _vault="$MEMEX_VAULT"
+    fi
+
+    # 5. Server default — leave empty.
+
+    export MEMEX_CC_RESOLVED_VAULT="$_vault"
+    printf '%s' "$_vault"
+}
+
+# ---------------------------------------------------------------------------
+# Session-note persistence (used by PreCompact and SessionEnd)
+#
+# memex_persist_session_delta <state_dir> <cc_session_id> <session_note_key>
+#                             <vault> <title> <description> <delta_markdown>
+#                             [<extra_tag> ...]
+#
+# Behavior:
+#   - First call (state file absent): `memex note add` with full content.
+#   - Subsequent calls: `memex note append` with the delta.
+#   - State tracked via $state_dir/session_note_created_<safe_session_id>.
+#
+# Returns 0 on success, non-zero on failure. Caller decides what to surface.
+#
+# Concurrency assumption:
+#   PreCompact (sync) and SessionEnd (async) callers share `_flag_file` as
+#   the "note created" sentinel. The flag is written AFTER `memex note add`
+#   succeeds, leaving a small window where the CLI has succeeded but the
+#   flag is absent on disk. Under Claude Code's hook ordering, PreCompact
+#   completes before SessionEnd is dispatched, so the window is not
+#   observable in practice. If a future host runs the two hooks
+#   concurrently, this needs a `flock` (or a server-side
+#   "create-if-missing" path) to remain safe. Documented to keep future
+#   refactors honest.
+# ---------------------------------------------------------------------------
+memex_persist_session_delta() {
+    local _state_dir="$1"; shift
+    local _cc_session_id="$1"; shift
+    local _note_key="$1"; shift
+    local _vault="$1"; shift
+    local _title="$1"; shift
+    local _description="$1"; shift
+    local _delta="$1"; shift
+    # Remaining args are extra tags.
+
+    if [ -z "$_note_key" ]; then
+        return 1
+    fi
+    if [ -z "$_delta" ]; then
+        return 1
+    fi
+
+    local _safe_session_id
+    _safe_session_id=$(printf '%s' "$_cc_session_id" | tr -c 'A-Za-z0-9._-' '_')
+    local _flag_file="${_state_dir}/session_note_created_${_safe_session_id}"
+
+    if [ ! -f "$_flag_file" ]; then
+        # First call: create the note. Flags first, then `--`, then the
+        # positional `_delta` — transcript content can plausibly start with
+        # `-` (e.g. a bash log line) and would otherwise be parsed as a CLI
+        # flag.
+        local _add_args=(note add --key "$_note_key" --background)
+        [ -n "$_vault"       ] && _add_args+=(--vault "$_vault")
+        [ -n "$_title"       ] && _add_args+=(--title "$_title")
+        [ -n "$_description" ] && _add_args+=(--description "$_description")
+        _add_args+=(--author "claude-code")
+        for _tag in "$@"; do
+            [ -n "$_tag" ] && _add_args+=(--tag "$_tag")
+        done
+        _add_args+=(-- "$_delta")
+
+        if memex "${_add_args[@]}" >/dev/null 2>&1; then
+            # Atomic flag write: create a sibling temp file, then rename.
+            # `mv` is atomic on the same filesystem so a crash leaves either
+            # the temp file (cleaned up at next SessionStart) or the final
+            # flag (correctly marking the note as created). The old
+            # `: > "$_flag_file"` could leave an empty partial file on a
+            # crash that suppressed future appends.
+            local _flag_tmp
+            if _flag_tmp=$(mktemp "${_flag_file}.XXXXXX" 2>/dev/null); then
+                if mv -f "$_flag_tmp" "$_flag_file" 2>/dev/null; then
+                    return 0
+                fi
+                rm -f "$_flag_tmp"
+            fi
+            # Fall back to non-atomic write if mktemp/mv unavailable —
+            # better than failing the whole persist.
+            : > "$_flag_file"
+            return 0
+        fi
+        return 1
+    fi
+
+    # Subsequent calls: append delta.
+    local _append_args=(note append --key "$_note_key" --quiet)
+    [ -n "$_vault" ] && _append_args+=(--vault "$_vault")
+
+    if printf '%s' "$_delta" | memex "${_append_args[@]}" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}

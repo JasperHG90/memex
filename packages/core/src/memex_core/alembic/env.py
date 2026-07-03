@@ -1,20 +1,20 @@
 """Alembic async migration environment for Memex.
 
 Supports:
-- Async SQLAlchemy engine (asyncpg)
+- Synchronous SQLAlchemy engine (psycopg v3) — alembic is sync; the runtime app
+  uses asyncpg, but migrations swap to psycopg so multi-statement op.execute()
+  blocks work (see ``_sync_url``).
 - SQLModel metadata (pgvector Vector columns)
 - Advisory locking to prevent concurrent migration races
 - pgvector autogenerate (render_item / compare_type)
 """
 
-import asyncio
 import logging
 from logging.config import fileConfig
 
 from alembic import context
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import pool, text
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
 # Import all models so SQLModel.metadata is fully populated.
@@ -27,8 +27,13 @@ logger = logging.getLogger('alembic.env')
 config = context.config
 
 # Interpret the config file for Python logging (if present).
+# disable_existing_loggers=False is required so we don't disable every
+# logger created before this point. The default (True) would mark
+# every already-instantiated logger (memex_eval.*, structlog-bridged, etc.)
+# as ``disabled=True``, which silently swallows their records for the rest
+# of the process — including any ``caplog`` capture in tests.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # The metadata object used for autogenerate support.
 target_metadata = SQLModel.metadata
@@ -102,8 +107,104 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _is_fresh_db(connection) -> bool:
+    """True when the public schema has zero application tables."""
+    result = connection.execute(
+        text(
+            'SELECT NOT EXISTS ('
+            '  SELECT 1 FROM information_schema.tables'
+            "  WHERE table_schema = 'public' AND table_name = 'vaults'"
+            ')'
+        )
+    )
+    return bool(result.scalar())
+
+
+def _bootstrap_fresh_db(connection) -> None:
+    """Fast-path for a brand-new database.
+
+    ``SQLModel.metadata.create_all`` builds every table from the current
+    Python model definitions — including columns added by later
+    migrations. Running the migration chain after that would fail on
+    every ``ALTER TABLE ADD COLUMN`` because the column already exists.
+
+    Instead: create everything in one shot, stamp alembic at HEAD, done.
+    Data-carrying migrations (backfills) are no-ops on an empty DB.
+    """
+    connection.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+    connection.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+    SQLModel.metadata.create_all(bind=connection)
+
+    script_dir = context.script
+    head = script_dir.get_current_head()
+    connection.execute(
+        text(
+            'CREATE TABLE IF NOT EXISTS alembic_version ('
+            '  version_num VARCHAR(128) NOT NULL,'
+            '  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)'
+            ')'
+        )
+    )
+    connection.execute(text('DELETE FROM alembic_version'))
+    connection.execute(
+        text('INSERT INTO alembic_version (version_num) VALUES (:rev)'),
+        {'rev': head},
+    )
+    logger.info('Fresh database: created all tables via create_all, stamped at %s', head)
+
+
 def do_run_migrations(connection):
-    """Run migrations with an active connection."""
+    """Run migrations with an active connection.
+
+    On a fresh database (no application tables), takes a shortcut:
+    ``create_all`` + stamp HEAD. On an existing database, runs the
+    normal alembic migration chain.
+
+    When migrating to HEAD, ``create_all`` runs as the final step
+    (idempotent via ``checkfirst``) so SQLModel classes added since the DB's
+    last ``create_all`` exist without manual intervention.
+
+    Both shortcuts are gated on the destination being HEAD. A TARGETED
+    migration (``upgrade <rev>`` / ``downgrade <rev>`` — only tests do this)
+    must run the real chain step by step and leave the schema exactly at that
+    revision: the fresh-DB create_all+stamp-HEAD fast-path would jump straight
+    to HEAD, and a trailing ``create_all`` would both add HEAD-only columns to
+    an earlier revision AND re-create tables a downgrade just dropped.
+    """
+    # ``context.get_revision_argument()`` returns the destination revision when
+    # alembic was invoked with one (``upgrade <rev>`` / ``downgrade <rev>``), or
+    # ``None`` for ``upgrade head`` / programmatic invocations. AttributeError
+    # is the documented failure when the call site has no command-args context
+    # (e.g. some programmatic alembic.command flows pre-3.0). Anything else is
+    # unexpected and we surface it via a warning so it isn't silently masked as
+    # ``target = None`` → ``to_head = True``.
+    try:
+        target = context.get_revision_argument()
+    except AttributeError:
+        target = None
+    except Exception:
+        logger.warning(
+            'alembic.env: get_revision_argument() raised unexpectedly; '
+            'falling back to target=None (treated as HEAD). '
+            'This may mask a misconfigured alembic context.',
+            exc_info=True,
+        )
+        target = None
+    to_head = target is None or target in ('head', 'heads')
+
+    if _is_fresh_db(connection):
+        if to_head:
+            _bootstrap_fresh_db(connection)
+            return
+        # Fresh DB + targeted upgrade: run the real chain from base. alembic
+        # creates alembic_version itself; don't widen a table that's absent.
+    else:
+        # Widen alembic_version.version_num if it's still the default
+        # varchar(32) — revision ids can exceed 32 chars.
+        connection.execute(
+            text('ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(128)')
+        )
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -112,34 +213,53 @@ def do_run_migrations(connection):
     with context.begin_transaction():
         context.run_migrations()
 
+    if to_head:
+        SQLModel.metadata.create_all(bind=connection, checkfirst=True)
 
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with an async engine.
+
+def _sync_url(url: str) -> str:
+    """Convert the runtime asyncpg URL to its synchronous psycopg (v3) sibling.
+
+    Alembic is synchronous and is not designed to run under an async driver.
+    asyncpg sends every statement over the extended query protocol as a
+    prepared statement, and Postgres forbids more than one command per
+    prepared statement — so a migration that batches multiple statements in a
+    single ``op.execute()`` (an idiom used across the migration history)
+    raises ``cannot insert multiple commands into a prepared statement``.
+    psycopg (v3) executes such parameterless multi-statement blocks fine.
+    The runtime app keeps using asyncpg — only the migration engine swaps
+    drivers.
+    """
+    prefix = 'postgresql+asyncpg://'
+    if url.startswith(prefix):
+        return 'postgresql+psycopg://' + url[len(prefix) :]
+    return url
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode with a synchronous psycopg (v3) engine.
 
     Acquires a PostgreSQL advisory lock first to prevent concurrent
     migration execution across multiple workers.
     """
-    connectable = create_async_engine(
-        _resolve_url(),
+    from sqlalchemy import create_engine
+
+    connectable = create_engine(
+        _sync_url(_resolve_url()),
         poolclass=pool.NullPool,
     )
-
-    async with connectable.connect() as connection:
-        # Acquire session-level advisory lock to serialize migrations.
-        # Released automatically when the connection/session closes.
-        await connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
-        await connection.run_sync(do_run_migrations)
-        # Alembic's begin_transaction() creates a SAVEPOINT inside the
-        # implicit transaction from connect(). Releasing the savepoint
-        # does NOT commit the outer transaction — we must do it explicitly.
-        await connection.commit()
-
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    """Entry point for online migrations — delegates to async runner."""
-    asyncio.run(run_async_migrations())
+    try:
+        with connectable.connect() as connection:
+            # Session-level advisory lock to serialize migrations; released
+            # when the connection closes.
+            connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
+            do_run_migrations(connection)
+            # do_run_migrations opens its own transaction(s) via
+            # context.begin_transaction(); commit the outer connection so the
+            # advisory-lock session and any DDL run outside that block persist.
+            connection.commit()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

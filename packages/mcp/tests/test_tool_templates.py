@@ -239,14 +239,18 @@ def test_mcp_routes_structured_capture_to_templates_via_gemini() -> None:
         tools = [await mcp.get_tool(n) for n in names]
         return tools, mcp.instructions
 
+    import copy
+
     tools_raw, instructions = asyncio.run(_collect())
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the FastMCP-cached tool parameters intact for tests that follow.
     tool_defs = [
         {
             'type': 'function',
             'function': {
                 'name': t.name,
                 'description': t.description,
-                'parameters': t.parameters,
+                'parameters': copy.deepcopy(t.parameters),
             },
         }
         for t in tools_raw

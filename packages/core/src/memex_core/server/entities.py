@@ -13,6 +13,7 @@ from memex_core.server.auth import (
     get_auth_context,
     require_delete,
     require_read,
+    require_write,
 )
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
@@ -63,6 +64,10 @@ async def list_entities(
         None,
         description='Filter by entity type.',
     ),
+    slim: Annotated[
+        bool,
+        Query(description='Drop entity description to keep responses under hook caps.'),
+    ] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -96,7 +101,7 @@ async def list_entities(
 
     async def ranked_stream():
         async for entity in api.list_entities_ranked(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type, slim=slim
         ):
             yield build_entity_dto(entity)
 
@@ -144,11 +149,21 @@ async def get_entity_mentions(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 20,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    include_stale: Annotated[bool, Query()] = False,
+    include_superseded: Annotated[bool, Query()] = False,
+    include_deprioritized: Annotated[bool, Query()] = False,
 ):
     """Get mentions for an entity."""
     try:
         vault_ids = await resolve_vault_ids(api, vault_id)
-        results = await api.get_entity_mentions(id, limit=limit, vault_ids=vault_ids)
+        results = await api.get_entity_mentions(
+            id,
+            limit=limit,
+            vault_ids=vault_ids,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
         items = [
             {
                 'unit': build_memory_unit_dto(r['unit']),
@@ -282,6 +297,45 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Entity deletion failed')
+
+
+@router.post('/entities/scan-merges', dependencies=[Depends(require_write)])
+async def scan_entity_merges(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    top_n: Annotated[int | None, Query(ge=2, le=10_000)] = None,
+    scan_cooldown_days: Annotated[int | None, Query(ge=0)] = None,
+    pair_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    cluster_min_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    focus: Annotated[str | None, Query(max_length=200)] = None,
+):
+    """Run a one-shot cross-batch entity-cluster collapse scan.
+
+    Cross-vault scope; intended for operator-only access. The scan performs
+    INSERT/UPDATE against ``maintenance_proposals`` and bumps
+    ``entities.last_merge_scan_at`` for every scanned entity — including rows
+    outside the caller's vault scope — so this endpoint requires the WRITE
+    permission and is best gated behind an operator-only key in deployments
+    that enable auth.
+
+    Complements the scheduler. Emits one MaintenanceProposal per surviving
+    cluster (after the cohesion guard); rescan-collisions UPDATE existing
+    findings in place. The merge itself is NOT applied — operators approve
+    via ``memex lint resolve --winner ...``.
+    """
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    try:
+        summary = await scan_collapse_clusters(
+            api,
+            top_n=top_n,
+            scan_cooldown_days=scan_cooldown_days,
+            pair_threshold=pair_threshold,
+            cluster_min_threshold=cluster_min_threshold,
+            focus=focus,
+        )
+        return summary
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Entity merge scan failed')
 
 
 @router.delete('/entities/{entity_id}/mental-model', dependencies=[Depends(require_delete)])

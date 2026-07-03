@@ -41,9 +41,9 @@ def test_kv_help_routes_learned_facts_to_notes(runner, strip_ansi):
     assert 'memex note add' in text
 
 
-def test_kv_write_help_drops_bare_fact_wording(runner, strip_ansi):
-    """`memex kv write --help` must not call the value 'a fact'."""
-    result = runner.invoke(app, ['write', '--help'])
+def test_kv_put_help_drops_bare_fact_wording(runner, strip_ansi):
+    """`memex kv put --help` must not call the value 'a fact'."""
+    result = runner.invoke(app, ['put', '--help'])
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     # The argument was previously "The fact/value to store." — must be gone.

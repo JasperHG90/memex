@@ -45,6 +45,10 @@ class LiteLLMReranker:
             self._api_base,
         )
 
+    @property
+    def model_version(self) -> str:
+        return f'litellm:{self._model}'
+
     def score(self, query: str, texts: list[str]) -> np.ndarray[tuple[int], np.dtype[np.float32]]:
         """Score query-document pairs.
 

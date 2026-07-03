@@ -35,7 +35,7 @@ docs-clean:
 # Install python dependencies
 install:
   uv sync --all-groups --all-extras
-  uv tool install -e ./packages/cli
+  uv tool install -e './packages/cli[sync,server,mcp]' --force
 
 # Install pre-commit hooks
 prek_setup:
@@ -83,8 +83,8 @@ update_collections: embed_collections
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 
-# Start postgres, run server in a temp dir, execute benchmark, then tear down
-benchmark-internal server='http://localhost:8001/api/v1/' *args='':
+# Start postgres + a temp memex server, run every suite (with LLM judge), then tear down
+benchmark-suites server='http://localhost:8001/api/v1/' *args='':
   #!/usr/bin/env bash
   set -euo pipefail
   docker compose up -d db
@@ -97,10 +97,10 @@ benchmark-internal server='http://localhost:8001/api/v1/' *args='':
   SERVER_PID=$!
   echo "Waiting for server on :8001..."
   until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
-  uv run memex-eval run --server {{server}} {{args}}
+  uv run memex-eval suite run --all --server {{server}} {{args}}
 
-# Start postgres, run server in a temp dir, execute benchmark (no LLM judge), then tear down
-benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
+# Same as benchmark-suites but without the LLM judge (deterministic checks only)
+benchmark-suites-fast server='http://localhost:8001/api/v1/' *args='':
   #!/usr/bin/env bash
   set -euo pipefail
   docker compose up -d db
@@ -113,7 +113,35 @@ benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
   SERVER_PID=$!
   echo "Waiting for server on :8001..."
   until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
-  uv run memex-eval run --server {{server}} --no-llm-judge {{args}}
+  uv run memex-eval suite run --all --server {{server}} --no-llm-judge {{args}}
+
+# Sweep V19's composite_boost_log_clip (L) against the retrieval_stability
+# gate. Spawns one server per L value with the env override applied, runs
+# the suite against the shipped snapshot+baselines, aggregates per-point
+# RBO into a SweepResult JSON. Each point reuses the framework's
+# auto-imported snapshot, so unit UUIDs are stable across points.
+#
+# Defaults: L ∈ {inf, 2.0, 1.0, 0.5, 0.1, 0.01}. Expected outcome under
+# the current corpus (neutral metadata): RBO=1.0 for L ≥ 0.1 — the clip
+# is dormant. Pass --param to override the grid (e.g. for a denser scan).
+#
+# This is local-only; the sweep framework hard-rejects remote --server
+# URLs because env overrides only take effect at process startup.
+sweep-clip-l output='.temp/sweep-clip-l.json' grid='inf,2.0,1.0,0.5,0.1,0.01':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  mkdir -p "$(dirname '{{output}}')"
+  uv run memex-eval suite sweep retrieval_stability \
+    --server http://127.0.0.1:18080/api/v1/ \
+    --param 'server.memory.retrieval.composite_boost_log_clip={{grid}}' \
+    --output '{{output}}' \
+    --max-points 16
+  echo
+  echo "Sweep complete. Per-point summary:"
+  python -c "import json; r=json.load(open('{{output}}')); [print(f\"  L={p['overrides'].get('server.memory.retrieval.composite_boost_log_clip')}: pass_rate={p['run_result']['suite_metrics'].get('suite.pass_rate', '?'):.3f}\" if p.get('run_result') else f\"  L={p['overrides'].get('server.memory.retrieval.composite_boost_log_clip')}: ERROR ({p.get('error', '?')})\") for p in r['points']]"
 
 # Run LongMemEval external benchmark
 benchmark-longmemeval dataset_path server='http://localhost:8001/api/v1/':

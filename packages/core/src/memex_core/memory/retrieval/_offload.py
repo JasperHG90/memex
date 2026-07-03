@@ -22,6 +22,7 @@ from memex_common.config import ServerConfig
 _RERANKER_SEMAPHORE: asyncio.Semaphore | None = None
 _EMBEDDING_SEMAPHORE: asyncio.Semaphore | None = None
 _NER_SEMAPHORE: asyncio.Semaphore | None = None
+_NLI_SEMAPHORE: asyncio.Semaphore | None = None
 
 _CFG: ServerConfig | None = None
 
@@ -38,10 +39,11 @@ def configure_offload_semaphores(cfg: ServerConfig) -> None:
     call's timeout but NOT the cap — call ``configure_offload_semaphores``
     again to change a cap at runtime.
     """
-    global _RERANKER_SEMAPHORE, _EMBEDDING_SEMAPHORE, _NER_SEMAPHORE, _CFG
+    global _RERANKER_SEMAPHORE, _EMBEDDING_SEMAPHORE, _NER_SEMAPHORE, _NLI_SEMAPHORE, _CFG
     _RERANKER_SEMAPHORE = asyncio.Semaphore(cfg.reranker_max_concurrency)
     _EMBEDDING_SEMAPHORE = asyncio.Semaphore(cfg.embedding_max_concurrency)
     _NER_SEMAPHORE = asyncio.Semaphore(cfg.ner_max_concurrency)
+    _NLI_SEMAPHORE = asyncio.Semaphore(cfg.nli_max_concurrency)
     _CFG = cfg
 
 
@@ -77,6 +79,18 @@ def get_ner_semaphore() -> asyncio.Semaphore:
         _require_configured()
     assert _NER_SEMAPHORE is not None
     return _NER_SEMAPHORE
+
+
+def get_nli_semaphore() -> asyncio.Semaphore:
+    """Return the shared NLI semaphore. Raises if not configured.
+
+    Used by the lint_llm polarity branch (scheduler tick) and by the
+    on-demand /lint/llm/run endpoint added in P6. Same compute path as the
+    reranker; sized via ``ServerConfig.nli_max_concurrency``."""
+    if _NLI_SEMAPHORE is None:
+        _require_configured()
+    assert _NLI_SEMAPHORE is not None
+    return _NLI_SEMAPHORE
 
 
 def get_reranker_call_timeout() -> float:

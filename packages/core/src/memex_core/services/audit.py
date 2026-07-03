@@ -69,8 +69,66 @@ class AuditService:
                 await session.commit()
         except (SQLAlchemyError, OSError, RuntimeError):
             logger.exception('Failed to write audit log entry: action=%s', entry.action)
+            return
         except Exception:
             logger.exception('Unexpected error writing audit log entry: action=%s', entry.action)
+            return
+
+        from memex_core.metrics import MEMEX_AUDIT_LOG_TOTAL
+
+        MEMEX_AUDIT_LOG_TOTAL.labels(action=entry.action).inc()
+
+    def log_batch(
+        self,
+        entries: list[dict[str, Any]],
+        *,
+        background_tasks: Any | None = None,
+    ) -> None:
+        """Schedule a batch of audit entries as a single background task.
+
+        Each ``entry`` dict accepts the same keys as :meth:`log` (``action``,
+        ``actor``, ``resource_type``, ``resource_id``, ``session_id``,
+        ``details``). The whole batch persists in one transaction with a
+        single ``add_all`` so the per-row INSERT-per-row overhead disappears.
+        Empty ``entries`` is a no-op.
+        """
+        if not entries:
+            return
+        rows = [
+            AuditLog(
+                actor=e.get('actor'),
+                action=e['action'],
+                resource_type=e.get('resource_type'),
+                resource_id=e.get('resource_id'),
+                session_id=e.get('session_id'),
+                details=e.get('details'),
+            )
+            for e in entries
+        ]
+        if background_tasks is not None:
+            background_tasks.add_task(self._persist_batch, rows)
+        else:
+            asyncio.create_task(self._persist_batch(rows))
+
+    async def _persist_batch(self, rows: list[AuditLog]) -> None:
+        """Persist a batch of audit log entries in a single transaction."""
+        if not rows:
+            return
+        try:
+            async with self._metastore.session() as session:
+                session.add_all(rows)
+                await session.commit()
+        except (SQLAlchemyError, OSError, RuntimeError):
+            logger.exception('Failed to write audit log batch: count=%d', len(rows))
+            return
+        except Exception:
+            logger.exception('Unexpected error writing audit log batch: count=%d', len(rows))
+            return
+
+        from memex_core.metrics import MEMEX_AUDIT_LOG_TOTAL
+
+        for entry in rows:
+            MEMEX_AUDIT_LOG_TOTAL.labels(action=entry.action).inc()
 
     # ------------------------------------------------------------------
     # Read (query)

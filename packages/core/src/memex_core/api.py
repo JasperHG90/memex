@@ -1,4 +1,7 @@
-from typing import cast, Self, Any, AsyncGenerator
+from typing import cast, Literal, Self, Any, AsyncGenerator, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memex_core.services.lint_llm import LintLLMService
 import asyncio
 import hashlib
 import pathlib as plb
@@ -6,24 +9,49 @@ import logging
 import re
 from uuid import UUID
 from functools import cached_property
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import dspy
 
 from memex_common.exceptions import (
+    MemoryUnitNotFoundError,
     VaultNotFoundError,
 )
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+
+if _TYPE_CHECKING:
+    from memex_core.services.case_service import CaseService as CaseServiceT
+
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralDerivationQueueDTO,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralEntryVersionDTO,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
+    ShortLabel,
+)
 from memex_common.schemas import (
+    IntentClass,
     LineageResponse,
     LineageDirection,
     MemoryLinkDTO,
     NoteSearchResult,
     NodeDTO,
     RelatedNoteDTO,
+    RiskClass,
     SurveyResponse,
+    UnitHistoryNodeDTO,
 )
+from memex_common.vault_policy import VaultKind, VaultPolicy
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.models import NoteMetadata
 from memex_core.storage import (
@@ -50,21 +78,62 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit
+from memex_core.memory.sql_models import MemoryUnit, ReflectionQueue, Vault
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
+from memex_core.services.consolidation import ConsolidationService
+from memex_core.services.diagnostics import DiagnosticsService
 from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
+from memex_core.services.lint import LintService
+from memex_core.services.lint_learning import LintLearningService
+from memex_core.services.lint_optimizer import LintLLMOptimizer
+from memex_core.services.lint_auto_apply import LintAutoApplyService
+from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
+from memex_core.services.deprioritize_score import DeprioritizeScorer, ScoreBreakdown
+
+
+# 32-bit namespace key for per-vault auto-band advisory locks. Distinct from
+# MEMEX_LEADER_LOCK_ID (the scheduler-leader lock) so a brief leader flap can
+# still acquire this without colliding.
+_AUTO_BAND_LOCK_NAMESPACE = 0x46_53_46_4D  # "FSFM" ASCII as int32
+
+
+@dataclass
+class AutoDeprioritizeSummary:
+    """Per-vault outcome of one FSFM auto-band tick.
+
+    ``skipped_lock_held`` is True when another leader held the per-vault
+    advisory lock and this tick yielded immediately — distinguishes
+    "ran cleanly with zero candidates" from "skipped because contended".
+    """
+
+    vault_id: UUID
+    enabled: bool = True
+    skipped_lock_held: bool = False
+    deprioritized: list[str] = field(default_factory=list)
+    skipped_below_threshold: list[str] = field(default_factory=list)
+    skipped_escalation: list[str] = field(default_factory=list)
+    skipped_cooldown: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def total_deprioritized(self) -> int:
+        return len(self.deprioritized)
+
+
+from memex_core.services.outcomes import OutcomeService, UnitOutcome
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
+from memex_core.services.units import UnitsService
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
@@ -470,10 +539,12 @@ class MemexAPI:
             doc_search=self._doc_search,
             vaults=self._vaults,
         )
+        self._outcomes = OutcomeService()
         self.vault_summary = VaultSummaryService(
             metastore=self.metastore,
             lm=self.lm,
             config=self.config.server.vault_summary,
+            embedding_model=self.embedding_model,
         )
         self._notes = NoteService(
             metastore=self.metastore,
@@ -493,6 +564,63 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._diagnostics = DiagnosticsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._units = UnitsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint = LintService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint_learning = LintLearningService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint_optimizer = LintLLMOptimizer(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint_auto_apply = LintAutoApplyService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._consolidation = ConsolidationService(
+            metastore=self.metastore,
+            config=self.config,
+            reflection=self._reflection,
+            contradiction=self._contradiction,
+        )
+        from memex_core.services.lint_llm import LintLLMService
+
+        self._lint_llm = LintLLMService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+
+        self._deprioritize_scorer = DeprioritizeScorer(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+
+        self._locks = LocksService(
+            metastore=self.metastore,
+            config=self.config,
+            reflection=self._reflection,
+            contradiction=self._contradiction,
+            units=self._units,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -502,6 +630,30 @@ class MemexAPI:
             kv_service=self._kv,
             vault_service=self._vaults,
         )
+
+        # Procedural Plane (procedural + case memory). The
+        # repository owns CRUD; the search service runs the hybrid
+        # BM25+vector+RRF query and the briefing-card read path.
+        from memex_core.services.procedural_repository import (
+            ProceduralRepository,
+        )
+        from memex_core.services.procedural_search_service import (
+            ProceduralSearchService,
+        )
+
+        self._procedural_repo = ProceduralRepository(metastore=self.metastore)
+        self._procedural_search = ProceduralSearchService(
+            metastore=self.metastore,
+            repository=self._procedural_repo,
+            embedding_model=self.embedding_model,
+        )
+
+        # Wire the procedural-search service into the briefing so the
+        # briefing can include pin-chain cards alongside KV procedures.
+        # This is a post-construction patch because the briefing service
+        # is built before the procedural search service (the briefing
+        # has historically been independent of the plane).
+        self.session_briefing._procedural_search = self._procedural_search  # type: ignore[attr-defined]
 
         self._ingestion = IngestionService(
             metastore=self.metastore,
@@ -527,8 +679,12 @@ class MemexAPI:
             self._ingestion,
             self._search,
             self._lineage,
+            self._units,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
+
+        # procedural repository gets the same audit service.
+        self._procedural_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
     @property
     def notes(self) -> NoteService:
@@ -536,6 +692,326 @@ class MemexAPI:
         resolve note identifiers prior to invoking a higher-level facade
         (e.g. for vault-access auth checks)."""
         return self._notes
+
+    @property
+    def diagnostics(self) -> DiagnosticsService:
+        return self._diagnostics
+
+    @property
+    def lint(self) -> LintService:
+        return self._lint
+
+    @property
+    def lint_learning(self) -> LintLearningService:
+        """Telemetry rollup service — Layer 2 of the auto-learning loop."""
+        return self._lint_learning
+
+    @property
+    def lint_optimizer(self) -> LintLLMOptimizer:
+        """DSPy signature optimizer — Layer 4 of the auto-learning loop."""
+        return self._lint_optimizer
+
+    @property
+    def lint_auto_apply(self) -> LintAutoApplyService:
+        """Auto-solve service — Layer 5 of the auto-learning loop."""
+        return self._lint_auto_apply
+
+    @property
+    def entities(self) -> EntityService:
+        return self._entities
+
+    @property
+    def consolidation(self) -> ConsolidationService:
+        return self._consolidation
+
+    @property
+    def lint_llm(self) -> 'LintLLMService':
+        """Surprise-gated LLM lint service."""
+        return self._lint_llm
+
+    @property
+    def deprioritize_scorer(self) -> DeprioritizeScorer:
+        """FSFM-inspired graph-aware deprioritization scorer."""
+        return self._deprioritize_scorer
+
+    @property
+    def locks(self) -> LocksService:
+        return self._locks
+
+    async def score_memory_unit(
+        self,
+        unit_id: UUID,
+        vault_id: UUID,
+    ) -> ScoreBreakdown | None:
+        """Compute the FSFM composite deprioritization score for a unit.
+
+        Returns ``None`` if the unit doesn't exist in ``vault_id``. Used by
+        ``memex memory score <unit_id>`` for tuning and by tests for
+        SQL/Python parity assertions.
+        """
+        async with self.metastore.session() as session:
+            return await self._deprioritize_scorer.score(unit_id, vault_id, session)
+
+    async def auto_deprioritize_after_lint(
+        self,
+        vault_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> 'AutoDeprioritizeSummary':
+        """Apply the FSFM auto-deprioritize band.
+
+        Reads the proposals just emitted by ``LintService.run_rules`` and flips
+        ``is_deprioritized`` on every unit that:
+
+        - has a pending ``composite_deprioritize_candidate`` proposal whose
+          ``evidence.flag_reason = 'composite'`` (rows with
+          ``flag_reason ∈ {high_mw_with_nonmw_pressure, components_disagree,
+          low_credibility_contradiction_only}`` go to ``summary.skipped_escalation``
+          for human review)
+        - whose evidence ``composite_score`` is at or above the
+          ``thresholds.auto_deprioritize`` configured value
+        - has NOT been ``memory_restore``-d within ``cooldown_days``
+
+        Resolves the consumed proposals (``status='resolved'``,
+        ``resolved_by='fsfm_auto'``) so subsequent runs don't re-process
+        them. Idempotent on reruns. Audit trail uses ``actor='fsfm_auto'``
+        on the deprioritize action — single canonical actor string.
+        """
+        from sqlalchemy import text as _sa_text
+
+        from memex_core.metrics import (
+            FSFM_AUTO_BAND_SKIPPED_TOTAL,
+            FSFM_AUTO_DEPRIORITIZED_TOTAL,
+            FSFM_SCORER_RUNS_TOTAL,
+        )
+
+        cfg = self.config.server.memory.deprioritize_score
+        if not cfg.enabled:
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='disabled').inc()
+            return AutoDeprioritizeSummary(vault_id=vault_id, enabled=False)
+
+        auto_threshold = cfg.thresholds.auto_deprioritize
+        cooldown_days = cfg.cooldown_days
+        resolved_now = now or datetime.now(timezone.utc)
+        cooldown_cutoff = resolved_now - timedelta(days=cooldown_days)
+
+        summary = AutoDeprioritizeSummary(vault_id=vault_id, enabled=True)
+
+        try:
+            async with self.metastore.session() as session:
+                # Per-vault advisory lock so two leaders can't double-process
+                # the same proposals during a brief leader flap. Use the
+                # *non-blocking* try-form: a contending leader skips the
+                # vault on this tick instead of blocking until the holding
+                # leader's tick finishes (which can be minutes for a vault
+                # with thousands of pending composites). The lock is
+                # transaction-scoped (released on COMMIT/ROLLBACK).
+                # The two-arg form ``pg_(try_)advisory_xact_lock(int4, int4)``
+                # takes 32-bit ints — derive the per-vault key from the
+                # first 4 bytes of the UUID, which gives ~4B distinct keys.
+                vault_lock_key = int.from_bytes(vault_id.bytes[:4], 'big', signed=True)
+                lock_acquired = (
+                    await session.execute(
+                        _sa_text('SELECT pg_try_advisory_xact_lock(:k, :v)'),
+                        {'k': _AUTO_BAND_LOCK_NAMESPACE, 'v': vault_lock_key},
+                    )
+                ).scalar()
+                if not lock_acquired:
+                    FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='lock_held').inc()
+                    FSFM_SCORER_RUNS_TOTAL.labels(outcome='skipped_locked').inc()
+                    summary.skipped_lock_held = True
+                    return summary
+
+                # Candidates: pending composite_deprioritize_candidate
+                # proposals whose target unit is STILL not deprioritized.
+                # Auto-band only acts on rows with
+                # ``evidence.flag_reason = 'composite'`` — escalation
+                # reasons (high_mw_with_nonmw_pressure /
+                # components_disagree / low_credibility_contradiction_only)
+                # share the same rule but go to the ledger for human
+                # review. The flag_reason filter lives in the loop so
+                # the summary surfaces escalation skips. The JOIN guards
+                # against re-processing units whose pending row has
+                # lingered from an earlier failed run — a stale pending
+                # row plus a unit already flipped is a no-op (the row is
+                # resolved below).
+                candidates = (
+                    await session.execute(
+                        _sa_text("""
+                            SELECT mp.id::text AS proposal_id,
+                                   mp.target_id,
+                                   mp.evidence,
+                                   mu.is_deprioritized AS unit_already_deprioritized
+                            FROM maintenance_proposals mp
+                            JOIN memory_units mu ON mu.id::text = mp.target_id
+                            WHERE mp.vault_id = :vault_id
+                              AND mu.vault_id = :vault_id
+                              AND mp.rule_name = 'composite_deprioritize_candidate'
+                              AND mp.target_type = 'memory_unit'
+                              AND mp.status = 'pending'
+                            FOR UPDATE OF mp SKIP LOCKED
+                        """),
+                        {'vault_id': str(vault_id)},
+                    )
+                ).all()
+
+                # Cooldown: filter to units in THIS vault for index efficiency
+                # and to avoid scanning global memory_restore audits per vault.
+                # Cast ``al.resource_id::uuid = mu.id`` (PK) so the planner
+                # can index-scan both sides — the partial index from
+                # migration 036 covers the audit_logs side and the
+                # memory_units PK covers the join. The ``mu.id::text``
+                # form (non-sargable text comparison) forced a hash join
+                # over the full memory_units rowset.
+                cooldown_unit_ids: set[str] = set(
+                    (
+                        await session.execute(
+                            _sa_text("""
+                                SELECT DISTINCT al.resource_id
+                                FROM audit_logs al
+                                JOIN memory_units mu
+                                  ON mu.id = al.resource_id::uuid
+                                WHERE al.action = 'memory_restore'
+                                  AND al.resource_type = 'memory_unit'
+                                  AND al.timestamp > :cutoff
+                                  AND mu.vault_id = :vault_id
+                            """),
+                            {'cutoff': cooldown_cutoff, 'vault_id': str(vault_id)},
+                        )
+                    ).scalars()
+                )
+
+                for cand in candidates:
+                    target_id = str(cand.target_id)
+                    if cand.unit_already_deprioritized:
+                        # Stale pending row; the unit was already deprioritized
+                        # by an earlier action. Resolve the row, don't re-act.
+                        # Vault-scoped UPDATE matches LintService.set_status's
+                        # defense-in-depth posture.
+                        await session.execute(
+                            _sa_text(
+                                'UPDATE maintenance_proposals '
+                                "SET status = 'resolved', resolved_at = now(), "
+                                "    resolved_by = 'fsfm_auto' "
+                                'WHERE id = :id AND vault_id = :vault_id'
+                            ),
+                            {'id': cand.proposal_id, 'vault_id': str(vault_id)},
+                        )
+                        continue
+
+                    evidence = cand.evidence or {}
+                    composite_score = float(evidence.get('composite_score', 0.0))
+                    flag_reason = evidence.get('flag_reason', 'composite')
+
+                    if flag_reason != 'composite':
+                        # Escalation reasons go to the ledger for human
+                        # review; the auto-band must not act on them.
+                        summary.skipped_escalation.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='escalation_pending').inc()
+                        continue
+                    if composite_score < auto_threshold:
+                        summary.skipped_below_threshold.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='below_threshold').inc()
+                        continue
+                    if target_id in cooldown_unit_ids:
+                        summary.skipped_cooldown.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='cooldown_active').inc()
+                        continue
+
+                    try:
+                        await self._units.set_unit_deprioritized(
+                            UUID(target_id),
+                            reason=f'fsfm_auto: composite_score={composite_score:.4f}',
+                            vault_id=vault_id,
+                            actor='fsfm_auto',
+                            defer_observation_refresh=True,
+                        )
+                    except (MemoryUnitNotFoundError, IntegrityError) as exc:
+                        logger.warning(
+                            'FSFM auto-band: deprioritize failed for unit %s: %s',
+                            target_id,
+                            exc,
+                        )
+                        summary.errors.append(target_id)
+                        continue
+
+                    # Resolve the consumed proposal in the SAME session that
+                    # holds the FOR UPDATE OF mp lock from the candidates
+                    # SELECT. Calling LintService.set_status here would open
+                    # a fresh session that blocks on the row lock until the
+                    # statement timeout fires (verified failure mode).
+                    # Vault-scoped UPDATE matches LintService.set_status's
+                    # defense-in-depth posture.
+                    await session.execute(
+                        _sa_text(
+                            'UPDATE maintenance_proposals '
+                            "SET status = 'resolved', resolved_at = now(), "
+                            "    resolved_by = 'fsfm_auto' "
+                            'WHERE id = :id AND vault_id = :vault_id'
+                        ),
+                        {'id': cand.proposal_id, 'vault_id': str(vault_id)},
+                    )
+
+                    summary.deprioritized.append(target_id)
+                    FSFM_AUTO_DEPRIORITIZED_TOTAL.inc()
+
+                # Commit the proposal-resolution UPDATEs (and release the
+                # advisory lock + FOR UPDATE row locks) before exiting the
+                # session context manager — the metastore's session does
+                # not auto-commit.
+                await session.commit()
+
+            # FSFM deferred each per-unit refresh enqueue (defer_observation_refresh=True);
+            # flush them all in one LATERAL JSONB scan + bulk INSERT now that the
+            # batch is committed. A flush failure is logged but does NOT roll back
+            # the deprios — the reconcile-tick pass repairs missing refresh tasks.
+            if summary.deprioritized:
+                try:
+                    await self._units.flush_deferred_observation_refresh(
+                        [UUID(uid) for uid in summary.deprioritized],
+                        vault_id=vault_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        'FSFM: flush_deferred_observation_refresh failed; reconcile '
+                        'tick will repair. deprio count=%d',
+                        len(summary.deprioritized),
+                    )
+
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='success').inc()
+        except Exception:
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='error').inc()
+            raise
+
+        return summary
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Re-evaluate memories for an entity under a per-entity advisory lock.
+
+        Facade for `LocksService.reconsolidate_entity`.
+        """
+        return await self._locks.reconsolidate_entity(
+            entity_id, vault_id, timeout_seconds=timeout_seconds
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-Memory-Worth unit consolidation.
+
+        Facade for `LocksService.consolidate_vault`.
+        """
+        return await self._locks.consolidate_vault(vault_id, dry_run=dry_run, actor=actor)
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -561,7 +1037,6 @@ class MemexAPI:
         1. Ensure Global Vault exists.
         2. Ensure Active Vault exists.
         """
-        from memex_core.memory.sql_models import Vault
         from memex_core.config import GLOBAL_VAULT_NAME
 
         async with self.metastore.session() as session:
@@ -638,6 +1113,21 @@ class MemexAPI:
         except Exception as e:
             logger.warning(f'Failed to reconcile batch jobs during initialization: {e}')
 
+    async def aclose(self) -> None:
+        """Release service-owned async resources (asyncpg pools, etc.).
+
+        Called from the FastAPI lifespan shutdown so connections are returned
+        cleanly on graceful server stop. Idempotent — safe to call multiple
+        times. Currently closes:
+
+          * ``LocksService._pool`` — shared asyncpg pool used by entity
+            locks.
+        """
+        try:
+            await self._locks.close()
+        except Exception:
+            logger.exception('LocksService.close failed during MemexAPI.aclose')
+
     async def validate_vault_exists(self, vault_id: UUID) -> bool:
         """Check if a vault exists. Delegates to VaultService."""
         return await self._vaults.validate_vault_exists(vault_id)
@@ -685,9 +1175,52 @@ class MemexAPI:
         note: NoteInput,
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
+        background: bool = False,
     ) -> dict[str, Any]:
-        """Ingest a note. Delegates to IngestionService."""
-        return await self._ingestion.ingest(note, vault_id=vault_id, event_date=event_date)
+        """Ingest a note. Delegates to IngestionService.
+
+        ``intent_override`` and ``risk_override`` accept the string values of the
+        ``IntentClass`` / ``RiskClass`` enums and are validated here so callers
+        bypassing the HTTP / MCP layers (which already validate via Pydantic and
+        explicit enum parsing respectively) cannot smuggle arbitrary strings into
+        the extraction pipeline.
+
+        ``background`` is accepted for signature parity with the HTTP wrapper
+        (:pymeth:`memex_common.client.RemoteMemexAPI.ingest`) but is not
+        honored in-process — the local API has no batch-job queue. Passing
+        ``True`` raises :class:`NotImplementedError` so the gap is visible.
+        """
+        if background:
+            raise NotImplementedError(
+                'background=True is not supported by the in-process MemexAPI; '
+                'queue the work via the HTTP server (RemoteMemexAPI.ingest) '
+                'instead.'
+            )
+        if intent_override is not None:
+            try:
+                IntentClass(intent_override)
+            except ValueError as exc:
+                allowed = [c.value for c in IntentClass]
+                raise ValueError(
+                    f'intent_override must be one of {allowed}, got {intent_override!r}'
+                ) from exc
+        if risk_override is not None:
+            try:
+                RiskClass(risk_override)
+            except ValueError as exc:
+                allowed = [c.value for c in RiskClass]
+                raise ValueError(
+                    f'risk_override must be one of {allowed}, got {risk_override!r}'
+                ) from exc
+        return await self._ingestion.ingest(
+            note,
+            vault_id=vault_id,
+            event_date=event_date,
+            intent_override=intent_override,
+            risk_override=risk_override,
+        )
 
     async def ingest_batch_internal(
         self,
@@ -760,6 +1293,10 @@ class MemexAPI:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)
 
+    async def note_exists(self, note_id: UUID) -> bool:
+        """Return True iff a note with this id exists. Delegates to NoteService."""
+        return await self._notes.note_exists(note_id)
+
     async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve just the metadata from the page index. Delegates to NoteService."""
         return await self._notes.get_note_metadata(note_id)
@@ -791,15 +1328,19 @@ class MemexAPI:
         self,
         unit_ids: list[UUID],
         link_types: list[str] | None = None,
+        limit: int = 20,
     ) -> dict[UUID, list[MemoryLinkDTO]]:
         """Get typed relationship links for memory units.
 
-        Delegates to fetch_memory_links in note_relations.py.
+        Delegates to fetch_memory_links in note_relations.py. ``limit`` is
+        applied as a per-unit slice on the aggregated result for parity
+        with the HTTP wrapper.
         """
         from memex_core.memory.retrieval.note_relations import fetch_memory_links
 
         async with self.metastore.session() as session:
-            return await fetch_memory_links(session, unit_ids, link_types=link_types)
+            result = await fetch_memory_links(session, unit_ids, link_types=link_types)
+        return {uid: links[:limit] for uid, links in result.items()}
 
     async def get_note_links(
         self,
@@ -835,6 +1376,7 @@ class MemexAPI:
         tags: list[str] | None = None,
         status: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
@@ -848,6 +1390,7 @@ class MemexAPI:
             tags=tags,
             status=status,
             date_field=date_field,
+            slim=slim,
         )
 
     async def get_stats_counts(
@@ -867,6 +1410,7 @@ class MemexAPI:
         before: datetime | None = None,
         template: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
@@ -877,42 +1421,83 @@ class MemexAPI:
             before=before,
             template=template,
             date_field=date_field,
+            slim=slim,
         )
 
     async def list_entities_ranked(
         self,
         limit: int = 100,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
+        slim: bool = False,
     ) -> AsyncGenerator[Any, None]:
-        """Stream entities ranked by hybrid score. Delegates to EntityService."""
+        """Stream entities ranked by hybrid score. Delegates to EntityService.
+
+        ``vault_id`` and ``vault_ids`` are accepted for symmetry with the HTTP
+        wrapper; if both are set, both are passed through (the underlying
+        service de-duplicates).
+        """
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         async for entity in self._entities.list_entities_ranked(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit,
+            vault_ids=resolved or None,
+            entity_type=entity_type,
+            slim=slim,
         ):
             yield entity
 
     async def get_entity_cooccurrences(
         self,
         entity_id: UUID | str,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         limit: int = 50,
     ) -> list[Any]:
         """Get co-occurrence edges for an entity. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.get_entity_cooccurrences(
-            entity_id, vault_ids=vault_ids, limit=limit
+            entity_id, vault_ids=resolved or None, limit=limit
         )
 
     async def get_bulk_cooccurrences(
-        self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
+        self,
+        entity_ids: list[UUID],
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID] | None = None,
     ) -> list[Any]:
         """Get co-occurrences between a set of entities. Delegates to EntityService."""
-        return await self._entities.get_bulk_cooccurrences(entity_ids, vault_ids=vault_ids)
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
+        return await self._entities.get_bulk_cooccurrences(entity_ids, vault_ids=resolved or None)
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20, vault_ids: list[UUID] | None = None
+        self,
+        entity_id: UUID | str,
+        limit: int = 20,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID] | None = None,
+        include_stale: bool = False,
+        include_superseded: bool = False,
+        include_deprioritized: bool = False,
     ) -> list[dict[str, Any]]:
         """Get entity mentions. Delegates to EntityService."""
-        return await self._entities.get_entity_mentions(entity_id, limit=limit, vault_ids=vault_ids)
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
+        return await self._entities.get_entity_mentions(
+            entity_id,
+            limit=limit,
+            vault_ids=resolved or None,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
 
     async def get_entity(self, entity_id: UUID | str, vault_id: UUID | None = None) -> Any | None:
         """Get an entity by ID. Delegates to EntityService."""
@@ -923,12 +1508,123 @@ class MemexAPI:
         return await self._entities.get_entities(entity_ids, vault_id=vault_id)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
-        """Get a memory unit by ID. Delegates to StatsService."""
+        """Get a memory unit by ID. Delegates to StatsService.
+
+        Returns the raw ORM row, whose ``.embedding`` is eager-loaded; the
+        unscoped single-ID HTTP route does not serialize it (vectors are
+        confined to vault-scoped routes — use ``get_memory_units_by_ids``).
+        """
         return await self._stats.get_memory_unit(unit_id)
+
+    async def get_memory_units_by_chunks(
+        self,
+        chunk_ids: list[UUID],
+        vault_id: UUID,
+        *,
+        include_vectors: bool = False,
+    ) -> list[Any]:
+        """Get memory units belonging to the named chunks (vault-scoped).
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
+        return await self._stats.get_memory_units_by_chunks(chunk_ids, vault_id)
+
+    async def get_memory_units_by_ids(
+        self,
+        unit_ids: list[UUID],
+        vault_id: UUID,
+        *,
+        include_vectors: bool = False,
+    ) -> list[Any]:
+        """Get memory units by ID (vault-scoped). Delegates to StatsService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
+        return await self._stats.get_memory_units_by_ids(unit_ids, vault_id)
+
+    async def list_memory_units_by_note(
+        self,
+        note_id: UUID,
+        vault_id: UUID,
+        *,
+        include_vectors: bool = False,
+    ) -> list[Any]:
+        """Get memory units belonging to a note (vault-scoped). Delegates to StatsService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
+        return await self._stats.list_memory_units_by_note(note_id, vault_id)
 
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit. Delegates to StatsService."""
         return await self._stats.delete_memory_unit(unit_id)
+
+    async def deprioritize_memory_unit(
+        self,
+        unit_id: UUID,
+        reason: str,
+        *,
+        vault_id: UUID | None = None,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per vault-scoping invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
+        return await self._units.set_unit_deprioritized(
+            unit_id,
+            reason,
+            vault_id=vault_id,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
+
+    async def restore_memory_unit(
+        self,
+        unit_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Restore a deprioritized memory unit. Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per vault-scoping invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
+        return await self._units.restore_unit(
+            unit_id,
+            vault_id=vault_id,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
+
+    async def get_unit_history(
+        self,
+        unit_id: UUID,
+        *,
+        max_depth: int = 10,
+        vault_id: UUID | None = None,
+    ) -> UnitHistoryNodeDTO:
+        """Walk the contradiction graph backward from ``unit_id``.
+
+        Returns a ``UnitHistoryNodeDTO`` tree rooted at the queried unit
+        (depth=0). v1 walks ``contradicts`` and ``weakens`` links only —
+        ``reinforces`` is excluded because it points forward in time.
+        Delegates to ``UnitsService.get_unit_history``.
+        """
+        return await self._units.get_unit_history(
+            unit_id,
+            max_depth=max_depth,
+            vault_id=vault_id,
+        )
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
@@ -938,11 +1634,13 @@ class MemexAPI:
         self,
         query: str,
         limit: int = 10,
+        offset: int = 0,
         vault_ids: list[UUID | str] | None = None,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
+        include_deprioritized: bool = False,
         debug: bool = False,
         after: datetime | None = None,
         before: datetime | None = None,
@@ -950,8 +1648,23 @@ class MemexAPI:
         source_context: str | None = None,
         reference_date: datetime | None = None,
         expand_query: bool = False,
+        intent_class: str | None = None,
+        risk_class: str | None = None,
+        apply_pre_filter: bool = True,
+        include_system_vaults: bool = False,
     ) -> tuple[list[MemoryUnit], Any]:
-        """Search with reranking. Delegates to SearchService."""
+        """Search with reranking. Delegates to SearchService.
+
+        ``offset`` is forwarded for parity with the HTTP wrapper, but the
+        in-process search service does not yet implement offset paging —
+        non-zero values raise NotImplementedError so the gap is visible
+        rather than silently ignored.
+        """
+        if offset != 0:
+            raise NotImplementedError(
+                'offset paging is not yet implemented in the in-process search '
+                'service; use the HTTP wrapper for paged search.'
+            )
         return await self._search.search(
             query=query,
             limit=limit,
@@ -960,6 +1673,7 @@ class MemexAPI:
             strategies=strategies,
             include_stale=include_stale,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             debug=debug,
             after=after,
             before=before,
@@ -967,6 +1681,10 @@ class MemexAPI:
             source_context=source_context,
             reference_date=reference_date,
             expand_query=expand_query,
+            intent_class=intent_class,
+            risk_class=risk_class,
+            apply_pre_filter=apply_pre_filter,
+            include_system_vaults=include_system_vaults,
         )
 
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
@@ -989,6 +1707,7 @@ class MemexAPI:
         before: datetime | None = None,
         tags: list[str] | None = None,
         reference_date: datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> list[NoteSearchResult]:
         """Search notes. Delegates to SearchService."""
         return await self._search.search_notes(
@@ -1006,6 +1725,7 @@ class MemexAPI:
             before=before,
             tags=tags,
             reference_date=reference_date,
+            include_system_vaults=include_system_vaults,
         )
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
@@ -1018,26 +1738,30 @@ class MemexAPI:
         vault_ids: list[UUID | str] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        reference_date: datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> SurveyResponse:
-        """Broad topic survey. Delegates to SearchService."""
-        # Resolve vault identifiers to UUIDs
+        """Broad topic survey. Delegates to SearchService.
+
+        A wildcard ``'*'`` expands to content vaults only; system vaults join
+        only when named explicitly or via ``include_system_vaults``.
+        """
         resolved: list[UUID] | None = None
         if vault_ids:
-            from memex_common.vault_utils import ALL_VAULTS_WILDCARD
-
-            if ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
-                all_v = await self.list_vaults()
-                resolved = [v.id for v in all_v]
-            else:
-                resolved = []
-                for v in vault_ids:
-                    resolved.append(await self.resolve_vault_identifier(str(v)))
+            resolved = await self.resolve_vault_scope(
+                vault_ids, include_system_vaults=include_system_vaults
+            )
 
         return await self._search.survey(
             query=query,
             vault_ids=resolved,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after,
+            before=before,
+            reference_date=reference_date,
         )
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
@@ -1056,9 +1780,92 @@ class MemexAPI:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
 
-    async def create_vault(self, name: str, description: str | None = None) -> Any:
+    async def summarize_node(
+        self,
+        entity_id: UUID,
+        *,
+        scope: str = 'incremental',
+        vault_id: UUID | None = None,
+    ) -> ReflectionResult:
+        """Synchronous on-demand reflection (rate-limited per entity, vault).
+
+        Delegates to :meth:`ReflectionService.summarize_node`. Surfaces a
+        ``RateLimitExceededError`` upward; surface adapters (MCP/Hermes/HTTP)
+        translate to their own envelope.
+        """
+        from memex_core.services.reflection import SummarizeScope
+
+        if scope not in ('incremental', 'full'):
+            raise ValueError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        # The preceding guard validates scope at runtime; narrow to SummarizeScope (Literal) for mypy.
+        narrowed: SummarizeScope = scope  # type: ignore[assignment]
+        return await self._reflection.summarize_node(entity_id, scope=narrowed, vault_id=vault_id)
+
+    async def record_outcome(
+        self,
+        unit_ids: list[str] | None = None,
+        success: bool | None = None,
+        vault_id: str | None = None,
+        outcome_confidence: float = 1.0,
+        reason: str | None = None,
+        *,
+        units: list[UnitOutcome] | list[dict[str, Any]] | None = None,
+        caller_id: str | None = None,
+        turn_outcome: str | None = None,
+        retrieved_set_size: int | None = None,
+        exploration_tagged: bool = False,
+        session: AsyncSession | None = None,
+    ) -> dict[str, Any]:
+        """Record an outcome against memory units. Delegates to OutcomeService.
+
+        Two accepted shapes for ``units``:
+
+        * ``list[UnitOutcome]`` — structured Pydantic objects (preferred for
+          in-process callers).
+        * ``list[dict[str, Any]]`` — typed dicts on the HTTP / Hermes wire
+          where each item has ``{unit_id, verb, reason}``.
+
+        Legacy ``(unit_ids, success)`` shape still accepted with a
+        FutureWarning.
+        """
+        half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
+        coverage_mode = self.config.server.memory.outcomes.coverage_check_mode
+
+        async def _run(active: AsyncSession, *, commit: bool) -> dict[str, Any]:
+            return await self._outcomes.record_outcome(
+                session=active,
+                unit_ids=unit_ids,
+                success=success,
+                vault_id=vault_id,
+                outcome_confidence=outcome_confidence,
+                reason=reason,
+                mw_ema_half_life_days=half_life,
+                units=units,
+                caller_id=caller_id,
+                turn_outcome=turn_outcome,
+                retrieved_set_size=retrieved_set_size,
+                exploration_tagged=exploration_tagged,
+                coverage_check_mode=coverage_mode,
+                commit=commit,
+            )
+
+        # A caller-supplied session means "join my transaction; I will commit" —
+        # lint resolve folds the outcome into its FOR UPDATE txn so the ledger
+        # write is atomic with the finding's status flip (no crash double-count).
+        if session is not None:
+            return await _run(session, commit=False)
+        async with self.metastore.session() as owned:
+            return await _run(owned, commit=True)
+
+    async def create_vault(
+        self,
+        name: str,
+        description: str | None = None,
+        kind: 'VaultKind | str' = 'content',
+        policy: 'VaultPolicy | dict | None' = None,
+    ) -> Any:
         """Create a new vault. Delegates to VaultService."""
-        return await self._vaults.create_vault(name, description)
+        return await self._vaults.create_vault(name, description, kind=kind, policy=policy)
 
     async def delete_vault(self, vault_id: UUID) -> bool:
         """Delete a vault. Delegates to VaultService."""
@@ -1067,6 +1874,10 @@ class MemexAPI:
     async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
         """Remove all content from a vault. Delegates to VaultService."""
         return await self._vaults.truncate_vault(vault_id)
+
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
+        """Set the Memory Worth mode for a vault. Delegates to VaultService."""
+        return await self._vaults.set_mw_mode(vault_id, mw_mode)
 
     async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
         """Add assets to an existing note. Delegates to NoteService."""
@@ -1084,6 +1895,46 @@ class MemexAPI:
         """Move a note to a different vault. Delegates to NoteService."""
         resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
         return await self._notes.migrate_note(note_id, resolved_id)
+
+    def list_lint_actions(self) -> dict[str, Any]:
+        """The closed proposal-action catalogue, in the wire shape the
+        HTTP route and ``RemoteMemexAPI`` return (``{'actions': [...]}``)."""
+        from memex_core.services.lint_external import action_descriptor
+        from memex_core.services.proposal_actions import list_actions
+
+        return {
+            'actions': [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]
+        }
+
+    async def submit_external_lint_proposal(
+        self,
+        proposal: dict[str, Any],
+        *,
+        actor: str = 'api',
+    ) -> tuple[str, UUID | None]:
+        """Validate and insert one external lint proposal.
+
+        In-process surface (tests, embedded callers) over the same
+        primitives the HTTP ingress uses; the route adds per-item auth
+        gating on top. Returns ``(status, finding_id)`` with status in
+        ``{'created', 'deduplicated', 'cooldown_suppressed'}``; validation
+        failures raise (pydantic ``ValidationError`` /
+        ``ExternalProposalRejected`` / ``ValueError``).
+        """
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+            validate_proposed_action,
+        )
+
+        req = ExternalProposalRequest(**proposal)
+        validate_proposed_action(req)
+        vault_uuid: UUID | None = None
+        if req.vault_id is not None:
+            vault_uuid = await self.resolve_vault_identifier(req.vault_id)
+        elif self.config.server.memory.lint.external_proposals.require_vault:
+            raise ValueError('vault_id is required for external proposals')
+        return await insert_external_proposal(self, req, vault_id=vault_uuid, actor=actor)
 
     async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
         """Update user_notes on an existing note and reprocess into the memory graph.
@@ -1214,17 +2065,31 @@ class MemexAPI:
         """Delete a mental model. Delegates to EntityService."""
         return await self._entities.delete_mental_model(entity_id, vault_id)
 
-    async def list_vaults(self) -> list[Any]:
-        """List all vaults. Delegates to VaultService."""
-        return await self._vaults.list_vaults()
+    async def list_vaults(self, include_system: bool = True) -> list[Any]:
+        """List vaults. Delegates to VaultService."""
+        return await self._vaults.list_vaults(include_system=include_system)
 
-    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
-        """List all vaults with note counts. Delegates to VaultService."""
-        return await self._vaults.list_vaults_with_counts()
+    async def list_vaults_with_counts(self, include_system: bool = True) -> list[dict[str, Any]]:
+        """List vaults with note counts. Delegates to VaultService."""
+        return await self._vaults.list_vaults_with_counts(include_system=include_system)
+
+    async def resolve_vault_scope(
+        self,
+        identifiers: list[UUID | str] | None,
+        include_system_vaults: bool = False,
+    ) -> list[UUID]:
+        """Resolve a read-scope request to concrete vault ids. Delegates to VaultService."""
+        return await self._vaults.resolve_vault_scope(
+            identifiers, include_system_vaults=include_system_vaults
+        )
 
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""
         return await self._vaults.get_vault_by_name(name)
+
+    async def get_vault(self, vault_id: UUID) -> Any | None:
+        """Get a vault by UUID. Delegates to VaultService."""
+        return await self._vaults.get_vault(vault_id)
 
     async def get_reflection_queue_batch(
         self,
@@ -1243,9 +2108,35 @@ class MemexAPI:
         """Claim reflection queue batch. Delegates to ReflectionService."""
         return await self._reflection.claim_reflection_queue_batch(limit=limit, vault_id=vault_id)
 
+    async def refresh_observation(self, item: 'ReflectionQueue') -> None:
+        """Execute a single refresh-observation task. Delegates to ReflectionService."""
+        return await self._reflection.refresh_observation(item)
+
+    async def reclaim_refresh_with_backoff(self, item: 'ReflectionQueue') -> None:
+        """Re-enqueue a refresh task whose advisory lock was held."""
+        return await self._reflection.reclaim_refresh_with_backoff(item)
+
+    async def mark_queue_item_failed(self, item: 'ReflectionQueue', error: str) -> None:
+        """Mark a specific claimed queue item as failed."""
+        return await self._reflection.mark_item_failed(item, error)
+
+    async def reconcile_missing_refresh_tasks(self, vault_id: UUID, batch_size: int = 50) -> int:
+        """Reconcile deprio'd MUs missing refresh-observation queue rows."""
+        return await self._reflection.reconcile_missing_refresh_tasks(
+            vault_id=vault_id, batch_size=batch_size
+        )
+
     async def recover_stale_processing(self) -> int:
         """Reset PROCESSING items stuck longer than the configured timeout."""
         return await self._reflection.recover_stale_processing()
+
+    async def reflection_queue_observability_snapshot(self) -> tuple[dict[str, int], float]:
+        """Return (queue depth by task_type, age of oldest DEAD_LETTER refresh row).
+
+        Used by the scheduler to populate Prometheus gauges; not load-bearing
+        for correctness (gauge refresh failures are logged-and-ignored).
+        """
+        return await self._reflection.queue_observability_snapshot()
 
     async def get_dead_letter_items(
         self,
@@ -1265,24 +2156,32 @@ class MemexAPI:
     async def get_top_entities(
         self,
         limit: int = 5,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[Any]:
         """Get top entities by mention count. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.get_top_entities(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit, vault_ids=resolved or None, entity_type=entity_type
         )
 
     async def search_entities(
         self,
         query: str,
         limit: int = 10,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[Any]:
         """Search entities by name. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.search_entities(
-            query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            query, limit=limit, vault_ids=resolved or None, entity_type=entity_type
         )
 
     async def get_lineage(
@@ -1351,8 +2250,17 @@ class MemexAPI:
             key=key, value=value, embedding=embedding, ttl_seconds=ttl_seconds
         )
 
-    async def kv_get(self, key: str) -> Any | None:
-        """Get a KV entry by key. Delegates to KVService."""
+    async def kv_get(
+        self,
+        key: str,
+        *,
+        include_vectors: bool = False,
+    ) -> Any | None:
+        """Get a KV entry by key. Delegates to KVService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._kv.get(key=key)
 
     async def kv_search(
@@ -1360,10 +2268,37 @@ class MemexAPI:
         query_embedding: list[float],
         namespaces: list[str] | None = None,
         limit: int = 5,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """Semantic search over KV entries. Delegates to KVService."""
+        """Semantic search over KV entries. Delegates to KVService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._kv.search(
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
+        )
+
+    async def kv_search_text(
+        self,
+        query: str,
+        namespaces: list[str] | None = None,
+        limit: int = 5,
+        *,
+        include_vectors: bool = False,
+    ) -> list[Any]:
+        """Embed ``query`` locally, then delegate to :pymeth:`kv_search`.
+
+        Mirrors :pymeth:`memex_common.client.RemoteMemexAPI.kv_search_text`
+        so callers holding either API surface can search from text.
+        """
+        embeddings = self.embedding_model.encode([query])
+        return await self.kv_search(
+            query_embedding=embeddings[0].tolist(),
+            namespaces=namespaces,
+            limit=limit,
+            include_vectors=include_vectors,
         )
 
     async def kv_delete(self, key: str) -> bool:
@@ -1377,8 +2312,14 @@ class MemexAPI:
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
         pattern: str | None = None,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """List KV entries. Delegates to KVService."""
+        """List KV entries. Delegates to KVService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._kv.list_entries(
             namespaces=namespaces,
             limit=limit,
@@ -1390,3 +2331,293 @@ class MemexAPI:
     async def kv_cleanup_expired(self) -> int:
         """Delete expired KV entries. Returns count of deleted rows."""
         return await self._kv.cleanup_expired()
+
+    # --- Procedural Plane -----------------------------------------
+
+    @property
+    def procedural(self) -> 'MemexAPIProceduralFacade':
+        """The procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
+        return MemexAPIProceduralFacade(self)
+
+    @property
+    def cases(self) -> 'CaseServiceT':
+        """Case submission (§5.1 episode notes into the hidden system
+        vault + assignment). See :class:`memex_core.services.case_service.CaseService`."""
+        from memex_core.services.case_service import CaseService
+
+        return CaseService(self)
+
+
+class MemexAPIProceduralFacade:
+    """procedural-plane facade.
+
+    Lives on ``MemexAPI.procedural``. The 8 methods below map the
+    repository + search service into a single property group so callers
+    can do ``api.procedural.create(payload)`` etc.
+    """
+
+    def __init__(self, api: 'MemexAPI') -> None:
+        self._api = api
+
+    async def _embed_trigger(self, trigger: str | None) -> list[float] | None:
+        """Caller-side trigger embedding (design §18.7).
+
+        Returns ``None`` when there is no trigger or the embedder
+        fails — the write proceeds and the row stays reachable via the
+        BM25 leg until the next trigger edit re-embeds it.
+        """
+        if not trigger or not trigger.strip():
+            return None
+        vec = await self._api._procedural_search.embed_trigger(trigger)
+        return vec or None
+
+    async def create(
+        self,
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
+        """Insert a new procedural entry. Embeds the trigger at write
+        time (§18.7). See :meth:`ProceduralRepository.create`."""
+        return await self._api._procedural_repo.create(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def get(
+        self,
+        entry_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Look up a single entry. Raises if missing or vault-mismatched."""
+        return await self._api._procedural_repo.get(entry_id, vault_id=vault_id)
+
+    async def get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: str | None,
+        context: str | None,
+        vault_id: UUID | None = None,
+        status: str | None = 'published',
+    ) -> ProceduralEntryDTO | None:
+        """Look up a single entry by its identity anchor.
+
+        Returns ``None`` on a miss — the route uses this as the
+        "have we learned this?" probe. Distinct from
+        :meth:`get`, which 404s on a missing id.
+        """
+        return await self._api._procedural_repo.get_by_identity(
+            kind=kind,
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=vault_id,
+            status=status,
+        )
+
+    async def list_by_status(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+        sort: Literal['-created_at', 'created_at'] | None = None,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first.
+
+        The enumeration surface (e.g. drafts awaiting confirmation) that
+        :meth:`search` cannot serve — search ranks by relevance and
+        returns empty without query text or a pin context. See
+        :meth:`ProceduralRepository.list_by_status`.
+        """
+        return await self._api._procedural_repo.list_by_status(
+            status=status,
+            scope=scope,
+            kind=kind,
+            vault_id=vault_id,
+            limit=limit,
+            sort=sort,
+        )
+
+    async def update(
+        self,
+        entry_id: UUID,
+        payload: ProceduralEntryUpdate,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Mutate an existing entry in place. Appends a version row.
+        Re-embeds the trigger when it changes (§19.4 bug class)."""
+        return await self._api._procedural_repo.update(
+            entry_id,
+            payload,
+            vault_id=vault_id,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def deprecate(
+        self,
+        entry_id: UUID,
+        *,
+        superseded_by_id: UUID | None = None,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Soft-deprecate: status→deprecated, optional successor pointer."""
+        return await self._api._procedural_repo.deprecate(
+            entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
+        )
+
+    async def upsert(
+        self,
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
+        """Idempotent write on the (kind, scope, verb, context) anchor.
+
+        Re-write of the same procedure/strategy is one UPDATE. Embeds
+        the trigger at write time (§18.7).
+        """
+        return await self._api._procedural_repo.upsert_by_identity(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def report_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Record an enactment outcome (§18.5): bump success/failure/mixed +
+        uses + last_used_at. The 'enacted, not case-worthy' write path —
+        case submission is the primary one. No version row (a governance
+        signal, not a content edit)."""
+        return await self._api._procedural_repo.record_outcome(entry_id, outcome, vault_id=vault_id)
+
+    async def search(
+        self,
+        request: ProceduralSearchRequest,
+    ) -> ProceduralSearchResponse:
+        """Hybrid BM25 + vector search with RRF aggregation.
+
+        Optional pin-chain union when ``request.include_pin_chain`` and
+        ``request.pin_contexts`` are set.
+        """
+        return await self._api._procedural_search.search(request)
+
+    async def briefing_cards(
+        self,
+        context_keys: list[ShortLabel],
+        *,
+        scope: ShortLabel | None = None,
+        limit_per_context: int = 5,
+        vault_id: UUID | None = None,
+    ) -> ProceduralBriefingCards:
+        """Pin-chain briefing cards for the session-briefing surface."""
+        return await self._api._procedural_search.briefing_cards(
+            context_keys,
+            scope=scope,
+            limit_per_context=limit_per_context,
+            vault_id=vault_id,
+        )
+
+    async def pin(
+        self,
+        payload: ProceduralPinCreate,
+    ) -> ProceduralPinDTO:
+        """Pin an entry into a context-binding chain (§19.8).
+
+        ``position=None`` appends; the per-context cap (10) is enforced
+        by the repository.
+        """
+        return await self._api._procedural_repo.add_pin(payload)
+
+    async def unpin(
+        self,
+        *,
+        entry_id: UUID,
+        context_key: ShortLabel,
+    ) -> int:
+        """Unpin an entry from a context. Returns pins removed."""
+        return await self._api._procedural_repo.remove_pin(
+            entry_id=entry_id, context_key=context_key
+        )
+
+    async def list_pins(
+        self,
+        context_key: ShortLabel,
+        *,
+        limit: int | None = None,
+    ) -> list[ProceduralPinDTO]:
+        """Pins for one context, position ascending."""
+        return await self._api._procedural_repo.list_pins(context_key, limit=limit)
+
+    async def list_versions(
+        self,
+        entry_id: UUID,
+    ) -> list[ProceduralEntryVersionDTO]:
+        """The entry's uncapped version ledger, newest first (§18.8)."""
+        return await self._api._procedural_repo.list_versions(entry_id)
+
+    async def rollback(
+        self,
+        entry_id: UUID,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+        rolled_back_by: str | None = None,
+    ) -> ProceduralEntryDTO:
+        """Non-destructive rollback: old snapshot re-applied as a NEW
+        version. Re-embeds the snapshot's trigger (§19.4 bug class)."""
+        versions = await self._api._procedural_repo.list_versions(entry_id)
+        snapshot = next((v for v in versions if v.version == version), None)
+        trigger_embedding = (
+            await self._embed_trigger(snapshot.trigger) if snapshot is not None else None
+        )
+        return await self._api._procedural_repo.rollback(
+            entry_id,
+            version,
+            vault_id=vault_id,
+            trigger_embedding=trigger_embedding,
+            rolled_back_by=rolled_back_by,
+        )
+
+    async def enqueue_derivation(
+        self,
+        *,
+        vault_id: UUID,
+        source_entry_ids: list[UUID],
+        target_kind: Literal['procedure', 'strategy'],
+        target_scope: ShortLabel,
+        target_verb: str | None = None,
+        target_context: str | None = None,
+    ) -> ProceduralDerivationQueueDTO:
+        """Enqueue a case → procedure/strategy derivation task.
+
+        Workers claim via :meth:`ProceduralRepository.claim_derivation_tasks`.
+        """
+        return await self._api._procedural_repo.enqueue_derivation(
+            vault_id=vault_id,
+            source_entry_ids=source_entry_ids,
+            target_kind=target_kind,
+            target_scope=target_scope,
+            target_verb=target_verb,
+            target_context=target_context,
+        )
+
+    async def derive_pending(self, *, limit: int = 1) -> list[UUID]:
+        """Drain up to ``limit`` pending derivation tasks (cases → procedure,
+        procedures → strategy). Runs the distillation passes synchronously and
+        writes the derived entries. Returns the completed queue ids.
+
+        The background scheduler calls this on its loop; the HTTP route
+        exposes it for ops + deterministic eval triggering.
+        """
+        from memex_core.services.procedural_derivation_service import (
+            ProceduralDerivationService,
+        )
+
+        return await ProceduralDerivationService(self._api).process_pending(limit=limit)

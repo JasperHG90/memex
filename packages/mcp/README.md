@@ -31,7 +31,7 @@ Real tools remain directly callable by name via `tools/call`. Set `MEMEX_MCP_PRO
 | `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault`, `memex_get_vault_summary` | 5 |
 | `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | 4 |
 | `entities` | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | 4 |
-| `storage` | `memex_kv_write`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | 6 |
+| `storage` | `memex_kv_put`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | 6 |
 | **Total** | | **35** |
 
 ## Usage
@@ -61,13 +61,7 @@ A slim Docker image is available at `docker/mcp/Dockerfile` — it includes only
 
 ### Claude Code Integration
 
-Run the automated setup to configure MCP, hooks, and skills:
-
-```bash
-memex setup claude-code
-```
-
-Or configure manually in your Claude Code MCP settings:
+Install the [Memex Claude Code plugin](../../claude-code-plugin/) for automatic setup, or configure manually in your Claude Code MCP settings:
 
 ```json
 {

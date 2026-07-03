@@ -1,148 +1,113 @@
-# Memory Budget on Unified-Memory Hosts
+# Memory budget on unified-memory hosts
 
-This guide is for operators deploying Memex to **memory-constrained hosts that share a single pool between CPU and GPU** — primarily NVIDIA Jetson Orin Nano (8 GiB), Jetson Orin Nano Super (16 GiB), and similar edge devices. It explains the four levers that determine peak memory usage, gives one validated worked example, and shows how to adapt the recipe to other devices.
+You want to run Memex on a unified-memory edge device — a Jetson Orin Nano, an Apple-silicon box, or any host where the CPU and the GPU draw from one shared pool. On these hosts there is no separate VRAM to spend: every byte the ONNX runtime allocates for inference comes out of the same `memory_max` ceiling the Python heap, the score cache, and the OS page cache are already drawing from. Over-provision one lever and you do not get a clean out-of-VRAM error — you get an OOM-kill, or worse, the cuDNN allocation failure that neighboured the wedge in issue #50.
 
-If you are running Memex on a host with discrete VRAM (a desktop with a separate dGPU) or on a beefy x86 server with plenty of RAM, this page is informational rather than prescriptive — the defaults will usually be fine.
+This guide gives you one validated recipe for a Jetson Orin Nano 8 GiB and a method for adapting it to a different host. It is deliberately narrow: it does not invent recipes for hardware nobody has measured.
 
-For the underlying Pydantic fields, see [Configuration Reference](../reference/configuration.md). For the broader server configuration story, see [Server Configuration Templates](server-configuration-templates.md).
+For the host-agnostic knobs (extraction concurrency, reflection cadence, the reranker score cache, file-store connections), read [Run Memex on a low-resource host](./configuring-server/low-resource.md) first. This page covers only the levers that behave differently when the GPU and CPU share one budget.
+
+## Prerequisites
+
+- A working Memex server install (see [Tutorial: Getting started](../tutorials/getting-started.md)).
+- A unified-memory host with GPU inference enabled via `MEMEX_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider`.
+- A YAML config Memex picks up — `.memex.yaml` in the project root, `~/.config/memex/config.yaml`, or `MEMEX_CONFIG_PATH`.
+- A known memory ceiling for the Memex process — the cgroup `memory_max` (or the container `--memory` flag) you intend to run under.
 
 ## The four levers
 
-Peak memory on a unified-memory host is the sum of five contributors. They share one cgroup `memory_max` ceiling — exceeding it causes the kernel to swap or OOM-kill, which on Jetson manifests as the worker wedging.
+Four levers together bound peak resident memory on a unified-memory host. They are coupled: the GPU memory cap (`ONNX_GPU_MEM_LIMIT`) is a hard ceiling, and the two batch-size levers plus the concurrency caps determine how close inference gets to that ceiling at peak.
 
-```
-ONNX_GPU_MEM_LIMIT
-  + Python heap (your workload)
-  + cuDNN workspace (~1 GiB during reranker calls — see #50)
-  + reranker batch peak memory (~ RERANKER_BATCH_SIZE * per-pair-bytes)
-  + embedding batch peak memory (~ EMBEDDING_BATCH_SIZE * per-text-bytes)
-  <= container memory_max
-```
-
-You tune Memex with four levers:
-
-| Lever | What it caps | Where it lives |
+| Lever | Where to set it | What it bounds |
 |---|---|---|
-| `ONNX_GPU_MEM_LIMIT` | Bytes the ONNX runtime is allowed to allocate for model weights and intermediate tensors. | Environment variable read by the ONNX runtime at startup. |
-| `RERANKER_BATCH_SIZE` | Pairs of (query, document) the cross-encoder scores in one forward pass. Reranker peak memory is roughly linear in this number. | `server.memory.retrieval.reranker_batch_size` in YAML. |
-| `EMBEDDING_BATCH_SIZE` | Texts the embedding model encodes in one forward pass. | `server.embedding_batch_size` in YAML. |
-| Container `memory_max` | Hard ceiling enforced by the kernel cgroup. | Docker `--memory`, Kubernetes `resources.limits.memory`, systemd `MemoryMax=`. |
+| `ONNX_GPU_MEM_LIMIT` | env: `MEMEX_ONNX_GPU_MEM_LIMIT` (bytes) | Hard cap on the GPU arena the ONNX CUDA provider may allocate. |
+| `RERANKER_BATCH_SIZE` | YAML: `server.memory.retrieval.reranker_batch_size` | Documents scored per reranker forward pass (`0` = all at once). |
+| `EMBEDDING_BATCH_SIZE` | YAML: `server.memory.retrieval.embedding_batch_size` | Texts encoded per embedding forward pass (`0` = all at once). |
+| `*_max_concurrency` | YAML: `server.reranker_max_concurrency` / `embedding_max_concurrency` / `ner_max_concurrency` | In-flight inference calls per model — multiplies the per-call batch footprint. |
 
-Memex also exposes three concurrency caps that pair with the batch-size levers:
+The shared constraint that ties them together: **a model's peak inference footprint is roughly `batch_size × max_concurrency`**, and that footprint must fit inside `ONNX_GPU_MEM_LIMIT`, which in turn must leave headroom under the host `memory_max`. Tune the batch and the concurrency together — never one alone.
 
-| Cap | Limits | Where it lives |
-|---|---|---|
-| `reranker_max_concurrency` | Concurrent in-flight reranker calls. Sister to `reranker_batch_size`. | `server.reranker_max_concurrency` (default 16). |
-| `embedding_max_concurrency` | Concurrent in-flight embedding calls. | `server.embedding_max_concurrency` (default 16). |
-| `ner_max_concurrency` | Concurrent in-flight NER calls. | `server.ner_max_concurrency` (default 16). |
-
-The defaults are sized for capable hosts (workstations, x86 servers, HTTP-based LiteLLM models) where the bottleneck is provider rate-limit, not local memory. **On memory-constrained hosts, tune them down together with the matching batch size**: a Jetson that needs `RERANKER_BATCH_SIZE=8` typically wants `reranker_max_concurrency=2`, not the default 16.
-
-### Why each lever matters
-
-`ONNX_GPU_MEM_LIMIT` is the floor — the ONNX runtime grabs this much up front and never gives it back. Set it too high and there is no headroom for the Python heap, cuDNN workspace, or batch tensors. Set it too low and inference slows down because the runtime has to swap weights between calls.
-
-`RERANKER_BATCH_SIZE` is the spike. The cross-encoder allocates a transient tensor proportional to batch size during scoring; this tensor lives inside the cuDNN workspace. **Exceeding the recommended value caused the cuDNN allocation failure that immediately preceded the wedge in [issue #50](https://github.com/JasperHG90/memex/issues/50)**. Reranker batch and `reranker_max_concurrency` are sister levers — both must be sized so the worst-case combined peak fits under `memory_max`.
-
-`EMBEDDING_BATCH_SIZE` is the secondary spike. Embedding peak per call is lower than reranker peak per call, so embedding can usually run with 2x the reranker batch size on the same host.
-
-Container `memory_max` is the ceiling. Set it to roughly 90% of available physical RAM so the kernel has headroom before swap or OOM-kill.
-
-## Worked example: Jetson Orin Nano (8 GiB unified)
-
-This is the device that wedged in [issue #50](https://github.com/JasperHG90/memex/issues/50). The values below are derived from the constraint reasoning in that issue (4 GiB ONNX arena + Python heap + ~1 GiB cuDNN workspace + reranker batch).
+### Recipe template
 
 ```yaml
-# .memex.yaml on a Jetson Orin Nano 8 GiB
+# server.yaml — unified-memory recipe template
 server:
-  embedding_batch_size: 16
+  # Concurrency caps (default 16 each, sized for capable hosts).
+  reranker_max_concurrency: <N>      # in-flight reranker calls
+  embedding_max_concurrency: <N>     # in-flight embedding calls
+  ner_max_concurrency: <N>           # in-flight NER calls
+  memory:
+    retrieval:
+      reranker_batch_size: <B>       # RERANKER_BATCH_SIZE; 0 = no batching
+      embedding_batch_size: <B>      # EMBEDDING_BATCH_SIZE; 0 = no batching
+```
+
+```bash
+# Environment — GPU arena hard cap + provider selection
+export MEMEX_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+export MEMEX_ONNX_GPU_MEM_LIMIT=<bytes>   # ONNX_GPU_MEM_LIMIT, in bytes
+```
+
+Pick `<B>` and `<N>` so that `batch_size × max_concurrency` worth of pairs/texts fits inside `ONNX_GPU_MEM_LIMIT`, and pick `ONNX_GPU_MEM_LIMIT` so the arena plus the Python heap stays under the host `memory_max`.
+
+## Worked example: Jetson Orin Nano 8 GiB
+
+The Jetson Orin Nano 8 GiB is a unified-memory device: the 8 GiB is shared between the CPU and the integrated GPU. Reserve roughly half for the OS, the JetPack stack, and the Python heap, and cap the ONNX GPU arena at **4 GiB** (`4_000_000_000` bytes). This is the validated configuration:
+
+```yaml
+# server.yaml — Jetson Orin Nano 8 GiB
+server:
   reranker_max_concurrency: 2
   embedding_max_concurrency: 2
   ner_max_concurrency: 2
   memory:
     retrieval:
-      reranker_batch_size: 8
+      reranker_batch_size: 8     # RERANKER_BATCH_SIZE = 8
+      embedding_batch_size: 8    # EMBEDDING_BATCH_SIZE = 8
 ```
-
-Plus the environment variable and container limit:
 
 ```bash
-ONNX_GPU_MEM_LIMIT=4000000000   # 4 GiB
-docker run --memory=7000m memex-server
+export MEMEX_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+export MEMEX_ONNX_GPU_MEM_LIMIT=4000000000   # 4 GiB GPU arena cap (4_000_000_000 bytes)
 ```
 
-| Lever | Validated value | Why |
-|---|---|---|
-| `ONNX_GPU_MEM_LIMIT` | `4000000000` (4 GiB) | Half the unified pool. Leaves room for Python heap + cuDNN + batches under 7 GiB. |
-| `RERANKER_BATCH_SIZE` | 8 | The wedge's neighbour incident in #50 happened with batch=32 plus concurrent calls; 8 is the largest value validated to coexist with `reranker_max_concurrency=2` on this device. |
-| `EMBEDDING_BATCH_SIZE` | 16 | Embedding has lower per-call peak than reranker; 2x reranker batch is safe. |
-| `reranker_max_concurrency` | 2 | Caps simultaneous reranker calls so the worst-case combined batch+cuDNN peak stays under `memory_max`. |
-| `embedding_max_concurrency` | 2 | Pairs with the reduced embedding batch budget. |
-| `ner_max_concurrency` | 2 | NER is the cheapest model but shares the same memory pool. |
-| Container `memory_max` | 7000m (7 GiB) | Leaves 1 GiB headroom for the kernel before swap/OOM. |
+With `RERANKER_BATCH_SIZE=8` and `reranker_max_concurrency=2`, the worst case is 16 `(query, document)` pairs resident in the reranker at once — comfortably inside a 4 GiB arena on the Orin Nano, with headroom for the embedding and NER models that share the same `ONNX_GPU_MEM_LIMIT`.
 
-> **Wedge warning.** Exceeding `RERANKER_BATCH_SIZE=8` on this device is the [issue #50](https://github.com/JasperHG90/memex/issues/50) wedge's neighbour incident — a cuDNN allocation failure inside the reranker scoring call, six minutes before the worker wedged. The reranker batch size and `reranker_max_concurrency` are sister levers; raise one only if you also lower the other.
+## Why each lever matters
 
-## Adapting the recipe to other devices
+Each lever caps a distinct contributor to the unified-memory peak.
 
-We have **one** empirically validated data point (Jetson Orin Nano 8 GiB, from #50). For other hardware — Jetson Orin Nano Super 16 GiB, x86 hosts with discrete GPUs, or larger Jetsons — the **shape of the constraint is the same**, only the numbers move. **Do not** copy the Jetson tuple verbatim onto a 16 GiB host without verifying.
+- **`ONNX_GPU_MEM_LIMIT`** is the hard ceiling. Without it, the ONNX CUDA provider grows its arena lazily and never gives memory back — on a unified-memory host that arena eats into the same pool the OS needs, so a single large batch can OOM-kill the box. Setting it bounds the arena up front and lets ONNX fall back to CPU rather than crash if it would exceed the cap.
+- **`RERANKER_BATCH_SIZE`** caps the single biggest transient spike. The cross-encoder scores `(query, document)` pairs in one forward pass; peak memory is roughly linear in the batch. The default `0` ("all at once") is fine on a workstation and dangerous on an edge box.
+- **`EMBEDDING_BATCH_SIZE`** does the same for the embedding model — peak is linear in the number of texts encoded per call. Default `0` batches everything.
+- **`*_max_concurrency`** caps how many inference calls run in parallel. Each in-flight call holds a full batch, so concurrency multiplies the batch footprint: a batch of 8 at concurrency 2 is 16 items resident at peak.
 
-Recommended starting point for an unvalidated device:
+## Warning: the reranker batch / concurrency wedge (issue #50)
 
-1. **Container `memory_max`**: about 90% of available RAM. (16 GiB host -> ~14 GiB.)
-2. **`ONNX_GPU_MEM_LIMIT`**: about 50% of `memory_max`. (14 GiB ceiling -> ~7 GiB.)
-3. **Batch sizes**: start with the Jetson values (`RERANKER_BATCH_SIZE=8`, `EMBEDDING_BATCH_SIZE=16`).
-4. **Concurrency caps**: start with `reranker_max_concurrency=2`, `embedding_max_concurrency=2`, `ner_max_concurrency=2`.
-5. **Monitor** the `memex_sync_offload_inflight{stage="rerank"}` Prometheus gauge and reranker call duration under realistic load.
-6. **Lower batch size first** if you see cuDNN allocation failures; only then raise the cap.
+`reranker_max_concurrency` and `reranker_batch_size` are **sister levers** and must be tuned together. Issue #50 documented a cuDNN allocation failure that appeared when the reranker batch and concurrency were raised independently: a large `reranker_batch_size` combined with high `reranker_max_concurrency` drove the cuDNN workspace allocation past the GPU arena, and cuDNN failed the allocation mid-forward-pass rather than degrading gracefully.
 
-For x86 hosts with a discrete GPU and at least 16 GiB system RAM plus 8 GiB VRAM, the defaults (`reranker_max_concurrency=16`, `embedding_max_concurrency=16`, `ner_max_concurrency=16`, `RERANKER_BATCH_SIZE` per the model card) usually work without tuning. On HTTP-based LiteLLM rerankers/embedders (no local GPU competition), there is no schema upper bound — raise the caps as high as the provider's rate limit allows.
+Always change `reranker_max_concurrency` and `reranker_batch_size` in the same edit, and keep `batch_size × max_concurrency` well inside `ONNX_GPU_MEM_LIMIT`. If you see a cuDNN allocation error under reranker load, lower both — not just one.
 
-## Querying the in-flight gauges
+## Adapting the recipe to another host
 
-Memex exposes two Prometheus gauges so you can see what's actually wedging:
+There is exactly one validated recipe on this page — the Jetson Orin Nano 8 GiB. Rather than fabricate untested 16 GiB or 32 GiB tuples, adapt the Jetson Orin Nano numbers to your hardware with this method:
 
-- `memex_extraction_inflight{stage}` — labels `scan` / `refine` / `summarize` / `block_summarize`.
-- `memex_sync_offload_inflight{stage}` — labels `embed` / `rerank` / `ner`.
+1. **Set `ONNX_GPU_MEM_LIMIT` to roughly half the unified-memory ceiling.** On the Jetson Orin Nano 8 GiB that is 4 GiB (`4_000_000_000`). Scale proportionally: a 16 GiB unified host can usually afford an 8 GiB arena, leaving the rest for the OS and the Python heap.
+2. **Start from the Jetson batch/concurrency pair** (`reranker_batch_size: 8`, `*_max_concurrency: 2`). Raise the batch first — it improves throughput per call — and watch resident memory.
+3. **Raise `*_max_concurrency` only after the batch is settled,** one step at a time, keeping `batch_size × max_concurrency` inside the GPU arena. Stop one step before memory tightens.
+4. **Re-check the wedge.** After every change to either reranker lever, run a reranker-heavy search and confirm no cuDNN allocation error (issue #50).
 
-Both are labelled per-stage. **Always query with `sum by (stage)`, never `sum by ()`** — the global sum across stages is not a useful production signal because the **`refine` stage double-counts the `scan` calls it makes**. A refine task wraps `_instrument('refine')` around an inner `_process_single_chunk` that itself increments `scan`; a single LLM call that runs as part of refine increments BOTH gauges concurrently. The intent is correct (the refine task IS in flight, AND the scan substep IS in flight) — but a global sum will report `2 × refine_concurrency` at peak rather than `refine_concurrency`.
+## Verification
 
-### Useful queries
+Restart the server and confirm three things.
 
-```promql
-# Per-stage in-flight (correct view of what's running):
-sum by (stage) (memex_extraction_inflight)
-sum by (stage) (memex_sync_offload_inflight)
+**The GPU arena is capped.** Check the startup log: the ONNX CUDA provider reports the `gpu_mem_limit` it was given. It must match your `MEMEX_ONNX_GPU_MEM_LIMIT`.
 
-# Saturation per cap (compare in-flight to its semaphore capacity):
-sum by (stage) (memex_extraction_inflight{stage="refine"})
-  / on() group_left() <refine_max_concurrency_value>
+**Resident memory stays under the ceiling.** Watch `docker stats` (or the cgroup `memory.current`) during a busy ingest and a reranker-heavy search. It must stay under your `memory_max`, not just at idle but at peak.
 
-# Watchdog companion: stages with inflight > 0 for a long time
-# (drives the same trigger semantics as `wedge_watchdog_seconds`):
-sum by (stage) (memex_extraction_inflight) > 0
-  and on(stage) avg by (stage) (changes(memex_extraction_inflight[5m])) == 0
-```
+**Saturation is healthy.** With Prometheus wired up, watch `sum by (stage) (memex_sync_offload_inflight)`. Each per-stage value should sit at or below its `*_max_concurrency` cap, not pegged at the cap for long stretches. A pegged gauge means the host is the bottleneck — accept the slower throughput or raise the budget.
 
-### What NOT to query
+## See also
 
-```promql
-# Misleading — refine and its child scan are double-counted.
-sum(memex_extraction_inflight)
-
-# Same problem; mixing the two metric families just makes the chart
-# harder to read because they have disjoint stage label sets.
-sum(memex_extraction_inflight) + sum(memex_sync_offload_inflight)
-```
-
-### Why the double-count is correct semantics
-
-The intent: when a refine task is in progress *and* it's currently doing its scan substep, both `refine` and `scan` are in flight. Operators tuning `refine_max_concurrency` expect the `refine` gauge to reflect the cap; operators tuning `scan_max_concurrency` expect the `scan` gauge to reflect THAT cap. Disjoint scoping (e.g., suppressing the inner scan increment) would make either view incomplete. The price is that you must aggregate per-stage, not globally.
-
-The same nuance applies to PR1 + PR1.5 sites: a `_summarize_single_node` runs entirely under `_instrument('summarize')` (no nested stages), so summarize/block_summarize/embed/rerank/ner do NOT double-count. **Only `refine` shadows `scan`**; this section flags that fact so it stays in operator memory.
-
-## Cross-references
-
-- The concurrency-cap fields (`reranker_max_concurrency`, `embedding_max_concurrency`, `ner_max_concurrency`) are documented in [Configuration Reference](../reference/configuration.md). Their `description=` text in `packages/common/src/memex_common/config.py` links back to this page so operators reading the YAML see the warning at config-time.
-- For an explanation of why concurrent in-flight calls amplify peak memory, see [Extraction Pipeline](../explanation/extraction-pipeline.md).
-- The batch-size levers (`reranker_batch_size`, `embedding_batch_size`) are documented in [Inference Model Backends](../explanation/inference-model-backends.md).
+- [Run Memex on a low-resource host](./configuring-server/low-resource.md) — the host-agnostic memory knobs.
+- [Reference: configuration](../reference/configuration-options.md) — `reranker_max_concurrency`, `embedding_max_concurrency`, `ner_max_concurrency` and the batch-size fields.
+- [Explanation: inference model backends](../explanation/how-memex-works/retrieval.md)

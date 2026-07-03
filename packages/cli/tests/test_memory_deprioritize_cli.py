@@ -1,0 +1,125 @@
+"""F4 — CLI tests for `memex memory deprioritize` and `memex memory restore`.
+
+T5 (CLI half): the Typer commands exist, dispatch to the API client correctly,
+and surface success messages.
+"""
+
+from __future__ import annotations
+
+from uuid import uuid4
+
+from memex_cli.memory import app
+from memex_common.schemas import MemoryUnitDTO
+
+
+def _fake_unit(unit_id: str, *, is_deprioritized: bool = True) -> MemoryUnitDTO:
+    return MemoryUnitDTO(
+        id=unit_id,
+        text='example',
+        fact_type='observation',
+        confidence=1.0,
+        is_deprioritized=is_deprioritized,
+    )
+
+
+def test_deprioritize_command_invokes_api(runner, mock_api, mock_config, monkeypatch):
+    unit_id = str(uuid4())
+    vault_id = str(uuid4())
+    mock_api.deprioritize_memory_unit.return_value = _fake_unit(unit_id)
+    mock_api.resolve_vault_identifier.return_value = vault_id
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        ['deprioritize', unit_id, '--vault', vault_id, '--reason', 'wrong about deploy'],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0, result.stdout
+    assert 'deprioritized' in result.stdout.lower()
+
+    mock_api.deprioritize_memory_unit.assert_called_once()
+    args, kwargs = mock_api.deprioritize_memory_unit.call_args
+    assert str(args[0]) == unit_id
+    assert kwargs.get('reason') == 'wrong about deploy'
+    assert kwargs.get('vault_id') == vault_id
+
+
+def test_restore_command_invokes_api(runner, mock_api, mock_config, monkeypatch):
+    unit_id = str(uuid4())
+    vault_id = str(uuid4())
+    mock_api.restore_memory_unit.return_value = _fake_unit(unit_id, is_deprioritized=False)
+    mock_api.resolve_vault_identifier.return_value = vault_id
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['restore', unit_id, '--vault', vault_id], obj=mock_config)
+    assert result.exit_code == 0, result.stdout
+    assert 'restored' in result.stdout.lower()
+
+    mock_api.restore_memory_unit.assert_called_once()
+
+
+def test_deprioritize_default_reason_is_manual(runner, mock_api, mock_config, monkeypatch):
+    """Sanity: when --reason is omitted the CLI sends 'manual' (not None)."""
+    unit_id = str(uuid4())
+    vault_id = str(uuid4())
+    mock_api.deprioritize_memory_unit.return_value = _fake_unit(unit_id)
+    mock_api.resolve_vault_identifier.return_value = vault_id
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['deprioritize', unit_id, '--vault', vault_id], obj=mock_config)
+    assert result.exit_code == 0
+    assert mock_api.deprioritize_memory_unit.call_args.kwargs.get('reason') == 'manual'
+
+
+def test_deprioritize_default_vault(runner, mock_api, mock_config, monkeypatch):
+    """Omitting --vault falls back to config.vault.active."""
+    unit_id = str(uuid4())
+    vault_id = str(uuid4())
+    mock_config.vault.active = 'my-active-vault'
+    mock_api.deprioritize_memory_unit.return_value = _fake_unit(unit_id)
+    mock_api.resolve_vault_identifier.return_value = vault_id
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['deprioritize', unit_id], obj=mock_config)
+    assert result.exit_code == 0, result.stdout
+    mock_api.resolve_vault_identifier.assert_called_once_with('my-active-vault')
+
+
+def test_deprioritize_no_vault_configured_surfaces_error(
+    runner, mock_api, mock_config, monkeypatch
+):
+    """No --vault and no active vault → resolve raises → CLI exits non-zero."""
+    import httpx
+
+    unit_id = str(uuid4())
+    request = httpx.Request('GET', 'http://example/api/v1/vaults')
+    response = httpx.Response(404, request=request, json={'detail': "Vault 'None' not found."})
+    mock_api.resolve_vault_identifier.side_effect = httpx.HTTPStatusError(
+        'not found', request=request, response=response
+    )
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    assert mock_config.vault.active is None
+    result = runner.invoke(app, ['deprioritize', unit_id], obj=mock_config)
+    assert result.exit_code != 0
+    mock_api.deprioritize_memory_unit.assert_not_called()
+
+
+def test_deprioritize_help_lists_command():
+    """`memex memory deprioritize --help` returns clean."""
+    from typer.testing import CliRunner
+
+    cli = CliRunner()
+    res = cli.invoke(app, ['deprioritize', '--help'])
+    assert res.exit_code == 0
+    assert 'deprioritize' in res.stdout.lower()
+
+
+def test_restore_help_lists_command():
+    """`memex memory restore --help` returns clean."""
+    from typer.testing import CliRunner
+
+    cli = CliRunner()
+    res = cli.invoke(app, ['restore', '--help'])
+    assert res.exit_code == 0
+    assert 'restore' in res.stdout.lower()

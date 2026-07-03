@@ -41,7 +41,7 @@ Embedding and reranking use local ONNX models by default, so they incur no LLM A
 
 ## Can I use models other than Gemini?
 
-Yes. Memex uses [LiteLLM](https://docs.litellm.ai/) under the hood, so any provider it supports works — OpenAI, Anthropic, Ollama, Azure, AWS Bedrock, and more. See [Configure Memex](./docs/how-to/configure-memex.md) for details on setting the model provider.
+Yes. Memex uses [LiteLLM](https://docs.litellm.ai/) under the hood, so any provider it supports works — OpenAI, Anthropic, Ollama, Azure, AWS Bedrock, and more. See [Configure Memex](./docs/how-to/configuring-server/default-model.md) for details on setting the model provider.
 
 ## Can I run Memex without an LLM key?
 
@@ -57,3 +57,14 @@ Memex stores data in two places:
 ## Can multiple agents share the same Memex instance?
 
 Yes. The server supports concurrent access, vault-scoped API keys, and policy-based access control (reader/writer/admin). Each agent can be scoped to its own vault or share a common one.
+
+## Why does `memex_get_memory_units` return empty when I pass a page-index ID?
+
+Page-index section IDs and memory-unit chunk IDs live in different identifier
+spaces. `memex_get_page_indices` returns each section's `node_hash` (an MD5 of
+its text); memory units join on a *chunk* ID. Passing the section ID straight
+to `memex_get_memory_units` matches nothing and returns `[]` silently.
+
+Pivot through one call: read the section with `memex_get_nodes`, take its
+`block_id`, and pass that to `memex_get_memory_units`. See
+[Node identifiers](explanation/identifiers.md) for the full picture.

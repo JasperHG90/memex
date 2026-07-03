@@ -11,7 +11,8 @@ from __future__ import annotations
 import asyncio
 import pathlib as plb
 import secrets
-from typing import AsyncGenerator
+from contextlib import contextmanager
+from typing import AsyncGenerator, Iterator
 from urllib.parse import urlparse, urlunparse
 
 from alembic import command
@@ -39,8 +40,14 @@ def sync_url(asyncpg_url: str) -> str:
     return urlunparse(parsed._replace(scheme=scheme))
 
 
-async def alembic_upgrade(db_url: str, target: str = 'head') -> None:
-    """Run ``alembic upgrade <target>`` against ``db_url``."""
+async def alembic_upgrade(db_url: str, target: str = '024_intent_risk_classifier') -> None:
+    """Run ``alembic upgrade <target>`` against ``db_url``.
+
+    Default pinned to ``024_intent_risk_classifier`` (Wave 1 head). Tier A
+    seed PR introduced revisions 025-029 as NIE stubs; each Tier A feature
+    test (``test_int_alembic_NNN.py``) bumps its own target when the matching
+    stub body lands.
+    """
     cfg = alembic_cfg_for(db_url)
     await asyncio.to_thread(command.upgrade, cfg, target)
 
@@ -96,3 +103,42 @@ async def make_fresh_db(
             )
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
         await admin_engine.dispose()
+
+
+@contextmanager
+def neutralized_stub_revisions(revision_ids: list[str]) -> Iterator[None]:
+    """Replace ``upgrade``/``downgrade`` with no-ops on the named stub revisions.
+
+    Used by Tier A migration tests whose new revision sits *downstream* of
+    other workstreams' raising stubs. Alembic loads each revision file via
+    ``importlib.util.spec_from_file_location`` + a fresh ``exec_module``
+    (see ``alembic/util/pyfiles.py:load_module_py``), producing a brand-new
+    module object each time — distinct from any module registered in
+    ``sys.modules``. So we patch alembic's loader directly: after each
+    revision module is loaded, we replace its ``upgrade``/``downgrade``
+    with no-ops if the revision id matches one of ``revision_ids``.
+
+    Example::
+
+        with neutralized_stub_revisions(['025_maintenance_proposals',
+                                         '026_revisit_columns',
+                                         '027_consolidation_ticks']):
+            await alembic_upgrade(db_url, target='028_procedure_outcomes')
+    """
+    from alembic.util import pyfiles  # type: ignore[import-not-found]
+
+    target_module_ids = {f'{rev_id}_py' for rev_id in revision_ids}
+    original_load = pyfiles.load_module_py
+
+    def _patched_load_module_py(module_id: str, path):  # type: ignore[no-untyped-def]
+        module = original_load(module_id, path)
+        if module_id in target_module_ids:
+            module.upgrade = lambda: None  # type: ignore[assignment]
+            module.downgrade = lambda: None  # type: ignore[assignment]
+        return module
+
+    pyfiles.load_module_py = _patched_load_module_py
+    try:
+        yield
+    finally:
+        pyfiles.load_module_py = original_load

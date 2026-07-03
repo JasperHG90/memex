@@ -101,3 +101,31 @@ class TestSynthesizeTags:
         page_index = _make_page_index([['valid', '', '  ']])
         result = _synthesize_tags(page_index, user_tags=[])
         assert result == ['valid']
+
+    def test_inferred_reserved_tags_stripped(self):
+        """LLM-inferred reserved semantic tags (e.g. handoff) are dropped — the leak fix."""
+        page_index = _make_page_index([['handoff', 'cli', 'case', 'workflow']])
+        result = _synthesize_tags(page_index, user_tags=[])
+        assert 'handoff' not in result
+        assert 'case' not in result
+        # Topical tags survive.
+        assert result == ['cli', 'workflow']
+
+    def test_inferred_provenance_tags_stripped(self):
+        """LLM-inferred provenance-namespaced tags are dropped from the inferred set."""
+        page_index = _make_page_index([['project:acme', 'session:123', 'databases']])
+        result = _synthesize_tags(page_index, user_tags=[])
+        assert result == ['databases']
+
+    def test_user_supplied_protected_tags_preserved(self):
+        """A caller-supplied reserved tag is authoritative and kept verbatim."""
+        page_index = _make_page_index([['cli']])
+        result = _synthesize_tags(page_index, user_tags=['handoff', 'surface:claude-code'])
+        # User tags kept (provenance + reserved), inferred topical tag appended.
+        assert result == ['handoff', 'surface:claude-code', 'cli']
+
+    def test_inferred_tag_matching_user_protected_tag_not_duplicated(self):
+        """If the LLM re-infers a reserved tag the caller already supplied, no dupe."""
+        page_index = _make_page_index([['handoff', 'cli']])
+        result = _synthesize_tags(page_index, user_tags=['handoff'])
+        assert result == ['handoff', 'cli']

@@ -40,7 +40,12 @@ def test_temporal_strategy_order():
     stmt = strategy.get_statement('test', None, limit=5)
 
     sql = str(stmt.compile())
-    assert 'ORDER BY memory_units.event_date DESC' in sql
+    # Ranks by the real authored date (occurred_start), not event_date —
+    # event_date defaults to ingest time for undated content, which would
+    # flood this query-blind recency sort with date-less "today" rows.
+    assert 'ORDER BY memory_units.occurred_start DESC' in sql
+    # Undated units abstain from the temporal signal entirely.
+    assert 'memory_units.occurred_start IS NOT NULL' in sql
     assert 'LIMIT' in sql
 
 
@@ -51,7 +56,11 @@ def test_graph_strategy_unions():
     # Graph strategy returns a union_all statement
     sql = str(stmt.compile())
     assert 'UNION ALL' in sql
-    assert 'similarity' in sql or 'ilike' in sql
+    # Fuzzy seed matching uses LIKE + the sargable pg_trgm `%` operator, NOT the
+    # non-sargable similarity() function (which defeated the trigram index into a
+    # seqscan — removed in the note-search perf fix; shared via build_seed_entity_cte).
+    assert 'LIKE' in sql
+    assert 'similarity(' not in sql
 
 
 def test_mental_model_strategy_fallback():

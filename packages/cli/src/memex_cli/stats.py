@@ -2,7 +2,6 @@
 System Statistics Commands.
 """
 
-import json
 from typing import Annotated
 
 import typer
@@ -11,20 +10,20 @@ from rich.table import Table
 from rich.panel import Panel
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import emit_json, get_api_context, async_command, handle_api_error
 
 console = Console()
 
 app = typer.Typer(
-    name='system',
+    name='stats',
     help='Show overview of system counts (memories, entities, queue).',
     no_args_is_help=True,
 )
 
 
-@app.command('system')
+@app.command('stats')
 @async_command
-async def system_stats(
+async def stats(
     ctx: typer.Context,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
@@ -41,7 +40,7 @@ async def system_stats(
             return
 
     if json_output:
-        console.print_json(json.dumps(counts.model_dump(), default=str))
+        emit_json(counts.model_dump())
         return
 
     grid = Table.grid(expand=True)

@@ -46,8 +46,17 @@ def test_initialize_resolves_vault_and_fetches_real_briefing(
     assert initialized_provider._session_note_key in block
 
 
-def test_get_tool_schemas_exposes_stream_1_tools(initialized_provider):
-    """The 8 Stream-1 tools must always be exposed (others are mode-dependent)."""
+def test_get_tool_schemas_exposes_stream_1_and_post_seed_tools(initialized_provider):
+    """The 8 Stream-1 tools + every post-seed MCP verb must always be exposed.
+
+    Standing AC-X-10 three-surface-parity canary: every new MCP verb must
+    appear here as part of its ship's TC matrix. Guards against the
+    v0.1.13-regression pattern where a refactor could move schema
+    registration to a place that imports correctly but is never picked up
+    by Hermes' loader. The boot+discovery path is the only assertion that
+    verifies registration is *reachable* through ``_tool_to_provider``
+    dispatch.
+    """
     names = {s['name'] for s in initialized_provider.get_tool_schemas()}
     assert {
         'memex_memory_search',
@@ -59,6 +68,16 @@ def test_get_tool_schemas_exposes_stream_1_tools(initialized_provider):
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
     } <= names
+    assert 'memex_get_diagnostics_summary' in names
+    assert (
+        'memex_memory_summarize_node' in names
+    )  # F5 — new MCP verb, must be reachable through dispatch
+    assert 'memex_memory_reconsolidate' in names  # F9 — entity-scoped curation
+    assert 'memex_memory_consolidate' in names  # F9 — vault-scoped curation
+    assert 'memex_memory_deprioritize' in names  # F4 — soft-deprioritize WRITE verb
+    assert 'memex_memory_restore' in names  # F4 — restore partner of deprioritize
+    assert 'memex_record_outcome' in names  # F29 — outcome telemetry WRITE verb
+    assert 'memex_get_lint_flags' in names  # F8 — memory-hygiene lint READ verb
 
 
 def test_get_tool_schemas_at_registration_time(loaded_provider):
@@ -151,7 +170,7 @@ def test_on_memory_write_kv_roundtrip(initialized_provider, memex_server_url: st
     initialized_provider.on_memory_write('add', 'user', 'Prefers Rust for systems code')
 
     digest = hashlib.sha256(b'Prefers Rust for systems code').hexdigest()[:12]
-    expected_key = f'app:hermes:user:{digest}'
+    expected_key = f'user:hermes:{digest}'
     with httpx.Client(base_url=f'{memex_server_url}/api/v1/', timeout=10.0) as client:
         response = client.get('kv/get', params={'key': expected_key})
     assert response.status_code == 200, f'KV lookup failed: {response.status_code} {response.text}'
@@ -418,13 +437,15 @@ def test_session_title_uses_template_against_real_server(
 
     cfg_dir = hermes_home / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'memex' / 'config.json' if False else cfg_dir / 'config.json').write_text(
+    (cfg_dir / 'config.json').write_text(
         json.dumps(
             {
                 'server_url': memex_server_url,
                 'vault_id': vault_name,
                 'retain': {
                     'session_title_template': ('IntegrationTitle [{agent_identity}@{platform}]'),
+                    'min_capture_turns': 0,
+                    'min_capture_chars': 0,
                 },
             }
         )

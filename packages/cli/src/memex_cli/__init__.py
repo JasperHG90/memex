@@ -207,9 +207,19 @@ def main(
         setup_logging(ctx, debug, plb.Path(user_log_dir('memex', appauthor=False)) / 'memex.log')
         logger.critical(f'Configuration Error: {e}')
 
-        # Heuristic check for missing config
-        if not global_data and not local_data and not overrides_data:
-            logger.info("Run 'memex init' to generate a valid configuration.")
+        err_console = Console(stderr=True)
+        has_env_config = any(key.startswith('MEMEX_') for key in os.environ)
+        if not global_data and not local_data and not overrides_data and not has_env_config:
+            err_console.print('[bold red]Error:[/bold red] No Memex configuration found.')
+            err_console.print(
+                'Run [bold cyan]memex config init[/bold cyan] to create one interactively.'
+            )
+        else:
+            # logger.critical above already printed the parse error to stderr; add the CTA only.
+            err_console.print(
+                'Inspect your configuration with [bold cyan]memex config show[/bold cyan] '
+                'or regenerate it with [bold cyan]memex config init[/bold cyan].'
+            )
 
         raise typer.Exit(code=1)
 
@@ -234,9 +244,7 @@ def main(
                 banner_kwargs['server_connected'] = False
 
         print_banner(Console(stderr=True), **banner_kwargs)  # type: ignore[arg-type]
-        import click
-
-        click.echo(ctx.get_help())
+        typer.echo(ctx.get_help())
         raise typer.Exit(0)
 
 

@@ -11,7 +11,7 @@ import math
 import itertools
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import func
+from sqlalchemy import case, func, null, or_
 from sqlmodel import col, text, update, select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from pydantic import BaseModel
@@ -49,6 +49,106 @@ class ResolutionResult(BaseModel):
     entity_id: str | None = None
     is_new: bool = False
     input_data: EntityInput
+
+
+def score_entity_pair(
+    a_name: str,
+    b_name: str,
+    a_phonetic: str | None,
+    b_phonetic: str | None,
+    a_neighbors: dict[str, int],
+    b_neighbors: dict[str, int],
+    *,
+    trigram_weight: float = 0.6,
+    phonetic_weight: float = 0.2,
+    neighbor_weight: float = 0.2,
+    phonetic_floor: float = 0.5,
+) -> float:
+    """Cross-batch entity-pair similarity used by the cluster-collapse scan.
+
+    Differs from :func:`calculate_match_score` (ingestion path) by computing
+    its own name-similarity component (trigram + phonetic) rather than
+    consuming a precomputed ``EntityCandidate``. The composition is:
+
+      - 60% trigram (case-folded Jaccard-ish ratio over character trigrams)
+      - 20% phonetic (Double Metaphone equality; gives a floor boost when
+        trigram is low but phonetic matches)
+      - 20% neighbourhood (overlap of cooccurrence partners, TF-IDF
+        weighted by partner mention frequency)
+
+    Names that are identical after case-folding + whitespace normalization
+    short-circuit to ``1.0`` (exact-name fast path) so they always cluster
+    regardless of the configured thresholds or phonetic availability.
+
+    Returns a float in ``[0.0, 1.0]``. Deterministic given inputs.
+    """
+    # Case-fold and collapse ALL whitespace runs (leading/trailing AND internal)
+    # so messy extractions like ``ACME  Corp`` and ``ACME Corp`` normalize equal.
+    # ``str.split()`` with no args splits on any whitespace and drops empties, so
+    # ``'   '`` → ``''`` (the fast-path guard below stays falsy).
+    a = ' '.join((a_name or '').lower().split())
+    b = ' '.join((b_name or '').lower().split())
+
+    # Exact normalized-name fast path: two entities whose canonical names are
+    # identical after case-folding + whitespace normalization (e.g. ``Marc de
+    # haas`` / ``Marc de Haas``, ``ACME  Corp`` / ``ACME Corp``) are the same
+    # entity by definition. Return the maximum score so they always cluster,
+    # independent of the configured thresholds or whether a phonetic code was
+    # computed. Without this, identical names cap at ``trigram_weight +
+    # phonetic_weight`` (0.80 at the defaults), which can sit below
+    # ``pair_threshold`` and silently suppress every merge.
+    if a and a == b:
+        return 1.0
+
+    name_score = _trigram_similarity(a, b)
+    phonetic_match = bool(a_phonetic and b_phonetic and a_phonetic == b_phonetic)
+    if phonetic_match and name_score < phonetic_floor:
+        name_score = phonetic_floor
+
+    score_name = name_score * trigram_weight + (1.0 if phonetic_match else 0.0) * phonetic_weight
+
+    score_neighbors = 0.0
+    if a_neighbors and b_neighbors:
+        common = set(a_neighbors.keys()) & set(b_neighbors.keys())
+        if common:
+            matched_weight = 0.0
+            for n in common:
+                freq_a = max(int(a_neighbors[n]), 0)
+                freq_b = max(int(b_neighbors[n]), 0)
+                pooled = freq_a + freq_b
+                weight = 1.0 / math.log2(2 + pooled)
+                matched_weight += weight
+            denom = max(min(len(a_neighbors), len(b_neighbors)), 1)
+            score_neighbors = min(matched_weight / denom, 1.0) * neighbor_weight
+
+    return min(max(score_name + score_neighbors, 0.0), 1.0)
+
+
+def _trigram_similarity(a: str, b: str) -> float:
+    """Compute trigram similarity using the Jaccard ratio.
+
+    Returns |trigrams(a) ∩ trigrams(b)| / |trigrams(a) ∪ trigrams(b)| over the
+    character trigram sets. PostgreSQL's pg_trgm ``similarity()`` function uses
+    Sørensen-Dice (2 × intersection / (|A| + |B|)), so thresholds are NOT directly
+    portable between this helper and pg_trgm. Both are bounded in [0, 1].
+    """
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+
+    def _trigrams(s: str) -> set[str]:
+        padded = f'  {s} '
+        return {padded[i : i + 3] for i in range(len(padded) - 2)}
+
+    ta, tb = _trigrams(a), _trigrams(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union if union else 0.0
 
 
 def calculate_match_score(
@@ -296,13 +396,25 @@ class EntityResolver:
                 FROM entity_cooccurrences
                 WHERE entity_id_2 = ANY(:candidate_ids :: uuid[])
             ),
+            aggregated AS (
+                -- Cooccurrence is stored per-vault (PK includes vault_id), but entity
+                -- resolution is global: collapse the per-vault rows back to one total
+                -- per (source, neighbor) so a neighbor appearing in several vaults
+                -- doesn't consume multiple rank slots below.
+                SELECT
+                    source_id,
+                    neighbor_id,
+                    SUM(cooccurrence_count) AS cooccurrence_count
+                FROM combined
+                GROUP BY source_id, neighbor_id
+            ),
             ranked AS (
                 SELECT
                     source_id,
                     neighbor_id,
                     cooccurrence_count,
                     ROW_NUMBER() OVER(PARTITION BY source_id ORDER BY cooccurrence_count DESC) as rank
-                FROM combined
+                FROM aggregated
             )
             SELECT
                 r.source_id,
@@ -565,18 +677,24 @@ class EntityResolver:
         # On conflict, keep the earliest valid_from (do NOT overwrite with a later value).
         stmt = pg_insert(EntityCooccurrence).values(co_pairs_data)
         stmt = stmt.on_conflict_do_update(
-            index_elements=['entity_id_1', 'entity_id_2'],
+            index_elements=['entity_id_1', 'entity_id_2', 'vault_id'],
             set_={
                 # Magic: DB Count + Batch Count
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
                 + stmt.excluded.cooccurrence_count,
                 'last_cooccurred': stmt.excluded.last_cooccurred,
-                # Keep the earliest valid_from. LEAST(x, NULL) returns NULL in
-                # Postgres, so wrap in COALESCE to preserve the non-NULL side.
-                'valid_from': func.coalesce(
-                    func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
-                    EntityCooccurrence.valid_from,
-                    stmt.excluded.valid_from,
+                # NULL valid_from means "open start" — preserve it. If either
+                # side is NULL the merged interval stays open; otherwise pick
+                # the earlier date.
+                'valid_from': case(
+                    (
+                        or_(
+                            EntityCooccurrence.valid_from.is_(None),
+                            stmt.excluded.valid_from.is_(None),
+                        ),
+                        null(),
+                    ),
+                    else_=func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
                 ),
             },
         )
@@ -618,3 +736,64 @@ class EntityResolver:
         entity_id = result.first()
 
         return str(entity_id) if entity_id else None
+
+
+async def recompute_cooccurrences_for_entities(
+    session: AsyncSession,
+    vault_id: PyUUID,
+    entity_ids: set[PyUUID] | list[PyUUID],
+) -> None:
+    """Rebuild ``EntityCooccurrence`` rows for every pair touching ``entity_ids`` in ``vault_id``.
+
+    Deletes the affected rows in this vault, then recomputes them from ground truth
+    (``unit_entities`` joined to ``memory_units`` scoped to the vault). The rebuilt
+    count is the number of distinct units in the vault that co-mention each pair —
+    matching the ingest-time semantics in :meth:`EntityResolver` (one increment per
+    unit per pair). ``valid_from`` is the earliest unit ``event_date``; ``valid_to``
+    stays open.
+
+    Idempotent: re-running against the same ground truth yields identical rows. Used
+    by ``migrate_note`` to keep per-vault cooccurrence counts correct on both sides of
+    a move, where one note's contribution must be subtracted from the source vault and
+    added to the target without disturbing edges other notes still support.
+    """
+    eids = [str(e) for e in entity_ids]
+    if not eids:
+        return
+
+    params = {'vault_id': str(vault_id), 'eids': eids}
+
+    # 1. Drop the affected pairs in this vault (they will be rebuilt below; pairs with
+    #    no surviving co-mentions simply do not reappear).
+    await session.exec(
+        text(
+            """
+            DELETE FROM entity_cooccurrences
+            WHERE vault_id = :vault_id
+              AND (entity_id_1 = ANY(:eids ::uuid[]) OR entity_id_2 = ANY(:eids ::uuid[]))
+            """
+        ),
+        params=params,
+    )
+
+    # 2. Recompute from ground truth. Canonical ordering (entity_id_1 < entity_id_2) is
+    #    enforced by the self-join condition, matching the table CHECK constraint.
+    await session.exec(
+        text(
+            """
+            INSERT INTO entity_cooccurrences
+                (entity_id_1, entity_id_2, vault_id, cooccurrence_count,
+                 last_cooccurred, valid_from)
+            SELECT a.entity_id, b.entity_id, mu.vault_id,
+                   COUNT(DISTINCT a.unit_id), now(), MIN(mu.event_date)
+            FROM unit_entities a
+            JOIN unit_entities b
+              ON a.unit_id = b.unit_id AND a.entity_id < b.entity_id
+            JOIN memory_units mu ON mu.id = a.unit_id
+            WHERE mu.vault_id = :vault_id
+              AND (a.entity_id = ANY(:eids ::uuid[]) OR b.entity_id = ANY(:eids ::uuid[]))
+            GROUP BY a.entity_id, b.entity_id, mu.vault_id
+            """
+        ),
+        params=params,
+    )

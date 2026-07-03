@@ -21,6 +21,7 @@ memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
 memex_eval = { workspace = true }
+memex-hermes-plugin = { workspace = true }
 hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git", branch = "main" }
 
 [tool.uv.workspace]
@@ -35,7 +36,7 @@ members = [
 
 [tool.uv]
 package = false
-required-version = "~=0.10.0"
+required-version = "~=0.11.0"
 keyring-provider = "subprocess"
 index-strategy = "first-index"
 
@@ -81,13 +82,14 @@ markers = [
   "llm_mock: marks tests using the mock_dspy_lm fixture (no real LLM)",
   "benchmark: marks performance benchmark tests",
 ]
-pythonpath = ["packages/mcp/tests"]
+pythonpath = ["packages/mcp/tests", "packages/core/tests", "packages/claude-code-plugin/tests", "packages/claude-code-plugin"]
 cache_dir = "/home/vscode/.cache/pytest"
 asyncio_mode = "auto"
 
 [dependency-groups]
 hermes-integration = [
     "hermes-agent",
+    "memex-hermes-plugin",
 ]
 dev = [
     "nest-asyncio>=1.6.0",

@@ -1,0 +1,131 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "4700840668e58eb5d9ee4db204efe830",
+  "created_at": "2026-06-12T19:47:48.610054+00:00",
+  "description": "TechCo Global Product Department Operations and Onboarding Initiative",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "4700840668e58eb5d9ee4db204efe830",
+      "filestore_path": null,
+      "note_description": "Overview of the Product department at TechCo Global.",
+      "note_name": "Product Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "product",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "2fdc1c83993387e9fce019ce8fa79910"
+    },
+    "tags": [
+      "department",
+      "product",
+      "techco",
+      "product management",
+      "user onboarding",
+      "churn reduction",
+      "retention strategy",
+      "techco global",
+      "team structure"
+    ]
+  },
+  "filestore_path": null,
+  "id": "2fdc1c83-9933-87e9-fce0-19ce8fa79910",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Product Department Operations and Onboarding Initiative",
+      "publish_date": "2026-06-12 19:47:48.609230+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "product",
+        "techco",
+        "product management",
+        "user onboarding",
+        "churn reduction",
+        "retention strategy",
+        "techco global",
+        "team structure"
+      ],
+      "title": "Product Department Overview",
+      "total_tokens": 97
+    },
+    "toc": [
+      {
+        "assets": [],
+        "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+        "children": [
+          {
+            "assets": [],
+            "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+            "children": [],
+            "end_index": 231,
+            "id": "7123b51a940e4f69c05ea2b34ce0e696",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 140,
+            "subtree_tokens": 20,
+            "summary": {
+              "how": "By redesigning the onboarding flow to improve user retention.",
+              "what": "Initiative to reduce first-week churn by 20%.",
+              "when": "Current period",
+              "where": "User onboarding process",
+              "who": "Product/Development team"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 20
+          },
+          {
+            "assets": [],
+            "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+            "children": [],
+            "end_index": 426,
+            "id": "0cb2c4da21f337fb88627a6f8520de26",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 231,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "By reporting to the current head of the department,",
+              "what": "management of all product-related activities,",
+              "when": "currently,",
+              "where": "within the Product department at TechCo Global,",
+              "who": "Kevin O'Brien and a team of 15 employees."
+            },
+            "title": "Responsibilities",
+            "token_estimate": 40
+          }
+        ],
+        "end_index": 426,
+        "id": "f479ea7a1d8d9924b2e2bbed5ca8b479",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 97,
+        "summary": {
+          "how": "Utilizing core tools including Jira, Amplitude, and Miro.",
+          "what": "Overview of the Product Department's structure and tooling.",
+          "when": null,
+          "where": "TechCo Global",
+          "who": "Kevin O'Brien (Department Head) and a team of 15 employees."
+        },
+        "title": "Product Department — TechCo Global",
+        "token_estimate": 37
+      }
+    ]
+  },
+  "publish_date": "2026-06-12T19:47:48.609230+00:00",
+  "session_id": "7ce73fe8-4d18-4d76-9bc5-ad1ca61e90aa",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Product Department Overview",
+  "updated_at": "2026-06-12T19:47:48.610054+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
+}

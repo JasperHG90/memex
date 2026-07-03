@@ -4,13 +4,15 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.server.auth import require_delete, require_write
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     DeadLetterItemDTO,
+    ObservationDTO,
     ReflectionQueueDTO,
     ReflectionRequest as ReflectionDTO,
     ReflectionResultDTO,
@@ -25,8 +27,27 @@ from memex_core.server.common import (
     ndjson_response,
     resolve_vault_ids,
 )
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
+from memex_core.services.rate_limit import RateLimitExceededError
 
 router = APIRouter(prefix='/api/v1')
+
+
+class SummarizeNodeRequest(BaseModel):
+    """Synchronous summarize-node endpoint body."""
+
+    entity_id: UUID = Field(..., description='Entity UUID to reflect on.')
+    scope: Literal['incremental', 'full'] = Field(
+        default='incremental',
+        description=(
+            "'incremental' (default — only new evidence) or 'full' "
+            '(re-evaluate all evidence; capped at 100 units).'
+        ),
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        description='Vault UUID; defaults to the global vault when omitted.',
+    )
 
 
 @router.post(
@@ -54,6 +75,121 @@ async def reflect(
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reflection failed')
+
+
+@router.post(
+    '/memories/summarize-node',
+    response_model=ReflectionResultDTO,
+    dependencies=[Depends(require_write)],
+    responses={
+        429: {
+            'description': 'Rate limit exceeded for this (entity_id, vault_id).',
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'rate_limit_exceeded',
+                        'retry_after_seconds': 42.5,
+                        'message': 'Rate limit exceeded; retry after 42.50s.',
+                    }
+                }
+            },
+        },
+        503: {
+            'description': (
+                'Reflection was abandoned because a concurrent worker '
+                "refreshed the entity's mental model first. The entity "
+                'has been re-enqueued (retry_count unchanged). The fresh '
+                'model state is already persisted — clients should '
+                'typically re-read via memex_get_entity / '
+                'memex_memory_search rather than retrying summarize_node. '
+                '``retry_after_seconds`` mirrors the rate-limit window '
+                'so a compliant retry will not immediately 429.'
+            ),
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'reflection_abandoned',
+                        'retry_after_seconds': 60.0,
+                        'message': (
+                            'Concurrent worker refreshed first; re-enqueued '
+                            'for next scheduler tick.'
+                        ),
+                        'hint': (
+                            "A concurrent worker refreshed this entity's "
+                            'mental model. Prefer re-reading rather than '
+                            'retrying summarize_node.'
+                        ),
+                    }
+                }
+            },
+        },
+    },
+)
+async def summarize_node(
+    request: Annotated[SummarizeNodeRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Synchronously consolidate memories on an entity into its mental model.
+
+    Mirrors the synchronous contract — does NOT use BackgroundTasks.
+    Rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
+    thin transport that translates ``RateLimitExceededError`` into a 429 envelope
+    with a ``Retry-After`` header, and ``ReflectionAbandonedError`` into a 503
+    envelope with a small ``Retry-After`` (concurrency contention, not failure).
+    """
+    try:
+        result = await api.summarize_node(
+            request.entity_id,
+            scope=request.scope,
+            vault_id=request.vault_id,
+        )
+    except RateLimitExceededError as exc:
+        retry_after = max(0, int(exc.retry_after_seconds + 0.999))
+        return JSONResponse(
+            status_code=429,
+            content={
+                'error': 'rate_limit_exceeded',
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            },
+            headers={'Retry-After': str(retry_after)},
+        )
+    except ReflectionAbandonedError as exc:
+        # CAS abandon — benign concurrency contention. A concurrent
+        # worker just committed a fresh reflection; the right next
+        # action is usually to re-read the entity's mental model
+        # rather than retry summarize_node. We still suggest a
+        # retry_after_seconds in case the caller wants to retry: it
+        # is derived from the summarize_node rate-limit window so a
+        # compliant caller doesn't immediately hit a 429 (the abandoned
+        # request consumed a rate-limit token before the abandon was
+        # detected). Default config: per_entity_per_seconds=60s.
+        rate_limit_cfg = api.config.server.memory.reflection.summarize_node_rate_limit
+        retry_after_seconds = float(rate_limit_cfg.per_entity_per_seconds)
+        retry_after = max(0, int(retry_after_seconds + 0.999))
+        return JSONResponse(
+            status_code=503,
+            content={
+                'error': 'reflection_abandoned',
+                'retry_after_seconds': retry_after_seconds,
+                'message': str(exc),
+                'hint': (
+                    "A concurrent worker refreshed this entity's mental "
+                    'model. The fresh state is already persisted; prefer '
+                    're-reading via memex_get_entity / memex_memory_search '
+                    'rather than retrying summarize_node.'
+                ),
+            },
+            headers={'Retry-After': str(retry_after)},
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Summarize-node reflection failed')
+
+    return ReflectionResultDTO(
+        entity_id=result.entity_id,
+        new_observations=[ObservationDTO(**obs.model_dump()) for obs in result.new_observations],
+        status='completed',
+    )
 
 
 @router.post(
@@ -143,10 +279,17 @@ async def list_reflections(
 async def claim_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 10,
+    vault_id: Annotated[
+        str | None,
+        Query(description='Vault ID or name to scope claim to a single vault.'),
+    ] = None,
 ):
     """Claim reflection queue items for processing."""
     try:
-        items = await api.claim_reflection_queue_batch(limit=limit)
+        resolved_vault: UUID | None = None
+        if vault_id:
+            resolved_vault = await api.resolve_vault_identifier(vault_id)
+        items = await api.claim_reflection_queue_batch(limit=limit, vault_id=resolved_vault)
         return ndjson_response(
             [
                 ReflectionQueueDTO(

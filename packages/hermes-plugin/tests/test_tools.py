@@ -8,6 +8,7 @@ DTOs so a schema drift in the client is caught here, not in production.
 from __future__ import annotations
 
 import base64 as _b64
+import copy
 import json
 import os
 import re
@@ -58,7 +59,7 @@ from memex_hermes_plugin.memex.tools import (
     KV_GET_SCHEMA,
     KV_LIST_SCHEMA,
     KV_SEARCH_SCHEMA,
-    KV_WRITE_SCHEMA,
+    KV_PUT_SCHEMA,
     LIST_ASSETS_SCHEMA,
     LIST_ENTITIES_SCHEMA,
     LIST_NOTES_SCHEMA,
@@ -79,7 +80,7 @@ from memex_hermes_plugin.memex.tools import (
     _scope_from_key,
     dispatch,
 )
-from memex_common.schemas import NoteAppendRequest, NoteAppendResponse
+from memex_common.schemas import NoteAppendResponse
 
 
 @pytest.fixture
@@ -119,8 +120,8 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
-    """All 35 tools (7 pre-existing + 27 from prior streams + memex_resize_image)
-    must be registered exactly (AC-086 + AC-008)."""
+    """All 45 tools (Streams 1-5 baseline + Tier A quick wins + diagnostics + lint + locks + history)
+    must be registered exactly."""
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
         'memex_memory_search',
@@ -163,10 +164,42 @@ def test_all_schemas_have_required_fields():
         'memex_get_resources',
         'memex_resize_image',
         'memex_add_assets',
-        'memex_kv_write',
+        'memex_kv_put',
         'memex_kv_get',
         'memex_kv_search',
         'memex_kv_list',
+    }
+    tier_a_quick_wins = {
+        'memex_memory_deprioritize',
+        'memex_memory_restore',
+        'memex_memory_summarize_node',
+        'memex_record_outcome',
+    }
+    tier_a_diagnostics = {
+        'memex_get_diagnostics_summary',
+    }
+    tier_a_linter = {
+        'memex_get_lint_flags',
+        'memex_lint_apply_winner',
+        'memex_lint_reverse_winner',
+        'memex_list_lint_actions',
+        'memex_submit_lint_proposal',
+    }
+    tier_a_locks = {
+        'memex_memory_reconsolidate',
+        'memex_memory_consolidate',
+    }
+    tier_a_history = {
+        'memex_get_unit_history',
+    }
+    v7_procedural_plane = {
+        # Reads + case submission only. The 4 procedural WRITE tools are not
+        # exposed: procedures are derived from cases; the agent writes via
+        # case_submit.
+        'memex_procedural_get',
+        'memex_procedural_get_by_identity',
+        'memex_procedural_search',
+        'memex_case_submit',
     }
     expected = (
         stream_1_baseline
@@ -174,6 +207,12 @@ def test_all_schemas_have_required_fields():
         | stream_3_entities_memory_lineage
         | stream_4_lifecycle_templates
         | stream_5_assets_kv
+        | tier_a_quick_wins
+        | tier_a_diagnostics
+        | tier_a_linter
+        | tier_a_locks
+        | tier_a_history
+        | v7_procedural_plane
     )
     assert names == expected
     for s in ALL_SCHEMAS:
@@ -847,6 +886,55 @@ def test_entity_mentions_forwards_vault_ids_list(config, vault_id):
     kwargs = api.get_entity_mentions.call_args.kwargs
     assert kwargs['vault_ids'] == [resolved]
     assert 'vault_id' not in kwargs
+
+
+def test_entity_mentions_default_filters_are_active_only(config, vault_id):
+    """V4: when caller omits include_* flags, the wrapper forwards them as False
+    so the core defaults to active, non-superseded, non-deprioritized mentions."""
+    api = Mock()
+    api.get_entity_mentions = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_entity_mentions',
+        {'entity_id': str(uuid4())},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.get_entity_mentions.call_args.kwargs
+    assert kwargs['include_stale'] is False
+    assert kwargs['include_superseded'] is False
+    assert kwargs['include_deprioritized'] is False
+
+
+def test_entity_mentions_forwards_include_flags(config, vault_id):
+    """V4: include_stale / include_superseded / include_deprioritized pass through
+    from the JSON args to the MemexAPI call."""
+    api = Mock()
+    api.get_entity_mentions = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_entity_mentions',
+        {
+            'entity_id': str(uuid4()),
+            'include_stale': True,
+            'include_superseded': True,
+            'include_deprioritized': True,
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.get_entity_mentions.call_args.kwargs
+    assert kwargs['include_stale'] is True
+    assert kwargs['include_superseded'] is True
+    assert kwargs['include_deprioritized'] is True
+
+
+def test_entity_mentions_schema_declares_include_filters():
+    """V4: schema advertises the three filter knobs so the agent knows to pass them."""
+    props = GET_ENTITY_MENTIONS_SCHEMA['parameters']['properties']
+    assert 'include_stale' in props
+    assert 'include_superseded' in props
+    assert 'include_deprioritized' in props
 
 
 def test_entity_cooccurrences_schema_declares_vault_ids():
@@ -1645,13 +1733,19 @@ def test_get_entities_all_invalid_short_circuits(config, vault_id):
 
 
 def test_get_memory_units_schema_shape():
-    """AC-064: ``GET_MEMORY_UNITS_SCHEMA`` requires ``unit_ids: list[str]``."""
+    """AC-064 + F46: ``unit_ids`` and ``chunk_ids`` are both array[str]; XOR enforced
+    at runtime, so neither is in ``required``."""
     props = GET_MEMORY_UNITS_SCHEMA['parameters']['properties']
     assert GET_MEMORY_UNITS_SCHEMA['name'] == 'memex_get_memory_units'
     assert 'unit_ids' in props
     assert props['unit_ids']['type'] == 'array'
     assert props['unit_ids']['items']['type'] == 'string'
-    assert GET_MEMORY_UNITS_SCHEMA['parameters']['required'] == ['unit_ids']
+    assert 'chunk_ids' in props
+    assert props['chunk_ids']['type'] == 'array'
+    assert props['chunk_ids']['items']['type'] == 'string'
+    assert 'vault_id' in props
+    assert props['vault_id']['type'] == 'string'
+    assert 'required' not in GET_MEMORY_UNITS_SCHEMA['parameters']
 
 
 # -- AC-065: singular loop --
@@ -1763,6 +1857,63 @@ def test_get_memory_units_contradictions_field_filters_by_relation(config, vault
     row = json.loads(out)['results'][0]
     assert len(row['contradictions']) == 1
     assert row['contradictions'][0]['relation'] == 'contradiction'
+
+
+# -- F46: chunk_ids path on memex_get_memory_units --
+
+
+def test_get_memory_units_chunk_ids_path_calls_batch_endpoint(config, vault_id):
+    """F46: ``chunk_ids`` routes to ``api.get_memory_units_by_chunks`` (vault-scoped)."""
+    api = Mock()
+    chunk_a = uuid4()
+    chunk_b = uuid4()
+    unit_a = _fake_memory_unit('from chunk A')
+    unit_b = _fake_memory_unit('from chunk B')
+    api.get_memory_units_by_chunks = AsyncMock(return_value=[unit_a, unit_b])
+
+    out = dispatch(
+        'memex_get_memory_units',
+        {'chunk_ids': [str(chunk_a), str(chunk_b)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    api.get_memory_units_by_chunks.assert_awaited_once()
+    args = api.get_memory_units_by_chunks.call_args.args
+    assert args[0] == [chunk_a, chunk_b]
+    assert args[1] == vault_id
+
+
+def test_get_memory_units_xor_both_paths_rejected(config, vault_id):
+    """F46: providing both ``unit_ids`` and ``chunk_ids`` is a validation error."""
+    api = Mock()
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': [str(uuid4())], 'chunk_ids': [str(uuid4())]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert data['results'] == []
+
+
+def test_get_memory_units_xor_neither_path_rejected(config, vault_id):
+    """F46: providing neither ``unit_ids`` nor ``chunk_ids`` is a validation error."""
+    api = Mock()
+    out = dispatch(
+        'memex_get_memory_units',
+        {},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert data['results'] == []
 
 
 # -- AC-067: get_memory_links schema --
@@ -2048,7 +2199,7 @@ def test_set_note_status_schema_requires_note_id_and_status():
     required = SET_NOTE_STATUS_SCHEMA['parameters']['required']
     assert 'note_id' in props and 'status' in props and 'linked_note_id' in props
     assert set(required) == {'note_id', 'status'}
-    assert props['status'].get('enum') == ['active', 'superseded', 'appended', 'archived']
+    assert props['status'].get('enum') == ['active', 'superseded', 'archived']
 
 
 def test_update_user_notes_schema_allows_null_user_notes():
@@ -2084,9 +2235,9 @@ def test_register_template_schema_requires_slug_and_template():
 # -- set_note_status (AC-027..AC-030) ----------------------------------------
 
 
-@pytest.mark.parametrize('status', ['active', 'superseded', 'appended', 'archived'])
-def test_set_note_status_accepts_all_four_statuses(config, vault_id, status):
-    """AC-028: all four documented statuses are accepted client-side."""
+@pytest.mark.parametrize('status', ['active', 'superseded', 'archived'])
+def test_set_note_status_accepts_all_documented_statuses(config, vault_id, status):
+    """AC-028: every documented status is accepted client-side."""
     api = Mock()
     api.set_note_status = AsyncMock(return_value={'status': status})
     note_uuid = uuid4()
@@ -2120,6 +2271,27 @@ def test_set_note_status_rejects_unknown_status(config, vault_id):
     data = json.loads(out)
     assert 'error' in data
     assert 'bogus' in data['error']
+    api.set_note_status.assert_not_awaited()
+
+
+def test_set_note_status_rejects_appended_with_pointer_to_append_tool(config, vault_id):
+    """``appended`` is a chronology marker set by ``memex_append_note``; the
+    Hermes client rejects it locally before reaching the API and the error
+    message names the append verb so the caller can self-correct."""
+    api = Mock()
+    api.set_note_status = AsyncMock()
+    out = dispatch(
+        'memex_set_note_status',
+        {'note_id': str(uuid4()), 'status': 'appended'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    err = data['error']
+    assert "'appended' is not a settable lifecycle status" in err
+    assert 'memex_append_note' in err
     api.set_note_status.assert_not_awaited()
 
 
@@ -2596,11 +2768,11 @@ def test_add_assets_schema_shape():
     assert 'file_paths' not in params['properties']
 
 
-def test_kv_write_schema_shape():
+def test_kv_put_schema_shape():
     """AC-078: required value/key; optional ttl_seconds; namespace guidance in description."""
-    desc = KV_WRITE_SCHEMA['description']
+    desc = KV_PUT_SCHEMA['description']
     assert 'global:' in desc and 'user:' in desc and 'project:' in desc and 'app:' in desc
-    params = KV_WRITE_SCHEMA['parameters']
+    params = KV_PUT_SCHEMA['parameters']
     assert set(params['required']) == {'value', 'key'}
     assert 'ttl_seconds' in params['properties']
     assert 'ttl_seconds' not in params['required']
@@ -2953,7 +3125,7 @@ def test_add_assets_rejects_non_string_b64(config, vault_id):
 # they need a ``SessionAssetCache`` fixture that's not part of this module.
 
 
-# -- Handler tests: kv_write (#25) --
+# -- Handler tests: kv_put (#25) --
 
 
 @pytest.mark.parametrize(
@@ -3003,14 +3175,14 @@ def test_scope_from_key_matches_mcp_source_of_truth():
         assert hermes_fn(key) == mcp_fn(key), f'scope drift on key {key!r}'
 
 
-def test_kv_write_generates_embedding_then_puts(config, vault_id):
+def test_kv_put_generates_embedding_then_puts(config, vault_id):
     """AC-079: handler calls embed_text FIRST, then kv_put with that embedding."""
     api = Mock()
     api.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
     entry = _fake_kv_entry(key='user:work:employer', value='ACME')
     api.kv_put = AsyncMock(return_value=entry)
     out = dispatch(
-        'memex_kv_write',
+        'memex_kv_put',
         {'value': 'ACME', 'key': 'user:work:employer', 'ttl_seconds': 3600},
         api=api,
         config=config,
@@ -3029,12 +3201,12 @@ def test_kv_write_generates_embedding_then_puts(config, vault_id):
     assert put_kwargs['ttl_seconds'] == 3600
 
 
-def test_kv_write_missing_required_params(config, vault_id):
+def test_kv_put_missing_required_params(config, vault_id):
     """Missing value/key → tool_error, no API calls."""
     api = Mock()
     api.embed_text = AsyncMock()
     api.kv_put = AsyncMock()
-    out = dispatch('memex_kv_write', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
+    out = dispatch('memex_kv_put', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
     assert 'error' in json.loads(out)
     api.embed_text.assert_not_awaited()
     api.kv_put.assert_not_awaited()
@@ -3044,13 +3216,13 @@ def test_kv_write_missing_required_params(config, vault_id):
     'bad_key',
     ['noscope', 'unknown:foo', 'Global:foo', 'usre:work:x', ':leading', '  user:foo'],
 )
-def test_kv_write_rejects_bad_namespace(config, vault_id, bad_key):
+def test_kv_put_rejects_bad_namespace(config, vault_id, bad_key):
     """Keys outside the four RFC-012 namespaces (global:/user:/project:/app:) → tool_error."""
     api = Mock()
     api.embed_text = AsyncMock()
     api.kv_put = AsyncMock()
     out = dispatch(
-        'memex_kv_write',
+        'memex_kv_put',
         {'value': 'v', 'key': bad_key},
         api=api,
         config=config,
@@ -3095,9 +3267,12 @@ def test_kv_get_returns_null_on_miss(config, vault_id):
 
 
 def test_kv_search_returns_semantic_results(config, vault_id):
-    """AC-083: handler passes query/namespaces/limit to api.kv_search; wraps into {results: [...]}."""
+    """AC-083: handler passes query/namespaces/limit to api.kv_search_text;
+    wraps into {results: [...]}. ``kv_search_text`` is the text-input variant
+    that delegates to ``kv_search`` after embedding; ``kv_search`` itself
+    takes a pre-computed embedding (mirrors MemexAPI parity)."""
     api = Mock()
-    api.kv_search = AsyncMock(
+    api.kv_search_text = AsyncMock(
         return_value=[
             _fake_kv_entry(key='user:a', value='v1'),
             _fake_kv_entry(key='user:b', value='v2'),
@@ -3113,8 +3288,8 @@ def test_kv_search_returns_semantic_results(config, vault_id):
     data = json.loads(out)
     assert len(data['results']) == 2
     assert data['results'][0]['scope'] == 'user'
-    api.kv_search.assert_awaited_once()
-    kwargs = api.kv_search.call_args.kwargs
+    api.kv_search_text.assert_awaited_once()
+    kwargs = api.kv_search_text.call_args.kwargs
     assert kwargs['query'] == 'employer'
     assert kwargs['namespaces'] == ['user']
     assert kwargs['limit'] == 3
@@ -3178,12 +3353,14 @@ def test_add_note_content_is_structured_markdown_via_gemini():
 
     from memex_hermes_plugin.memex.tools import RETAIN_SCHEMA
 
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     tool = {
         'type': 'function',
         'function': {
             'name': RETAIN_SCHEMA['name'],
             'description': RETAIN_SCHEMA['description'],
-            'parameters': RETAIN_SCHEMA['parameters'],
+            'parameters': copy.deepcopy(RETAIN_SCHEMA['parameters']),
         },
     }
 
@@ -3260,20 +3437,33 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
     """
     import litellm
 
-    from memex_hermes_plugin.memex.briefing import _ROUTING_GUIDE
+    from memex_hermes_plugin.memex.briefing import format_briefing_block
     from memex_hermes_plugin.memex.tools import (
         GET_TEMPLATE_SCHEMA,
         LIST_TEMPLATES_SCHEMA,
         RETAIN_SCHEMA,
     )
 
+    # Post-2026-05-14 compression: routing prose is no longer a standalone
+    # constant on the briefing. Use the full assembled briefing block — same
+    # text the production agent sees.
+    _routing_system_prompt = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     tool_defs = [
         {
             'type': 'function',
             'function': {
                 'name': s['name'],
                 'description': s['description'],
-                'parameters': s['parameters'],
+                'parameters': copy.deepcopy(s['parameters']),
             },
         }
         for s in (LIST_TEMPLATES_SCHEMA, GET_TEMPLATE_SCHEMA, RETAIN_SCHEMA)
@@ -3282,7 +3472,7 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
     resp = litellm.completion(
         model='gemini/gemini-3-flash-preview',
         messages=[
-            {'role': 'system', 'content': _ROUTING_GUIDE},
+            {'role': 'system', 'content': _routing_system_prompt},
             {
                 'role': 'user',
                 'content': (
@@ -3357,7 +3547,7 @@ def test_append_note_schema_is_registered():
 
 
 def test_append_note_dispatches_with_note_key(config, vault_id):
-    """handle_append_note builds a NoteAppendRequest and forwards it to the API."""
+    """handle_append_note forwards unpacked kwargs to api.append_to_note."""
     api = Mock()
     note_id = uuid4()
     append_id = uuid4()
@@ -3382,13 +3572,12 @@ def test_append_note_dispatches_with_note_key(config, vault_id):
     assert data['delta_bytes'] == 10
 
     api.append_to_note.assert_awaited_once()
-    request = api.append_to_note.call_args.args[0]
-    assert isinstance(request, NoteAppendRequest)
-    assert request.note_key == 'hermes:session:abc'
-    assert request.delta == 'progress note'
-    assert request.append_id == append_id
-    # vault_id from session is forwarded to the request body.
-    assert str(request.vault_id) == str(vault_id)
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == 'hermes:session:abc'
+    assert kwargs['delta'] == 'progress note'
+    assert kwargs['append_id'] == append_id
+    # vault_id from session is forwarded.
+    assert str(kwargs['vault_id']) == str(vault_id)
 
 
 def test_append_note_dispatches_with_note_id(config, vault_id):
@@ -3410,17 +3599,18 @@ def test_append_note_dispatches_with_note_id(config, vault_id):
         vault_id=vault_id,
     )
 
-    request = api.append_to_note.call_args.args[0]
-    assert request.note_id == note_id
-    assert request.note_key is None
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['note_id'] == note_id
+    assert kwargs['note_key'] is None
 
 
 def test_append_note_auto_generates_append_id(config, vault_id):
-    """When append_id is omitted, a fresh UUID is generated server-side."""
+    """When append_id is omitted, the handler generates a fresh UUID and
+    forwards it as a kwarg to api.append_to_note."""
     api = Mock()
 
-    def _fake(req: NoteAppendRequest):
-        return _append_response(uuid4(), req.append_id)
+    def _fake(**kwargs):
+        return _append_response(uuid4(), kwargs['append_id'])
 
     api.append_to_note = AsyncMock(side_effect=_fake)
 
@@ -3497,3 +3687,203 @@ def test_append_note_api_failure_returns_error(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data or 'isError' in data, out
+
+
+# ---------------------------------------------------------------------------
+# handle_memory_summarize_node — vault resolution error paths (Hermes round-2)
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_node_value_error_on_vault_returns_not_found(config, vault_id):
+    """ValueError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=ValueError('bad input'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_key_error_on_vault_returns_not_found(config, vault_id):
+    """KeyError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=KeyError('missing'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_unexpected_exception_returns_generic_resolution_error(config, vault_id):
+    """Unexpected exceptions (e.g. infrastructure failures) surface a distinct
+    generic message — they must NOT masquerade as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=RuntimeError('connection refused'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Failed to resolve vault identifier' in data['error']
+    assert 'Vault not found' not in data['error']
+    api.summarize_node.assert_not_called()
+
+
+# NOTE: This test verifies the EXCEPTION-PATH handling — that a TimeoutError
+# raised from inside resolve_vault_identifier is caught and produces the
+# distinct 'Vault resolution timed out' tool_error. It does NOT exercise
+# run_sync's own timeout-after-N-seconds cancellation mechanism, which
+# would require a 10s slow-coroutine setup. The exception path is the
+# load-bearing assertion (run_sync is third-party / std-lib).
+def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, vault_id):
+    """``TimeoutError`` from ``run_sync`` (10s budget exhausted) MUST surface a
+    distinct 'timed out' message — it must NOT masquerade as either the
+    'Vault not found' typo path or the generic 'Failed to resolve vault
+    identifier' infrastructure-failure path. ``run_sync`` raises
+    ``concurrent.futures.TimeoutError`` which is aliased to the built-in
+    ``TimeoutError`` in Python 3.11+, so the side_effect uses the built-in.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=TimeoutError('vault resolve > 10s'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'slow-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'timed out' in data['error'].lower()
+    assert 'Vault not found' not in data['error']
+    assert 'Failed to resolve vault identifier' not in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_reflection_abandoned_returns_structured_envelope(config, vault_id):
+    """V18 round-7: a ``ReflectionAbandoned`` from the HTTP client lib
+    must translate to a structured envelope that agents can interpret
+    programmatically — NOT a generic tool_error.
+    """
+    from memex_common.client import ReflectionAbandoned
+
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    api.summarize_node = AsyncMock(
+        side_effect=ReflectionAbandoned(
+            retry_after_seconds=60.0,
+            message='Reflection for entity abandoned by concurrent refresh.',
+            hint='Prefer re-reading via memex_get_entity / memex_memory_search.',
+        )
+    )
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': str(vault_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['error'] == 'reflection_abandoned'
+    assert data['entity_id'] == str(entity_id)
+    assert data['retry_after_seconds'] == 60.0
+    assert 'abandoned' in data['message'].lower()
+    assert 'hint' in data
+    assert 'memex_get_entity' in data['hint']
+
+
+def test_summarize_node_rate_limit_envelope_unchanged_by_round_7(config, vault_id):
+    """Regression guard: the round-6/7 abandon work did not alter the
+    existing 429 envelope shape.
+    """
+    from memex_common.client import RateLimitExceeded
+
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    api.summarize_node = AsyncMock(
+        side_effect=RateLimitExceeded(
+            retry_after_seconds=12.5,
+            message='Rate limit exceeded.',
+        )
+    )
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': str(vault_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['error'] == 'rate_limit_exceeded'
+    assert data['entity_id'] == str(entity_id)
+    assert data['retry_after_seconds'] == 12.5
+
+
+def test_summarize_node_none_target_vault_returns_internal_error(config, vault_id):
+    """Round-9 regression: when ``resolve_vault_identifier`` returns ``None``
+    (the protocol stub permits ``UUID | None``), the handler MUST surface a
+    clean ``tool_error`` rather than letting ``None`` flow into
+    ``api.summarize_node`` and produce a confusing call-site ``AttributeError``.
+    The single ``not isinstance(target_vault, UUID)`` guard catches this because
+    ``isinstance(None, UUID)`` is ``False``.
+
+    Round-11: the user-facing message is intentionally generic (matches the
+    obfuscation policy of sibling ValueError/KeyError/TimeoutError/Exception
+    paths). The type name (``'NoneType'``) is logged for operators, not
+    returned to the caller — so the assertion checks for the generic string
+    only.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=None)
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Internal error' in data['error']
+    assert 'unexpected result' in data['error']
+    # Type-name detail is now logged, NOT user-facing. Confirm we don't leak
+    # 'NoneType' (information disclosure) in the response.
+    assert 'NoneType' not in data['error']
+    api.summarize_node.assert_not_called()

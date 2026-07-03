@@ -31,6 +31,17 @@ class SyncedFile(SQLModel, table=True):  # type: ignore[call-arg]
         default=False,
         description='Whether this file has been archived in Memex (e.g. due to skip tag).',
     )
+    note_key: str | None = Field(
+        default=None,
+        description='note_key used at last ingest. Needed to archive the old key '
+        'when a frontmatter vault override moves the note to a different vault.',
+    )
+    vault_id: str | None = Field(
+        default=None,
+        description='Vault ID the file was last ingested into. When this differs from '
+        'the current target vault (resolved from frontmatter override), the sync '
+        'engine archives the prior ingest and re-ingests into the new vault.',
+    )
 
 
 class SyncMeta(SQLModel, table=True):  # type: ignore[call-arg]
@@ -63,6 +74,8 @@ class SyncStateDB:
         self._engine = create_engine(f'sqlite:///{db_path}', echo=False)
         _create_sync_tables(self._engine)
         self._migrate_add_archived()
+        self._migrate_add_note_key()
+        self._migrate_add_vault_id()
 
     def _migrate_add_archived(self) -> None:
         """Add 'archived' column to synced_files if it doesn't exist (schema migration)."""
@@ -71,6 +84,24 @@ class SyncStateDB:
                 conn.execute(
                     text('ALTER TABLE synced_files ADD COLUMN archived BOOLEAN NOT NULL DEFAULT 0')
                 )
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    def _migrate_add_note_key(self) -> None:
+        """Add 'note_key' column to synced_files if it doesn't exist (schema migration)."""
+        with self._engine.connect() as conn:
+            try:
+                conn.execute(text('ALTER TABLE synced_files ADD COLUMN note_key VARCHAR'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    def _migrate_add_vault_id(self) -> None:
+        """Add 'vault_id' column to synced_files if it doesn't exist (schema migration)."""
+        with self._engine.connect() as conn:
+            try:
+                conn.execute(text('ALTER TABLE synced_files ADD COLUMN vault_id VARCHAR'))
                 conn.commit()
             except Exception:
                 pass  # Column already exists
@@ -110,16 +141,26 @@ class SyncStateDB:
         notes: list[VaultNote],
         vault_id: str | None = None,
         note_ids: dict[str, str] | None = None,
+        note_keys: dict[str, str] | None = None,
+        per_file_vault_ids: dict[str, str] | None = None,
     ) -> None:
         """Record successfully synced notes and update metadata.
 
         Args:
             notes: Notes that were synced.
-            vault_id: Memex vault ID used.
+            vault_id: Memex vault ID used for sync_meta (fallback / active vault).
             note_ids: Optional mapping of relative_path -> Memex note_id.
+            note_keys: Optional mapping of relative_path -> note_key used at ingest.
+                Stored on SyncedFile so a later frontmatter vault override can
+                archive the prior key in its original vault.
+            per_file_vault_ids: Optional mapping of relative_path -> vault_id the
+                file was ingested into. When this differs from the target vault on
+                a subsequent sync, the engine migrates the note.
         """
         now = datetime.now(timezone.utc).isoformat()
         note_ids = note_ids or {}
+        note_keys = note_keys or {}
+        per_file_vault_ids = per_file_vault_ids or {}
         with Session(self._engine) as session:
             for note in notes:
                 existing = session.get(SyncedFile, note.relative_path)
@@ -129,6 +170,10 @@ class SyncStateDB:
                     existing.archived = False
                     if note.relative_path in note_ids:
                         existing.note_id = note_ids[note.relative_path]
+                    if note.relative_path in note_keys:
+                        existing.note_key = note_keys[note.relative_path]
+                    if note.relative_path in per_file_vault_ids:
+                        existing.vault_id = per_file_vault_ids[note.relative_path]
                     session.add(existing)
                 else:
                     session.add(
@@ -137,6 +182,8 @@ class SyncStateDB:
                             mtime=note.mtime,
                             note_id=note_ids.get(note.relative_path),
                             synced_at=now,
+                            note_key=note_keys.get(note.relative_path),
+                            vault_id=per_file_vault_ids.get(note.relative_path),
                         )
                     )
 

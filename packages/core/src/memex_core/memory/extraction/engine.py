@@ -2,10 +2,10 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy.exc import DBAPIError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import memex_core.config
@@ -18,6 +18,7 @@ from memex_core.config import (
     GLOBAL_VAULT_ID,
 )
 from memex_common.config import CHARS_PER_TOKEN
+from memex_common.tags import is_protected_tag
 from memex_core.memory.extraction.models import (
     RetainContent,
     ExtractedFact,
@@ -59,17 +60,17 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     add_temporal_offsets,
     process_embeddings,
 )
+from memex_core.memory.extraction.classifier import filter_safety_blocked
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
+from memex_core.metrics import (
+    CLASSIFIER_INTENT_DISTRIBUTION,
+    CLASSIFIER_RISK_DISTRIBUTION,
+)
 from memex_core.processing.titles import resolve_title_from_page_index
+from memex_common.schemas import IntentClass, RiskClass
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
-
-
-def _is_statement_timeout(exc: DBAPIError) -> bool:
-    """Check if a DBAPIError wraps an asyncpg QueryCanceledError (statement timeout)."""
-    orig = getattr(exc, 'orig', None)
-    return type(orig).__name__ == 'QueryCanceledError' if orig else False
 
 
 _USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
@@ -154,16 +155,27 @@ def _synthesize_tags(
     page_index_output: PageIndexOutput,
     user_tags: list[str],
 ) -> list[str]:
-    """Merge user-provided tags with LLM-generated block tags."""
+    """Merge user-provided tags with LLM-generated block tags.
+
+    User tags are authoritative and kept verbatim. LLM-inferred block tags are
+    sanitized against the protected-tag registry: a content-inferred tag that
+    collides with a reserved semantic tag (e.g. ``handoff``) or a provenance
+    namespace (e.g. ``project:*``) is dropped, so content *about* a reserved
+    concept cannot mint the reserved tag and poison tag-scoped queries. A caller
+    that genuinely wants such a tag passes it in ``user_tags``.
+    """
     tags: list[str] = list(user_tags) if user_tags else []
     seen: set[str] = {t.strip().lower() for t in tags}
     for block in page_index_output.blocks:
         if block.summary:
             for tag in block.summary.tags:
                 normalized = tag.strip().lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    tags.append(normalized)
+                if not normalized or normalized in seen:
+                    continue
+                if is_protected_tag(normalized):
+                    continue
+                seen.add(normalized)
+                tags.append(normalized)
     return tags[:15]  # Cap at 15 tags
 
 
@@ -213,6 +225,97 @@ class ExtractionEngine:
         self.semaphore = asyncio.Semaphore(config.max_concurrency)
         self.page_index_lm = page_index_lm
 
+    def _classify_and_filter(
+        self,
+        processed_facts: list[ProcessedFact],
+        intent_override: str | None = None,
+        risk_override: str | None = None,
+    ) -> list[ProcessedFact]:
+        """Apply overrides, emit distribution metrics, drop safety facts.
+
+        Intent + risk are produced by the extraction LLM (folded into
+        ``ExtractSemanticFacts``) and arrive on each fact already. This method
+        handles the post-extraction concerns:
+
+        * **Per-dimension overrides.** ``intent_override`` and ``risk_override``
+          are applied independently. A caller passing only ``intent_override``
+          replaces the intent on every fact while leaving the LLM-produced
+          ``risk_class`` intact, and vice versa. This is a deliberate post-fold
+          contract change from the earlier behavior, where setting *either*
+          override skipped the entire (separate) classifier call and the
+          non-overridden dimension fell back to schema defaults. After the
+          fold there is no separate classifier to skip — intent + risk arrive
+          together with extraction — so per-dimension overrides are the only
+          coherent semantics. See cognitive-memory-research-report.md
+          (Surface impact) for the full rationale.
+        * Facts with ``risk_class='safety'`` are dropped before persistence
+          via :func:`filter_safety_blocked`. This honors both LLM-classified
+          safety and a deliberate ``risk_override='safety'`` from the caller.
+        * Distribution metrics are incremented for the *final* intent / risk
+          values (post-override, **post-safety-filter**), so dashboards
+          reflect what was actually persisted. Safety-class drops are
+          counted separately by ``CLASSIFIER_BLOCKED_TOTAL`` on the
+          safety-filter side — counting them on the distribution as well
+          would double-count them.
+
+        When ``config.intent_risk_classifier_enabled`` is False, every fact is
+        forced to the schema defaults (durable / none) regardless of LLM
+        output — this is the kill-switch for intent/risk handling. Overrides
+        are *not* honored when the kill-switch is engaged, since the explicit
+        intent of disabling the classifier is "ignore intent/risk entirely".
+        """
+        if not processed_facts:
+            return processed_facts
+
+        # Kill-switch first: when intent/risk handling is disabled the
+        # explicit intent is "ignore intent/risk entirely" — we shouldn't
+        # validate (let alone honor) overrides the caller supplies because
+        # we'd just discard them. This avoids surprising a caller who sets
+        # the kill-switch at the config level and then passes a stale
+        # override from a call site that shouldn't matter.
+        if not self.config.intent_risk_classifier_enabled:
+            for f in processed_facts:
+                f.intent_class = IntentClass.DURABLE
+                f.risk_class = RiskClass.NONE
+            # No fact can carry ``risk='safety'`` after this loop, so
+            # ``filter_safety_blocked`` would be a no-op — skip it for
+            # clarity (and a trivial perf win). Distribution metrics are
+            # also skipped: emitting them would paint a misleading 100%
+            # durable / none picture on dashboards.
+            return processed_facts
+
+        if intent_override is not None and intent_override not in {c.value for c in IntentClass}:
+            allowed = [c.value for c in IntentClass]
+            raise ValueError(f'intent_override must be one of {allowed}, got {intent_override!r}')
+        if risk_override is not None and risk_override not in {c.value for c in RiskClass}:
+            allowed = [c.value for c in RiskClass]
+            raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
+
+        if intent_override:
+            intent_value = IntentClass(intent_override)
+            for f in processed_facts:
+                f.intent_class = intent_value
+        if risk_override:
+            risk_value = RiskClass(risk_override)
+            for f in processed_facts:
+                f.risk_class = risk_value
+
+        # Drop safety-class facts FIRST, then emit distribution metrics on
+        # what survived. The docstring promises dashboards reflect what was
+        # *actually persisted*, so counting safety facts here would
+        # double-count them (they're already covered by the dedicated
+        # ``CLASSIFIER_BLOCKED_TOTAL`` counter on the safety-filter side).
+        # ``ProcessedFact.intent_class`` / ``risk_class`` are typed as
+        # ``IntentClass`` / ``RiskClass`` enums and every construction path
+        # assigns the enum value (kill-switch, override, and
+        # ``from_extracted_fact``); ``.value`` is therefore always defined.
+        kept = filter_safety_blocked(processed_facts)
+        for f in kept:
+            CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=f.intent_class.value).inc()
+            CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=f.risk_class.value).inc()
+
+        return kept
+
     async def extract_and_persist(
         self,
         session: AsyncSession,
@@ -221,6 +324,8 @@ class ExtractionEngine:
         note_id: str | None = None,
         is_first_batch: bool = True,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """
         Main entry point: Extract facts from content and persist them to memory.
@@ -260,6 +365,8 @@ class ExtractionEngine:
                             existing_blocks=existing_blocks,
                             vault_id=vault_id,
                             content_fingerprint=content_fingerprint,
+                            intent_override=intent_override,
+                            risk_override=risk_override,
                         )
                     return await self._extract_incremental(
                         session=session,
@@ -269,6 +376,8 @@ class ExtractionEngine:
                         existing_blocks=existing_blocks,
                         vault_id=vault_id,
                         content_fingerprint=content_fingerprint,
+                        intent_override=intent_override,
+                        risk_override=risk_override,
                     )
 
             # --- Strategy dispatch ---
@@ -281,6 +390,8 @@ class ExtractionEngine:
                     is_first_batch=is_first_batch,
                     vault_id=vault_id,
                     content_fingerprint=content_fingerprint,
+                    intent_override=intent_override,
+                    risk_override=risk_override,
                 )
 
             # --- Full extraction path (simple strategy or no page_index LM) ---
@@ -355,6 +466,12 @@ class ExtractionEngine:
                     if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                         pf.chunk_id = chunk_map[ef.chunk_index]
 
+            processed_facts = self._classify_and_filter(
+                processed_facts, intent_override=intent_override, risk_override=risk_override
+            )
+            if not processed_facts:
+                return [], set()
+
             unit_ids = await storage.insert_facts_batch(
                 session, processed_facts, note_id=effective_doc_id
             )
@@ -380,6 +497,8 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Incremental extraction: diff blocks, extract only changed content.
 
@@ -487,6 +606,10 @@ class ExtractionEngine:
                         who=raw_fact.who,
                         where=raw_fact.where,
                         vault_id=vault_id,
+                        intent_class=raw_fact.intent_class,
+                        risk_class=raw_fact.risk_class,
+                        claim_type=raw_fact.claim_type,
+                        claim_target=raw_fact.claim_target,
                     )
                     all_extracted_facts.append(ef)
 
@@ -522,6 +645,10 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         all_extracted_facts.append(ef)
                 if user_notes_text:
@@ -556,6 +683,10 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         all_extracted_facts.append(ef)
 
@@ -600,6 +731,14 @@ class ExtractionEngine:
                         pf.note_id = note_id
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
+
+                    final_processed = self._classify_and_filter(
+                        final_processed,
+                        intent_override=intent_override,
+                        risk_override=risk_override,
+                    )
+                    if not final_processed:
+                        return [], set()
 
                     unit_ids = await storage.insert_facts_batch(
                         session, final_processed, note_id=note_id
@@ -663,6 +802,8 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Incremental page-index extraction with node-level change detection.
 
@@ -873,6 +1014,10 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         extracted_facts.append(ef)
                         global_fact_idx += 1
@@ -904,20 +1049,30 @@ class ExtractionEngine:
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-                        unit_ids = await storage.insert_facts_batch(
-                            session, final_processed, note_id=note_id
+                        final_processed = self._classify_and_filter(
+                            final_processed,
+                            intent_override=intent_override,
+                            risk_override=risk_override,
                         )
 
-                        touched_entity_ids = await self._resolve_entities(
-                            session, unit_ids, final_processed, vault_id=vault_id
-                        )
-                        await create_links(
-                            session,
-                            unit_ids,
-                            final_processed,
-                            vault_id=vault_id,
-                            event_date=event_date,
-                        )
+                        # Classifier may drop all facts (safety filter). Skip
+                        # persistence in that case but still run reconciliation
+                        # below (track_document, page_index updates, etc).
+                        if final_processed:
+                            unit_ids = await storage.insert_facts_batch(
+                                session, final_processed, note_id=note_id
+                            )
+
+                            touched_entity_ids = await self._resolve_entities(
+                                session, unit_ids, final_processed, vault_id=vault_id
+                            )
+                            await create_links(
+                                session,
+                                unit_ids,
+                                final_processed,
+                                vault_id=vault_id,
+                                event_date=event_date,
+                            )
 
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
@@ -966,6 +1121,8 @@ class ExtractionEngine:
         is_first_batch: bool,
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Page-index extraction path: hierarchical TOC → nodes → blocks → facts.
 
@@ -1100,6 +1257,10 @@ class ExtractionEngine:
                     who=f.who,
                     where=f.where,
                     vault_id=vault_id,
+                    intent_class=f.intent_class,
+                    risk_class=f.risk_class,
+                    claim_type=f.claim_type,
+                    claim_target=f.claim_target,
                 )
                 extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1135,6 +1296,10 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1168,6 +1333,10 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1194,6 +1363,12 @@ class ExtractionEngine:
             pf.note_id = effective_doc_id
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
+
+        final_processed = self._classify_and_filter(
+            final_processed, intent_override=intent_override, risk_override=risk_override
+        )
+        if not final_processed:
+            return [], set()
 
         unit_ids = await storage.insert_facts_batch(
             session, final_processed, note_id=effective_doc_id
@@ -1386,6 +1561,10 @@ class ExtractionEngine:
                         payload=content.payload or {},  # Ensure payload is dict
                         where=f.where,
                         vault_id=content.vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1424,6 +1603,10 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
             if user_notes_text:
@@ -1456,6 +1639,10 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1526,18 +1713,18 @@ class ExtractionEngine:
 
         default_date = facts[0].mentioned_at if facts else datetime.now(timezone.utc)
 
-        try:
-            resolved_ids = await self.entity_resolver.resolve_entities_batch(
-                session, entities_data, default_date
-            )
-        except DBAPIError as e:
-            if _is_statement_timeout(e):
-                logger.warning(
-                    'Entity resolution timed out (likely lock contention). '
-                    'Skipping — entities will be resolved on next ingestion or reflection cycle.'
-                )
-                return set()
-            raise
+        # Entity resolution + linking share the caller's single ingest transaction,
+        # which has NO savepoint. We therefore CANNOT roll back just this step
+        # without discarding the note's already-persisted facts (insert_facts_batch
+        # ran earlier in the same transaction). So a statement_timeout here
+        # propagates and fails the whole note ingest loudly — the caller's
+        # AsyncTransaction rolls back and surfaces the error — rather than silently
+        # committing a half-written note or rolling back the facts out from under
+        # the later create_links call. (A graceful per-step skip that keeps the
+        # facts would require wrapping these two calls in session.begin_nested().)
+        resolved_ids = await self.entity_resolver.resolve_entities_batch(
+            session, entities_data, default_date
+        )
 
         unit_entity_pairs = []
         unit_timestamps: dict[str, datetime] = {}
@@ -1551,23 +1738,72 @@ class ExtractionEngine:
                 if existing is None or event_dt < existing:
                     unit_timestamps[data['unit_id']] = event_dt
 
-        try:
-            await self.entity_resolver.link_units_to_entities_batch(
-                session,
-                unit_entity_pairs,
-                vault_id=vault_id,
-                unit_timestamps=unit_timestamps or None,
-            )
-        except DBAPIError as e:
-            if _is_statement_timeout(e):
-                logger.warning(
-                    'Entity linking timed out (likely lock contention). '
-                    'Skipping — links will be created on next ingestion cycle.'
-                )
-                return set()
-            raise
+        await self.entity_resolver.link_units_to_entities_batch(
+            session,
+            unit_entity_pairs,
+            vault_id=vault_id,
+            unit_timestamps=unit_timestamps or None,
+        )
+
+        await self._backfill_claim_target_entity_ids(session, unit_ids, facts, unit_entity_pairs)
 
         return {UUID(rid) for rid in resolved_ids}
+
+    async def _backfill_claim_target_entity_ids(
+        self,
+        session: AsyncSession,
+        unit_ids: list[str],
+        facts: list[ProcessedFact],
+        unit_entity_pairs: list[tuple[Any, str]],
+    ) -> None:
+        """Populate ``claim_target.target_entity_ids`` for explicit-claim units.
+
+        First-pass strategy: use the union of all entities resolved on the
+        unit. Coarse but correct — the contradiction-engine filter narrows
+        candidates that share ANY of these entity IDs. Refine later if eval
+        shows precision loss.
+        """
+        from sqlalchemy import bindparam
+        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlalchemy import text as sa_text
+
+        per_unit_entities: dict[str, list[str]] = {}
+        for unit_id_str, entity_id_str in unit_entity_pairs:
+            per_unit_entities.setdefault(str(unit_id_str), []).append(str(entity_id_str))
+
+        updates: list[dict[str, Any]] = []
+        for i, fact in enumerate(facts):
+            if fact.claim_type is None or fact.claim_target is None:
+                continue
+            uid = unit_ids[i]
+            eids = per_unit_entities.get(str(uid), [])
+            updates.append(
+                {
+                    'unit_id': uid,
+                    'target_entity_ids': eids,
+                }
+            )
+
+        if not updates:
+            return
+
+        # Merge ``target_entity_ids`` into ``metadata->claim_target`` JSONB.
+        # ``claim_type``-bearing rows already carry a ``claim_target`` dict
+        # written by storage.insert_facts_batch; jsonb_set respects existing
+        # keys (target_topic).
+        stmt = sa_text(
+            'UPDATE memory_units '
+            'SET metadata = jsonb_set('
+            "    coalesce(metadata, '{}'::jsonb),"
+            "    '{claim_target,target_entity_ids}',"
+            '    :target_entity_ids,'
+            '    true'
+            ') '
+            'WHERE id = :unit_id'
+        ).bindparams(bindparam('target_entity_ids', type_=JSONB))
+
+        for upd in updates:
+            await session.execute(stmt, upd)
 
     async def prepare_user_notes(
         self,
@@ -1616,6 +1852,10 @@ class ExtractionEngine:
                 who=f.who,
                 where=f.where,
                 vault_id=vault_id,
+                intent_class=f.intent_class,
+                risk_class=f.risk_class,
+                claim_type=f.claim_type,
+                claim_target=f.claim_target,
             )
             for f in un_facts
         ]
@@ -1632,6 +1872,8 @@ class ExtractionEngine:
         processed_facts: list[ProcessedFact],
         note_id: str,
         vault_id: UUID,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Persist pre-processed user_notes facts into the DB.
 
@@ -1654,6 +1896,12 @@ class ExtractionEngine:
 
         for pf in final_processed:
             pf.note_id = note_id
+
+        final_processed = self._classify_and_filter(
+            final_processed, intent_override=intent_override, risk_override=risk_override
+        )
+        if not final_processed:
+            return [], set()
 
         unit_ids = await storage.insert_facts_batch(session, final_processed, note_id=note_id)
 

@@ -36,10 +36,39 @@ jobs:
       - id: pr
         run: echo "number=${{ github.event.pull_request.number || github.event.issue.number || inputs.pr-number }}" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch PR diff
+      - name: Fetch PR diff (with size guard)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr diff "${{ steps.pr.outputs.number }}" > "${{ runner.temp }}/pr.patch"
+          MAX_DIFF_LINES: '4000'
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PATCH="${{ runner.temp }}/pr.patch"
+
+          # The .diff media type returns HTTP 406 once a PR exceeds 300 files,
+          # so `gh pr diff` (and its --name-only form) cannot be relied on for
+          # large PRs. Capture it when it works, but never let its failure abort
+          # the step — fall back to the paginated "List PR files" API, which has
+          # no 300-file cap.
+          if gh pr diff "$PR" > "$PATCH" 2>/tmp/pr_diff_err; then
+            LINES=$(wc -l < "$PATCH")
+            echo "PR diff size: $LINES lines (cap: $MAX_DIFF_LINES)"
+          else
+            echo "Full diff unavailable ($(cat /tmp/pr_diff_err)) — using file-list fallback."
+            LINES=$((MAX_DIFF_LINES + 1))
+          fi
+
+          if [ "$LINES" -gt "$MAX_DIFF_LINES" ]; then
+            echo "Diff too large for full-diff review — emitting file-list + stat summary."
+            {
+              echo "# PR is too large for a full-diff review (over $MAX_DIFF_LINES lines or 300 files)."
+              echo ""
+              echo "## Files changed (additions / deletions / status / path)"
+              gh api --paginate "repos/$REPO/pulls/$PR/files" \
+                --jq '.[] | "\(.additions)+ \(.deletions)- \(.status)\t\(.filename)"'
+            } > "$PATCH"
+          fi
 
       - id: hermes
         uses: JasperHG90/toiminnot/actions/hermes@0c29e3265ba4c99a88c03d9926c6771c9759adab  # main as of 2026-04-24
@@ -50,6 +79,7 @@ jobs:
           api_key: ${{ secrets.OLLAMA_API_KEY }}
           max_iterations: '12'
           quiet_mode: 'false'
+          uv_version: '0.11.x'
 
       - name: Post review comment
         env:

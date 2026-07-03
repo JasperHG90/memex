@@ -1,10 +1,13 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from memex_common.config import (
     DocSearchStrategiesConfig,
     DocumentConfig,
     MemexConfig,
+    MemoryConfig,
     ModelConfig,
     PageIndexTextSplitting,
     SearchStrategiesConfig,
@@ -57,7 +60,12 @@ def test_config_server_url_derived_from_custom_host_port():
 
 def test_default_model_propagation():
     """All sub-models inherit the server default_model when not explicitly set."""
-    config = MemexConfig()
+    with patch.dict(
+        os.environ,
+        {'MEMEX_SERVER__DEFAULT_MODEL__MODEL': 'gemini/gemini-3-flash-preview'},
+        clear=False,
+    ):
+        config = MemexConfig()
     expected = 'gemini/gemini-3-flash-preview'
     assert config.server.default_model.model == expected
     assert config.server.memory.extraction.model.model == expected
@@ -195,3 +203,20 @@ def test_retrieval_strategies_defaults():
     assert strategies.semantic is True
     assert strategies.keyword is True
     assert strategies.mental_model is True
+
+
+def test_legacy_inbox_router_section_warns_not_crashes():
+    # V6 removed the in-core router + its InboxRouterConfig. A config file that
+    # still carries server.memory.inbox_router must parse (warn, don't crash) so
+    # operators aren't hard-blocked on upgrade — and the key must not survive.
+    with pytest.warns(DeprecationWarning, match='inbox_router is deprecated'):
+        cfg = MemoryConfig.model_validate(
+            {'inbox_router': {'enabled': True, 'interval_seconds': 3600}}
+        )
+    assert not hasattr(cfg, 'inbox_router')
+    assert not (cfg.model_extra and 'inbox_router' in cfg.model_extra)
+
+    # Same path through the full nested MemexConfig tree.
+    with pytest.warns(DeprecationWarning, match='inbox_router is deprecated'):
+        full = MemexConfig(server={'memory': {'inbox_router': {'enabled': True}}})
+    assert not hasattr(full.server.memory, 'inbox_router')

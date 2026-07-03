@@ -15,7 +15,7 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.10.1
+    rev: 0.11.16
     hooks:
       - id: uv-lock
 
@@ -37,13 +37,18 @@ repos:
       - id: mypy
         additional_dependencies: [pydantic, pytest-mypy, types-PyYAML, types-aiofiles, types-cachetools, types-python-dateutil, types-Markdown]
         args: [--ignore-missing-imports, --check-untyped-defs]
-        exclude: ^(tests/integration/test_app\.py|\.github/actions/hermes/runner/)
+        # The CC plugin's tests/conftest.py shares its filename with the
+        # Hermes plugin's tests/conftest.py and mypy refuses to disambiguate
+        # them (https://mypy.readthedocs.io/en/stable/running_mypy.html#mapping-file-paths-to-modules).
+        # Skip mypy on the CC plugin tests — they exercise bash scripts via
+        # subprocess, so static type checking adds little.
+        exclude: ^(tests/integration/test_app\.py|\.github/actions/hermes/runner/|\.dev-team-artifacts/|packages/claude-code-plugin/tests/)
 
   - repo: local
     hooks:
       - id: update-test-badge
         name: update test count badge
-        entry: bash -c 'COUNT=$(uv run pytest --collect-only -q 2>/dev/null | grep "tests collected" | grep -oP "^\d+") && if [ -n "$COUNT" ]; then FORMATTED=$(printf "%'"'"'d" "$COUNT") && sed -i "s/tests-[0-9,]*%20passing/tests-${FORMATTED}%20passing/" README.md && git add README.md; fi'
+        entry: bash -c 'COUNT=$(uv run pytest --collect-only -q 2>/dev/null | grep "tests collected" | grep -oP "^\d+" || true); if [ -n "$COUNT" ]; then FORMATTED=$(printf "%'"'"'d" "$COUNT") && sed -i "s/tests-[0-9,]*%20passing/tests-${FORMATTED}%20passing/" README.md && git add README.md; fi'
         language: system
         files: ^(packages/.*/(tests|test)/.*\.py|tests/.*\.py)$
         pass_filenames: false
