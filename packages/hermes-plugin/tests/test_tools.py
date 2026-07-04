@@ -407,6 +407,117 @@ def test_add_note_falls_back_to_hermes_user_note_template(config, vault_id):
     assert dto.template == HERMES_USER_NOTE_TEMPLATE
 
 
+def test_add_note_schema_advertises_vault_id_param():
+    """RETAIN_SCHEMA exposes an optional `vault_id` property so agents can target a vault.
+
+    The schema is what the model sees; without this property the agent cannot
+    pass vault_id even though the handler now honours it.
+    """
+    add_note = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_add_note')
+    assert 'vault_id' in add_note['parameters']['properties'], (
+        'memex_add_note must expose a `vault_id` property for cross-vault writes'
+    )
+    assert 'vault_id' not in add_note['parameters'].get('required', [])
+
+
+def test_add_note_resolves_vault_name_from_args(config, vault_id):
+    """A vault name in args is resolved and overrides the session vault on the DTO."""
+    api = Mock()
+    api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
+    target = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=target)
+
+    out = dispatch(
+        'memex_add_note',
+        {
+            'name': 'decision',
+            'description': 'short',
+            'content': 'user prefers X',
+            'vault_id': 'trading',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out)['status'] == 'success'
+    api.resolve_vault_identifier.assert_awaited_once_with('trading')
+    dto = api.ingest.call_args.args[0]
+    assert str(dto.vault_id) == str(target)
+    # The resolved vault, not the session default, reaches the DTO.
+    assert str(dto.vault_id) != str(vault_id)
+
+
+def test_add_note_resolves_vault_uuid_from_args(config, vault_id):
+    """A vault UUID string in args round-trips through resolution to the DTO."""
+    api = Mock()
+    api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
+    target = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=target)
+
+    out = dispatch(
+        'memex_add_note',
+        {
+            'name': 'decision',
+            'description': 'short',
+            'content': 'user prefers X',
+            'vault_id': str(target),
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out)['status'] == 'success'
+    api.resolve_vault_identifier.assert_awaited_once_with(str(target))
+    dto = api.ingest.call_args.args[0]
+    assert str(dto.vault_id) == str(target)
+
+
+def test_add_note_unknown_vault_errors_without_ingest(config, vault_id):
+    """A vault that fails resolution returns a tool_error and never ingests."""
+    api = Mock()
+    api.ingest = AsyncMock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=KeyError('no such vault'))
+
+    out = dispatch(
+        'memex_add_note',
+        {
+            'name': 'decision',
+            'description': 'short',
+            'content': 'user prefers X',
+            'vault_id': 'nope',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'Unknown vault' in data.get('error', ''), out
+    assert api.ingest.await_count == 0
+
+
+def test_add_note_without_vault_arg_uses_session_default(config, vault_id):
+    """Omitting vault_id keeps the session vault and skips resolution entirely."""
+    api = Mock()
+    api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
+    api.resolve_vault_identifier = AsyncMock()
+
+    out = dispatch(
+        'memex_add_note',
+        {
+            'name': 'decision',
+            'description': 'short',
+            'content': 'user prefers X',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out)['status'] == 'success'
+    assert api.resolve_vault_identifier.await_count == 0
+    dto = api.ingest.call_args.args[0]
+    assert str(dto.vault_id) == str(vault_id)
+
+
 def test_list_templates_output_includes_action_hint(config, vault_id):
     """handle_list_templates returns a `next` field pointing to the follow-up flow.
 
@@ -3687,6 +3798,101 @@ def test_append_note_api_failure_returns_error(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data or 'isError' in data, out
+
+
+def test_append_note_schema_advertises_vault_id_param():
+    """APPEND_SCHEMA exposes an optional `vault_id` property so agents can target a vault.
+
+    Without this property the model cannot pass vault_id even though the handler
+    now honours it. `delta` stays the only required field.
+    """
+    assert 'vault_id' in APPEND_SCHEMA['parameters']['properties'], (
+        'memex_append_note must expose a `vault_id` property for cross-vault appends'
+    )
+    assert APPEND_SCHEMA['parameters']['required'] == ['delta']
+
+
+def test_append_note_resolves_vault_name_from_args(config, vault_id):
+    """A vault name in args overrides the session vault forwarded to append_to_note."""
+    api = Mock()
+    note_id = uuid4()
+    append_id = uuid4()
+    api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
+    target = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=target)
+
+    out = dispatch(
+        'memex_append_note',
+        {'note_key': 'hermes:session:abc', 'delta': 'x', 'vault_id': 'trading'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out)['status'] == 'success'
+    api.resolve_vault_identifier.assert_awaited_once_with('trading')
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['vault_id'] == str(target)
+    # The resolved vault, not the session default, is forwarded.
+    assert kwargs['vault_id'] != str(vault_id)
+
+
+def test_append_note_resolves_vault_uuid_from_args(config, vault_id):
+    """A vault UUID string in args round-trips through resolution to append_to_note."""
+    api = Mock()
+    note_id = uuid4()
+    append_id = uuid4()
+    api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
+    target = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=target)
+
+    dispatch(
+        'memex_append_note',
+        {'note_key': 'k', 'delta': 'x', 'vault_id': str(target)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    api.resolve_vault_identifier.assert_awaited_once_with(str(target))
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['vault_id'] == str(target)
+
+
+def test_append_note_unknown_vault_errors_without_append(config, vault_id):
+    """A vault that fails resolution returns a tool_error and never appends."""
+    api = Mock()
+    api.append_to_note = AsyncMock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=KeyError('no such vault'))
+
+    out = dispatch(
+        'memex_append_note',
+        {'note_key': 'k', 'delta': 'x', 'vault_id': 'nope'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'Unknown vault' in data.get('error', ''), out
+    assert api.append_to_note.await_count == 0
+
+
+def test_append_note_without_vault_arg_uses_session_default(config, vault_id):
+    """Omitting vault_id keeps the session vault and skips resolution entirely."""
+    api = Mock()
+    note_id = uuid4()
+    append_id = uuid4()
+    api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
+    api.resolve_vault_identifier = AsyncMock()
+
+    dispatch(
+        'memex_append_note',
+        {'note_key': 'k', 'delta': 'x'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert api.resolve_vault_identifier.await_count == 0
+    kwargs = api.append_to_note.call_args.kwargs
+    assert str(kwargs['vault_id']) == str(vault_id)
 
 
 # ---------------------------------------------------------------------------
