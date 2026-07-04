@@ -479,6 +479,15 @@ RETAIN_SCHEMA: dict[str, Any] = {
                     'write-time classifier decide.'
                 ),
             },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Optional target vault name or UUID. When set, the note is '
+                    'ingested into this vault instead of the session-bound default. '
+                    'Use memex_list_vaults to discover available vault names and IDs. '
+                    'Omit to use the session default vault.'
+                ),
+            },
         },
         'required': ['name', 'description', 'content'],
     },
@@ -533,6 +542,15 @@ APPEND_SCHEMA: dict[str, Any] = {
                 'description': (
                     "Separator between parent body and delta: 'paragraph' "
                     "(default), 'newline', or 'none'."
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Optional target vault name or UUID. When set, the note is '
+                    'scoped to this vault instead of the session-bound default. '
+                    'Use memex_list_vaults to discover available vault names and IDs. '
+                    'Omit to use the session default vault.'
                 ),
             },
         },
@@ -1842,13 +1860,26 @@ def handle_add_note(
                 f'Invalid risk_class={raw_risk!r}. Allowed: {[c.value for c in RiskClass]}'
             )
 
+    # Resolve target vault: user-supplied vault_id overrides session default.
+    raw_target_vault = args.get('vault_id')
+    target_vault: str | None
+    if raw_target_vault:
+        try:
+            resolved = run_sync(api.resolve_vault_identifier(str(raw_target_vault)), timeout=10.0)
+            target_vault = str(resolved)
+        except Exception as exc:
+            logger.warning('memex_add_note: vault resolution failed for %r: %s', raw_target_vault, exc)
+            return tool_error(f'Unknown vault: {raw_target_vault!r}')
+    else:
+        target_vault = str(vault_id) if vault_id else None
+
     dto = NoteCreateDTO(
         name=name,
         description=description,
         content=base64.b64encode(content.encode('utf-8')),
         tags=tags,
         note_key=note_key,
-        vault_id=str(vault_id) if vault_id else None,
+        vault_id=target_vault,
         author='hermes',
         template=template,
         intent_class=parsed_intent,
@@ -1882,9 +1913,8 @@ def handle_append_note(
     the wire; the server reads the parent body, concatenates, and re-runs
     incremental extraction with the same note_id.
 
-    Vault scope is the session-bound ``vault_id`` parameter (Hermes sessions
-    are single-vault by design); any ``vault_id`` in ``args`` is ignored.
-    Cross-vault appends require the REST or MCP surfaces.
+    When ``args`` contains ``vault_id``, it is resolved (name or UUID) and
+    overrides the session-bound default. Otherwise the session vault is used.
     """
     from uuid import uuid4
 
@@ -1912,12 +1942,25 @@ def handle_append_note(
     joiner = args.get('joiner') or 'paragraph'
     user_notes = args.get('user_notes') or None
 
+    # Resolve target vault: user-supplied vault_id overrides session default.
+    raw_target_vault = args.get('vault_id')
+    target_vault: str | None
+    if raw_target_vault:
+        try:
+            resolved = run_sync(api.resolve_vault_identifier(str(raw_target_vault)), timeout=10.0)
+            target_vault = str(resolved)
+        except Exception as exc:
+            logger.warning('memex_append_note: vault resolution failed for %r: %s', raw_target_vault, exc)
+            return tool_error(f'Unknown vault: {raw_target_vault!r}')
+    else:
+        target_vault = str(vault_id) if vault_id else None
+
     try:
         response = run_sync(
             api.append_to_note(
                 note_id=note_id_uuid,
                 note_key=note_key,
-                vault_id=str(vault_id) if vault_id else None,
+                vault_id=target_vault,
                 delta=delta,
                 append_id=append_id,
                 joiner=joiner,
