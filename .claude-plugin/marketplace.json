@@ -12,7 +12,7 @@
       "name": "memex",
       "source": "./packages/claude-code-plugin",
       "description": "Long-term memory for Claude Code powered by Memex. Provides persistent knowledge capture, retrieval, and memory-augmented workflows across all projects.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "Memex"
       },
