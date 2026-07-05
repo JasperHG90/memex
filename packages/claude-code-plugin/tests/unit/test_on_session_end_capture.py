@@ -183,6 +183,56 @@ def test_empty_payload_is_silent(mock_memex: MockMemex) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Friendly note title from Claude Code's own session title (parity with
+# on_pre_compact.sh — the two hooks share the title-derivation logic).
+# ---------------------------------------------------------------------------
+
+
+def test_title_uses_cc_session_title(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    _seed_session_start_state(mock_memex)
+    transcript = tmp_path / 't.jsonl'
+    transcript.write_text(
+        '\n'.join(
+            json.dumps(line)
+            for line in [
+                {'role': 'user', 'content': 'hello'},
+                {'type': 'ai-title', 'aiTitle': 'Fix retrieval bug', 'sessionId': 'cc-sess-1'},
+            ]
+        )
+        + '\n'
+    )
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert len(add_calls) == 1
+    argv = add_calls[0]['argv']
+    assert argv[argv.index('--title') + 1] == 'Session: Fix retrieval bug'
+
+
+def test_title_falls_back_to_date(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    argv = add_calls[0]['argv']
+    assert argv[argv.index('--title') + 1].startswith('Session: transcript — ')
+
+
+# ---------------------------------------------------------------------------
 # V4: MEMEX_CC_TRANSCRIPT_CAPTURE opt-out
 # ---------------------------------------------------------------------------
 

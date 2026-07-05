@@ -418,7 +418,10 @@ async def append_note(
 
     async with get_api_context(config) as api:
         try:
-            response = await api.append_to_note(request)
+            # `append_to_note` is keyword-only; NoteAppendRequest's fields mirror
+            # its parameters exactly, so unpack rather than pass the model
+            # positionally (which raises "takes 1 positional argument").
+            response = await api.append_to_note(**request.model_dump())
         except Exception as e:
             handle_api_error(e)
 

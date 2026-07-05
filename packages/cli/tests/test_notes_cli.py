@@ -6,7 +6,6 @@ from uuid import uuid4
 from memex_cli.notes import app as note_app
 from memex_common.schemas import (
     IngestResponse,
-    NoteAppendRequest,
     NoteAppendResponse,
     NoteCreateDTO,
     NoteDTO,
@@ -233,6 +232,52 @@ def test_add_note_text(runner, mock_api, mock_config, monkeypatch):
     note = mock_api.ingest.call_args[0][0]
     assert isinstance(note, NoteCreateDTO)
     assert note.content == b'SGVsbG8gd29ybGQ='
+
+
+def test_note_append_calls_api_with_keyword_args(runner, mock_api, mock_config, monkeypatch):
+    """`note append` must call the keyword-only ``append_to_note`` with keyword
+    args — not a positional ``NoteAppendRequest`` (which raised "takes 1
+    positional argument but 2 were given", silently breaking every append).
+
+    The stand-in mirrors the real keyword-only signature, so a positional (or
+    wrong-keyword) regression raises TypeError and fails the command."""
+    append_id = uuid4()
+    captured: dict = {}
+
+    async def _append_to_note(
+        *,
+        note_key=None,
+        vault_id=None,
+        note_id=None,
+        delta,
+        append_id,
+        joiner='paragraph',
+        user_notes=None,
+    ):
+        captured.update(
+            note_key=note_key, vault_id=vault_id, note_id=note_id, delta=delta, append_id=append_id
+        )
+        return NoteAppendResponse(
+            status='success',
+            note_id=uuid4(),
+            append_id=append_id,
+            content_hash='deadbeef',
+            delta_bytes=len(delta),
+            new_unit_ids=[],
+        )
+
+    mock_api.append_to_note = _append_to_note
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        ['append', '--key', 'session:cc-1', '--delta', 'more turns', '--append-id', str(append_id)],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0, result.output
+    assert captured['note_key'] == 'session:cc-1'
+    assert captured['delta'] == 'more turns'
+    assert captured['append_id'] == append_id
 
 
 def test_add_note_file(tmp_path, runner, mock_api, mock_config, monkeypatch):
@@ -581,12 +626,12 @@ def test_note_append_with_delta_flag(runner, mock_api, mock_config, monkeypatch)
     )
     assert result.exit_code == 0, result.stdout
     mock_api.append_to_note.assert_called_once()
-    request = mock_api.append_to_note.call_args.args[0]
-    assert isinstance(request, NoteAppendRequest)
-    assert request.note_id == note_id
-    assert request.delta == 'continued thought'
-    assert request.append_id == append_id
-    assert request.joiner == 'paragraph'
+    # `append_to_note` is keyword-only; the CLI unpacks the request into kwargs.
+    kwargs = mock_api.append_to_note.call_args.kwargs
+    assert kwargs['note_id'] == note_id
+    assert kwargs['delta'] == 'continued thought'
+    assert kwargs['append_id'] == append_id
+    assert kwargs['joiner'] == 'paragraph'
 
 
 def test_note_append_from_delta_file(runner, mock_api, mock_config, monkeypatch, tmp_path):
@@ -612,8 +657,7 @@ def test_note_append_from_delta_file(runner, mock_api, mock_config, monkeypatch,
         obj=mock_config,
     )
     assert result.exit_code == 0, result.stdout
-    request = mock_api.append_to_note.call_args.args[0]
-    assert request.delta == 'payload from file'
+    assert mock_api.append_to_note.call_args.kwargs['delta'] == 'payload from file'
 
 
 def test_note_append_by_key_with_vault(runner, mock_api, mock_config, monkeypatch):
@@ -638,10 +682,10 @@ def test_note_append_by_key_with_vault(runner, mock_api, mock_config, monkeypatc
         obj=mock_config,
     )
     assert result.exit_code == 0, result.stdout
-    request = mock_api.append_to_note.call_args.args[0]
-    assert request.note_key == 'session-2026-04-26'
-    assert request.vault_id == 'global'
-    assert request.note_id is None
+    kwargs = mock_api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == 'session-2026-04-26'
+    assert kwargs['vault_id'] == 'global'
+    assert kwargs['note_id'] is None
 
 
 def test_note_append_auto_generates_append_id(runner, mock_api, mock_config, monkeypatch):
@@ -656,8 +700,8 @@ def test_note_append_auto_generates_append_id(runner, mock_api, mock_config, mon
 
     calls = mock_api.append_to_note.call_args_list
     assert len(calls) == 2
-    id1 = calls[0].args[0].append_id
-    id2 = calls[1].args[0].append_id
+    id1 = calls[0].kwargs['append_id']
+    id2 = calls[1].kwargs['append_id']
     assert id1 != id2
 
 
@@ -688,9 +732,9 @@ def test_note_append_key_without_vault_uses_default(runner, mock_api, mock_confi
     monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
     result = runner.invoke(note_app, ['append', '--key', 'k', '--delta', 'x'], obj=mock_config)
     assert result.exit_code == 0, result.stdout
-    request = mock_api.append_to_note.call_args.args[0]
-    assert request.note_key == 'k'
-    assert request.vault_id == mock_config.write_vault
+    kwargs = mock_api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == 'k'
+    assert kwargs['vault_id'] == mock_config.write_vault
 
 
 def test_note_append_rejects_both_delta_and_file(

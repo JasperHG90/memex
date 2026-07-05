@@ -311,6 +311,168 @@ def test_session_stats_included_in_context(mock_memex: MockMemex, transcript_jso
 
 
 # ---------------------------------------------------------------------------
+# Friendly note title from Claude Code's own session title. Claude Code writes
+# `{"type":"ai-title","aiTitle":"..."}` (and `custom-title`) lines into the
+# transcript — the same title shown in the `--resume` picker. The title is set
+# only on note CREATION (append never retitles).
+# ---------------------------------------------------------------------------
+
+
+def _title_arg(argv: list[str]) -> str:
+    assert '--title' in argv, f'no --title in argv: {argv!r}'
+    return argv[argv.index('--title') + 1]
+
+
+def _write_transcript(path: Path, lines: list[dict]) -> Path:
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
+    return path
+
+
+def test_title_uses_ai_title_from_transcript(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    _seed_session_start_state(mock_memex)
+    transcript = _write_transcript(
+        tmp_path / 't.jsonl',
+        [
+            {'role': 'user', 'content': 'hello'},
+            {'type': 'ai-title', 'aiTitle': 'Fix retrieval bug', 'sessionId': 'cc-sess-1'},
+            {'role': 'assistant', 'content': [{'type': 'text', 'text': 'hi'}]},
+        ],
+    )
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert len(add_calls) == 1
+    assert _title_arg(add_calls[0]['argv']) == 'Session: Fix retrieval bug'
+
+
+def test_title_prefers_custom_title_over_ai_title(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    """A user-set session name (`custom-title`) wins over the AI-generated one."""
+    _seed_session_start_state(mock_memex)
+    transcript = _write_transcript(
+        tmp_path / 't.jsonl',
+        [
+            {'role': 'user', 'content': 'hello'},
+            {'type': 'ai-title', 'aiTitle': 'AI guess', 'sessionId': 'cc-sess-1'},
+            {'type': 'custom-title', 'customTitle': 'my-named-session', 'sessionId': 'cc-sess-1'},
+        ],
+    )
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert _title_arg(add_calls[0]['argv']) == 'Session: my-named-session'
+
+
+def test_title_uses_latest_ai_title(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    """Claude Code refines the title over a session; the newest one wins."""
+    _seed_session_start_state(mock_memex)
+    transcript = _write_transcript(
+        tmp_path / 't.jsonl',
+        [
+            {'role': 'user', 'content': 'hello'},
+            {'type': 'ai-title', 'aiTitle': 'First guess', 'sessionId': 'cc-sess-1'},
+            {'role': 'user', 'content': 'more'},
+            {'type': 'ai-title', 'aiTitle': 'Refined title', 'sessionId': 'cc-sess-1'},
+        ],
+    )
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert _title_arg(add_calls[0]['argv']) == 'Session: Refined title'
+
+
+def test_title_survives_malformed_transcript_line(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    """A non-JSON line must not abort the title scan (raw `fromjson?` mode) —
+    regression guard for the strict-parse title bug flagged in review."""
+    _seed_session_start_state(mock_memex)
+    path = tmp_path / 't.jsonl'
+    path.write_text(
+        'this is not json\n'
+        + json.dumps({'role': 'user', 'content': 'hello'})
+        + '\n'
+        + json.dumps({'type': 'ai-title', 'aiTitle': 'Still found it', 'sessionId': 'cc-sess-1'})
+        + '\n'
+    )
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(path)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert len(add_calls) == 1
+    assert _title_arg(add_calls[0]['argv']) == 'Session: Still found it'
+
+
+def test_title_ignores_null_valued_title_line(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    """A well-formed title line with a null/absent value must NOT become the
+    literal title "null" nor suppress the fallback — `fromjson?` guards parse
+    errors, not null values, so the filter needs `// empty`. Regression guard."""
+    _seed_session_start_state(mock_memex)
+    transcript = _write_transcript(
+        tmp_path / 't.jsonl',
+        [
+            {'role': 'user', 'content': 'hello'},
+            {'type': 'custom-title', 'customTitle': None, 'sessionId': 'cc-sess-1'},
+            {'type': 'ai-title', 'aiTitle': None, 'sessionId': 'cc-sess-1'},
+        ],
+    )
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    title = _title_arg(mock_memex.calls_matching('note', 'add')[0]['argv'])
+    assert title != 'Session: null', title
+    assert title.startswith('Session: transcript — '), title
+
+
+def test_title_falls_back_to_date_when_no_cc_title(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """No ai-title/custom-title lines → date-based fallback title."""
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    title = _title_arg(add_calls[0]['argv'])
+    assert title.startswith('Session: transcript — '), title
+    assert 'UTC' in title
+
+
+# ---------------------------------------------------------------------------
 # V4: MEMEX_CC_TRANSCRIPT_CAPTURE opt-out
 # ---------------------------------------------------------------------------
 

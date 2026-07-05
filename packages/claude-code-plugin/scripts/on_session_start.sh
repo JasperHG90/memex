@@ -49,36 +49,71 @@ else
     _project_root="$PWD"
 fi
 
-# --- Clear stale session state ---
-# Per-session files written by other hooks (PreCompact, SessionEnd, PreToolUse
-# trackers) carry the previous session's id in their suffix. Wipe them at
-# SessionStart so they can't leak into the new session — otherwise we keep
-# growing files in $STATE_DIR for the lifetime of the plugin install.
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 mkdir -p "$STATE_DIR"
+
+# --- Generate session note key from the CC session id ---
+# The Claude Code session id is STABLE across `--resume` / `--continue` /
+# crash-recovery: Claude Code reuses the id and keeps writing to the same
+# transcript file. Keying the note on it means every resume of one
+# conversation upserts into a SINGLE note instead of minting a fresh
+# timestamped note (and a duplicate transcript) on every SessionStart.
+# `${_cc_session_id:-}` is load-bearing: empty stdin is supported (see above),
+# and an unbound reference under `set -u` would fire the ERR trap and drop the
+# whole SessionStart context. Fall back to a wall-clock key only when no id is
+# present (invocation outside Claude Code).
+_cc_session_id=''
+if [ -n "$_payload" ]; then
+    _cc_session_id=$(printf '%s' "$_payload" | jq -r '.session_id // empty' 2>/dev/null || true)
+fi
+if [ -n "${_cc_session_id:-}" ]; then
+    SESSION_NOTE_KEY="session:${_cc_session_id}"
+    _safe_session_id=$(printf '%s' "$_cc_session_id" | tr -c 'A-Za-z0-9._-' '_')
+else
+    SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"
+    _safe_session_id=''
+fi
+
+# --- Clear stale session state ---
+# Per-session files written by other hooks (PreCompact, SessionEnd, PreToolUse
+# trackers) carry a session id in their suffix. Wipe stale ones at SessionStart
+# so they can't leak between conversations and can't grow unbounded — but
+# PRESERVE the capture cursor (offset + created sentinel) for the CURRENT
+# session id, so a resume continues appending from its prior offset instead of
+# re-capturing the whole transcript into a duplicate note.
 rm -f "$STATE_DIR/write_count"
 rm -rf "$STATE_DIR/file_edits"
 rm -f "$STATE_DIR"/capture_count_*
-rm -f "$STATE_DIR"/session_note_offset_*
-rm -f "$STATE_DIR"/session_note_created_*
-# Also clear the cached CC session id; it is rewritten below from the
-# current payload. A stale id would cause `/handoff` notes to anchor to
-# the wrong session.
-rm -f "$STATE_DIR/cc_session_id"
+# Preserve the current session's two cursor files by EXACT name (not a trailing
+# glob — a `_`-delimited suffix match could otherwise spare a foreign cursor).
+_keep_offset="$STATE_DIR/session_note_offset_${_safe_session_id:-}"
+_keep_created="$STATE_DIR/session_note_created_${_safe_session_id:-}"
+for _cursor in "$STATE_DIR"/session_note_offset_* "$STATE_DIR"/session_note_created_*; do
+    [ -e "$_cursor" ] || continue
+    if [ -n "${_safe_session_id:-}" ] &&
+        { [ "$_cursor" = "$_keep_offset" ] || [ "$_cursor" = "$_keep_created" ]; }; then
+        continue
+    fi
+    rm -f "$_cursor"
+done
 
-# --- Generate session note key ---
-SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"
 echo "$SESSION_NOTE_KEY" > "$STATE_DIR/session_note_key"
+# Cache the CC session id for later hooks (e.g. `/handoff` upsert anchoring).
+# A stale id would anchor handoff notes to the wrong session, so clear it when
+# the current payload carries none.
+if [ -n "${_cc_session_id:-}" ]; then
+    echo "$_cc_session_id" > "$STATE_DIR/cc_session_id"
+else
+    rm -f "$STATE_DIR/cc_session_id"
+fi
 
-# --- Cache identifiers from the SessionStart payload for later hooks ---
+# --- Cache model from the SessionStart payload for later hooks ---
 # `model` is only present on the SessionStart payload — other events don't
-# carry it — so PreToolUse hooks need it cached on disk.
+# carry it — so PreToolUse hooks need it cached on disk. (The session id is
+# cached above, next to the note-key derivation.)
 if [ -n "$_payload" ]; then
     _model=$(printf '%s' "$_payload" | jq -r '.model // empty' 2>/dev/null || true)
     [ -n "$_model" ] && echo "$_model" > "$STATE_DIR/model"
-
-    _cc_session_id=$(printf '%s' "$_payload" | jq -r '.session_id // empty' 2>/dev/null || true)
-    [ -n "$_cc_session_id" ] && echo "$_cc_session_id" > "$STATE_DIR/cc_session_id"
 fi
 
 # --- Resolve project + active vault ---

@@ -22,7 +22,11 @@ def _session_start_payload(model: str = 'claude-opus-4-7') -> str:
     )
 
 
-def test_writes_session_note_key_state_file(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+def test_session_note_key_is_cc_session_id(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """The note key is the Claude Code session id — stable across
+    `--resume`/`--continue`/crash-recovery (CC reuses the id + transcript
+    file) — so every resume of one conversation upserts into a single note
+    instead of minting a fresh timestamped note per SessionStart."""
     result = run_script(
         'on_session_start.sh',
         stdin=_session_start_payload(),
@@ -33,10 +37,36 @@ def test_writes_session_note_key_state_file(mock_memex: MockMemex, temp_git_repo
     state_dir = mock_memex.plugin_data / 'memex'
     note_key_file = state_dir / 'session_note_key'
     assert note_key_file.exists()
-    note_key = note_key_file.read_text().strip()
-    assert note_key.startswith('session:')
-    # Must be a recognizable timestamp (YYYY-MM-DD prefix)
-    assert note_key[8:18].count('-') == 2
+    assert note_key_file.read_text().strip() == 'session:cc-session-xyz'
+
+
+def test_session_note_key_falls_back_to_timestamp_without_session_id(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """When the payload carries no session_id (or stdin is empty — supported
+    for invocations outside Claude Code), the hook MUST still emit a full JSON
+    document and a timestamp-based key. Guards the `set -u` ERR-trap regression
+    from moving the session_id parse ahead of the key derivation."""
+    payload_no_id = json.dumps(
+        {'transcript_path': '/tmp/x.jsonl', 'hook_event_name': 'SessionStart', 'source': 'startup'}
+    )
+    for stdin in (payload_no_id, ''):
+        result = run_script(
+            'on_session_start.sh',
+            stdin=stdin,
+            env=mock_memex.env,
+            cwd=temp_git_repo,
+        )
+        assert result.returncode == 0, result.stderr
+        # Full JSON emitted (not the bare `{}` ERR-trap fallback).
+        out = json.loads(result.stdout)
+        assert 'hookSpecificOutput' in out, f'ERR-trap fallback on stdin={stdin!r}: {out!r}'
+        note_key = (mock_memex.plugin_data / 'memex' / 'session_note_key').read_text().strip()
+        assert note_key.startswith('session:')
+        # A recognizable timestamp (YYYY-MM-DD prefix), not a uuid.
+        assert note_key[8:18].count('-') == 2, note_key
+        # And no stale cc_session_id is left behind.
+        assert not (mock_memex.plugin_data / 'memex' / 'cc_session_id').exists()
 
 
 def test_caches_model_from_payload(mock_memex: MockMemex, temp_git_repo: Path) -> None:
@@ -99,12 +129,13 @@ def test_legacy_kv_key_forward_migrates(mock_memex: MockMemex, temp_git_repo: Pa
 
 
 def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo: Path) -> None:
-    """All per-session state files must be wiped fresh.
+    """Stale per-session state from OTHER sessions must be wiped fresh.
 
-    Includes the PreCompact/SessionEnd `session_note_offset_*` /
-    `session_note_created_*` family — otherwise they accumulate over
-    hundreds of sessions and the offsets from previous sessions could
-    nominally collide on the next session_id reuse.
+    The PreCompact/SessionEnd `session_note_offset_*` / `session_note_created_*`
+    cursors are suffixed by session id; those belonging to a DIFFERENT session
+    (here `oldsession`, vs the current payload's `cc-session-xyz`) are GC'd so
+    they can't accumulate over hundreds of sessions. The current session's own
+    cursors are preserved — see `test_preserves_current_session_cursors`.
 
     Also clears the cached CC session id so `/handoff` notes cannot anchor
     to a previous session.
@@ -133,6 +164,41 @@ def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo:
     assert not (state_dir / 'session_note_created_oldsession').exists()
     # The stale CC session id is wiped and rewritten from the current payload.
     assert (state_dir / 'cc_session_id').read_text().strip() == 'cc-session-xyz'
+
+
+def test_preserves_current_session_cursors(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """A resume reuses the same CC session id, so its capture cursors
+    (`session_note_offset_<id>` / `session_note_created_<id>`) MUST survive the
+    SessionStart wipe — otherwise the delta cursor resets to 0 and the whole
+    transcript is re-captured into a duplicate note. Cursors from OTHER
+    sessions are still GC'd.
+
+    `_safe_session_id` mirrors the capture hooks' `tr -c 'A-Za-z0-9._-' '_'`
+    sanitizer; the payload id `cc-session-xyz` is unchanged by it.
+    """
+    state_dir = mock_memex.plugin_data / 'memex'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    # Current session's cursors (payload session_id == 'cc-session-xyz').
+    (state_dir / 'session_note_offset_cc-session-xyz').write_text('123')
+    (state_dir / 'session_note_created_cc-session-xyz').write_text('')
+    # A different session's cursors — must be wiped.
+    (state_dir / 'session_note_offset_oldsession').write_text('7')
+    (state_dir / 'session_note_created_oldsession').write_text('')
+
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+
+    # Current session's cursors preserved (offset value untouched).
+    assert (state_dir / 'session_note_offset_cc-session-xyz').read_text().strip() == '123'
+    assert (state_dir / 'session_note_created_cc-session-xyz').exists()
+    # Other session's cursors GC'd.
+    assert not (state_dir / 'session_note_offset_oldsession').exists()
+    assert not (state_dir / 'session_note_created_oldsession').exists()
 
 
 def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_repo: Path) -> None:
