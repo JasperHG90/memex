@@ -1868,7 +1868,9 @@ def handle_add_note(
             resolved = run_sync(api.resolve_vault_identifier(str(raw_target_vault)), timeout=10.0)
             target_vault = str(resolved)
         except Exception as exc:
-            logger.warning('memex_add_note: vault resolution failed for %r: %s', raw_target_vault, exc)
+            logger.warning(
+                'memex_add_note: vault resolution failed for %r: %s', raw_target_vault, exc
+            )
             return tool_error(f'Unknown vault: {raw_target_vault!r}')
     else:
         target_vault = str(vault_id) if vault_id else None
@@ -1950,7 +1952,9 @@ def handle_append_note(
             resolved = run_sync(api.resolve_vault_identifier(str(raw_target_vault)), timeout=10.0)
             target_vault = str(resolved)
         except Exception as exc:
-            logger.warning('memex_append_note: vault resolution failed for %r: %s', raw_target_vault, exc)
+            logger.warning(
+                'memex_append_note: vault resolution failed for %r: %s', raw_target_vault, exc
+            )
             return tool_error(f'Unknown vault: {raw_target_vault!r}')
     else:
         target_vault = str(vault_id) if vault_id else None
