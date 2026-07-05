@@ -40,9 +40,30 @@ def test_skips_when_session_note_key_missing(mock_memex: MockMemex, transcript_j
     )
     assert result.returncode == 0
     out = json.loads(result.stdout)
-    assert 'session note key is missing' in out['hookSpecificOutput']['additionalContext']
+    assert 'session note key is missing' in out['systemMessage']
     # No memex calls
     assert mock_memex.calls() == []
+
+
+def test_output_uses_systemMessage_not_precompact_hookSpecificOutput(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Regression: PreCompact has no `additionalContext` injection channel, so a
+    `hookSpecificOutput` with `hookEventName: "PreCompact"` is rejected by Claude
+    Code's hook-output schema. The hook must surface its status via the top-level
+    `systemMessage` field instead."""
+    _seed_session_start_state(mock_memex)
+    mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert 'hookSpecificOutput' not in out
+    assert isinstance(out.get('systemMessage'), str)
 
 
 def test_first_compaction_creates_note(
@@ -58,7 +79,7 @@ def test_first_compaction_creates_note(
     )
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
-    assert '✓' in out['hookSpecificOutput']['additionalContext']
+    assert '✓' in out['systemMessage']
 
     # Should have called `memex note add` (first call → create) with the note_key
     add_calls = mock_memex.calls_matching('note', 'add')
@@ -127,7 +148,7 @@ def test_no_new_turns_skips_capture(mock_memex: MockMemex, transcript_jsonl: Pat
         env=mock_memex.env,
     )
     out = json.loads(result.stdout)
-    assert 'no new turns' in out['hookSpecificOutput']['additionalContext']
+    assert 'no new turns' in out['systemMessage']
     assert mock_memex.calls_matching('note', 'append') == []
     assert mock_memex.calls_matching('note', 'add') == []
 
@@ -147,10 +168,7 @@ def test_offset_not_updated_when_capture_fails(
     )
     assert result.returncode == 0
     out = json.loads(result.stdout)
-    assert (
-        'failed' in out['hookSpecificOutput']['additionalContext'].lower()
-        or 'skipped' in out['hookSpecificOutput']['additionalContext'].lower()
-    )
+    assert 'failed' in out['systemMessage'].lower() or 'skipped' in out['systemMessage'].lower()
 
     state = mock_memex.plugin_data / 'memex'
     assert not (state / 'session_note_offset_cc-sess-1').exists()
@@ -165,7 +183,7 @@ def test_missing_transcript_path_skips_capture(mock_memex: MockMemex) -> None:
         env=mock_memex.env,
     )
     out = json.loads(result.stdout)
-    assert 'transcript_path missing' in out['hookSpecificOutput']['additionalContext']
+    assert 'transcript_path missing' in out['systemMessage']
     assert mock_memex.calls_matching('note', 'add') == []
 
 
@@ -191,7 +209,7 @@ def test_transcript_shrinkage_resets_offset(
     )
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
-    assert '✓' in out['hookSpecificOutput']['additionalContext']
+    assert '✓' in out['systemMessage']
     # Offset re-anchored to actual line count
     assert int((state / 'session_note_offset_cc-sess-1').read_text().strip()) == 4
     # Append happened (note already existed)
@@ -219,7 +237,7 @@ def test_unreadable_transcript_skips_capture(mock_memex: MockMemex, tmp_path: Pa
         assert result.returncode == 0
         out = json.loads(result.stdout)
         # The hook must not silently drop the content with a misleading reason
-        ctx = out['hookSpecificOutput']['additionalContext']
+        ctx = out['systemMessage']
         assert 'not readable' in ctx or 'permissions' in ctx
     finally:
         transcript.chmod(0o644)
@@ -306,7 +324,7 @@ def test_session_stats_included_in_context(mock_memex: MockMemex, transcript_jso
         env=mock_memex.env,
     )
     out = json.loads(result.stdout)
-    ctx = out['hookSpecificOutput']['additionalContext']
+    ctx = out['systemMessage']
     assert '7 writes' in ctx
 
 
@@ -481,7 +499,7 @@ def test_pre_compact_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
     mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
 ) -> None:
     """Disabled: no capture, but JSON output matches the existing skipped-path shape
-    (additionalContext mentions reason + stats appendix)."""
+    (systemMessage mentions reason + stats appendix)."""
     _seed_session_start_state(mock_memex)
     result = run_script(
         'on_pre_compact.sh',
@@ -495,7 +513,7 @@ def test_pre_compact_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
     assert not mock_memex.calls_matching('note', 'append')
 
     out = json.loads(result.stdout)
-    ctx = out['hookSpecificOutput']['additionalContext']
+    ctx = out['systemMessage']
     # Shape parity: disabled-path uses the existing skipped-path output template.
     assert 'pre-compact capture skipped' in ctx
     assert 'MEMEX_CC_TRANSCRIPT_CAPTURE' in ctx

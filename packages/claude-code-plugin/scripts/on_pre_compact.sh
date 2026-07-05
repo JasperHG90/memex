@@ -28,10 +28,7 @@ _session_note_key=""
 
 if [ -z "$_session_note_key" ]; then
     jq -n '{
-        hookSpecificOutput: {
-            hookEventName: "PreCompact",
-            additionalContext: "Memex pre-compact capture skipped — session note key is missing. The plugin will recover on the next session."
-        }
+        systemMessage: "Memex pre-compact capture skipped — session note key is missing. The plugin will recover on the next session."
     }'
     exit 0
 fi
@@ -69,7 +66,7 @@ _capture_status="skipped"
 _capture_reason=""
 
 # Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled bypasses the capture
-# but still emits the existing skipped-path output shape (additionalContext + stats
+# but still emits the existing skipped-path output shape (systemMessage + stats
 # appendix). Offset file is NOT advanced — re-enabling resumes from prior offset.
 case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
     off|0|false|no|disabled)
@@ -166,8 +163,5 @@ if [ "$writes" -gt 5 ] || [ "$commits" -gt 0 ]; then
 fi
 
 jq -n --arg ctx "$msg" '{
-    hookSpecificOutput: {
-        hookEventName: "PreCompact",
-        additionalContext: $ctx
-    }
+    systemMessage: $ctx
 }'
