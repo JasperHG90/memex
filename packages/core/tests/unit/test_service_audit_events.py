@@ -702,7 +702,9 @@ class TestReflectionServiceAuditEvents:
         request = ReflectionRequest(entity_id=entity_id, vault_id=vault_id)
 
         with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
-            mock_re.return_value.reflect_batch = AsyncMock(return_value=([], [], []))
+            # Entity in the failed list => reflect() takes the mark_failed branch
+            # (a real failure), which must not emit an audit event.
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=([], [], [entity_id]))
             reflection_service.queue_service.mark_failed = AsyncMock()
 
             await reflection_service.reflect(request)

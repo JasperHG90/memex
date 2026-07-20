@@ -227,13 +227,20 @@ async def test_batch_get_or_create_models_logic(engine, mock_session):
     mock_existing_model = MagicMock()
     mock_existing_model.entity_id = existing_id
 
+    # The model the idempotent INSERT + reload materialises for the missing entity.
+    mock_new_model = MagicMock()
+    mock_new_model.entity_id = missing_id
+    mock_new_model.name = 'New Entity'
+
     mock_session.exec.side_effect = [
-        # 1. Query for models
+        # 1. Query for existing models.
         MagicMock(all=MagicMock(return_value=[mock_existing_model])),
-        # 2. Query for missing entities (names)
+        # 2. Query for missing entities (names).
         MagicMock(
             all=MagicMock(return_value=[MagicMock(id=missing_id, canonical_name='New Entity')])
         ),
+        # 3. Re-load after the ON CONFLICT DO NOTHING insert to attach ORM rows.
+        MagicMock(all=MagicMock(return_value=[mock_new_model])),
     ]
 
     models_map = await engine._batch_get_or_create_models([existing_id, missing_id])
@@ -242,8 +249,8 @@ async def test_batch_get_or_create_models_logic(engine, mock_session):
     assert models_map[existing_id] == mock_existing_model
     assert models_map[missing_id].name == 'New Entity'
 
-    # Verify new model was added
-    mock_session.add.assert_called()
+    # Verify the idempotent insert was issued for the missing model.
+    mock_session.execute.assert_called()
 
 
 # ---------------------------------------------------------------------------
