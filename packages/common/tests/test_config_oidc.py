@@ -138,6 +138,38 @@ class TestOidcClientConfig:
         assert client.client_secret.get_secret_value() == 'shh'
         assert 'shh' not in repr(client)
 
+    def test_default_grant_is_interactive(self):
+        client = OidcClientConfig(issuer='https://issuer.example', client_id='abc')
+        assert client.grant == 'interactive'
+
+    def test_client_credentials_requires_secret(self):
+        with pytest.raises(ValidationError, match='requires client_secret'):
+            OidcClientConfig(
+                issuer='https://issuer.example', client_id='abc', grant='client_credentials'
+            )
+
+    def test_client_credentials_valid_with_secret(self):
+        client = OidcClientConfig(
+            issuer='https://issuer.example',
+            client_id='abc',
+            grant='client_credentials',
+            client_secret='shh',
+        )
+        assert client.grant == 'client_credentials'
+
+    def test_jwt_profile_requires_key_file(self):
+        with pytest.raises(ValidationError, match='requires key_file'):
+            OidcClientConfig(issuer='https://issuer.example', client_id='abc', grant='jwt_profile')
+
+    def test_jwt_profile_valid_with_key_file(self):
+        client = OidcClientConfig(
+            issuer='https://issuer.example',
+            client_id='abc',
+            grant='jwt_profile',
+            key_file='/etc/memex/key.json',
+        )
+        assert client.key_file == '/etc/memex/key.json'
+
 
 class TestMemexConfigOidcField:
     """The client `oidc` field must be accepted under extra='forbid'."""

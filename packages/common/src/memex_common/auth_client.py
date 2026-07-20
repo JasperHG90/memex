@@ -10,6 +10,7 @@ fall back to the ``X-API-Key`` header. The cache lives at
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pathlib as plb
@@ -17,10 +18,13 @@ import time
 from typing import TYPE_CHECKING
 
 import httpx
+from authlib.jose import jwt
 from platformdirs import user_config_dir
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from typing import Literal
+
     from memex_common.config import MemexConfig, OidcClientConfig
 
 logger = logging.getLogger('memex.common.auth_client')
@@ -43,6 +47,10 @@ class TokenCache(BaseModel):
     refresh_token: str | None = None
     scope: str | None = None
     subject: str | None = None  # for `memex auth status` display only
+    # Which auth mode produced this token. Read paths require a matching mode so
+    # an interactive login token and a service-account token never get reused
+    # across modes on a shared config dir.
+    mode: str = 'interactive'
 
     def is_fresh(self, *, skew: float = _EXPIRY_SKEW_SECONDS) -> bool:
         return time.time() < (self.expires_at - skew)
@@ -104,7 +112,11 @@ async def discover_oidc(issuer: str, *, client: httpx.AsyncClient | None = None)
 
 
 def token_cache_from_response(
-    data: dict, *, issuer: str, previous: TokenCache | None = None
+    data: dict,
+    *,
+    issuer: str,
+    previous: TokenCache | None = None,
+    mode: Literal['interactive', 'service_account'] = 'interactive',
 ) -> TokenCache:
     """Build a TokenCache from an OAuth token-endpoint response."""
     expires_in = float(data.get('expires_in', 3600))
@@ -118,6 +130,7 @@ def token_cache_from_response(
         refresh_token=refresh_token,
         scope=data.get('scope', previous.scope if previous else None),
         subject=previous.subject if previous else None,
+        mode=mode,
     )
 
 
@@ -194,9 +207,12 @@ async def _resolve_bearer(
     oidc = config.oidc
     if oidc is None:
         return None
+    if oidc.grant in ('client_credentials', 'jwt_profile'):
+        return await _resolve_service_bearer(oidc, client=client)
     cache = load_token_cache()
-    if cache is None or cache.issuer != oidc.issuer:
-        # Not logged in (or logged into a different provider): fall back.
+    if cache is None or cache.issuer != oidc.issuer or cache.mode != 'interactive':
+        # Not logged in, logged into a different provider, or the cache holds a
+        # service-account token (wrong mode): fall back.
         return None
     if cache.is_fresh():
         return f'{cache.token_type} {cache.access_token}'
@@ -206,7 +222,7 @@ async def _resolve_bearer(
     async with _refresh_lock:
         # Re-load inside the lock: another coroutine may have refreshed already.
         current = load_token_cache() or cache
-        if current.issuer == oidc.issuer and current.is_fresh():
+        if current.issuer == oidc.issuer and current.mode == 'interactive' and current.is_fresh():
             return f'{current.token_type} {current.access_token}'
         try:
             refreshed = await _refresh_token(oidc, current, client=client)
@@ -214,3 +230,126 @@ async def _resolve_bearer(
             logger.warning('OIDC token refresh failed: %s', exc)
             return None
         return f'{refreshed.token_type} {refreshed.access_token}'
+
+
+# ---------------------------------------------------------------------------
+# Service-account (non-interactive) authentication
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_service_bearer(
+    oidc: OidcClientConfig, *, client: httpx.AsyncClient | None = None
+) -> str | None:
+    """Bearer header for a service account: use the cached token, or acquire one.
+
+    Service tokens are not refreshable (no refresh token); on expiry a fresh
+    token is acquired via the configured grant.
+    """
+    if (cache := load_token_cache()) is not None and _sa_cache_matches(cache, oidc):
+        return f'{cache.token_type} {cache.access_token}'
+    async with _refresh_lock:
+        if (current := load_token_cache()) is not None and _sa_cache_matches(current, oidc):
+            return f'{current.token_type} {current.access_token}'
+        try:
+            acquired = await acquire_service_token(oidc, client=client)
+        except (httpx.HTTPError, ValueError, KeyError, OSError) as exc:
+            logger.warning('Service-account token acquisition failed: %s', exc)
+            return None
+        return f'{acquired.token_type} {acquired.access_token}'
+
+
+async def acquire_service_token(
+    oidc: OidcClientConfig, *, client: httpx.AsyncClient | None = None
+) -> TokenCache:
+    """Acquire and cache an access token for a service account.
+
+    Supports the ``client_credentials`` grant (client_id + client_secret) and
+    the RFC 7523 ``jwt_profile`` grant (a self-signed assertion from a provider
+    key file, e.g. a Zitadel service-account key JSON).
+    """
+    # Build the request body first (jwt_profile signs a local assertion) so a
+    # bad key file fails fast without a network round-trip.
+    if oidc.grant == 'client_credentials':
+        form = {
+            'grant_type': 'client_credentials',
+            'client_id': oidc.client_id,
+            'scope': ' '.join(oidc.scopes),
+        }
+        if oidc.client_secret is not None:
+            form['client_secret'] = oidc.client_secret.get_secret_value()
+    elif oidc.grant == 'jwt_profile':
+        form = {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'assertion': _build_client_assertion(oidc),
+            'scope': ' '.join(oidc.scopes),
+        }
+    else:  # pragma: no cover - guarded by the caller and config validator
+        raise ValueError(f'grant {oidc.grant!r} is not a service-account grant.')
+
+    discovery = await discover_oidc(oidc.issuer, client=client)
+    token_endpoint = discovery.get('token_endpoint')
+    if not token_endpoint:
+        raise ValueError(f'OIDC discovery for {oidc.issuer!r} has no token_endpoint.')
+
+    async def _post(c: httpx.AsyncClient) -> dict:
+        resp = await c.post(token_endpoint, data=form)
+        resp.raise_for_status()
+        return resp.json()
+
+    if client is not None:
+        data = await _post(client)
+    else:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as owned:
+            data = await _post(owned)
+
+    cache = token_cache_from_response(data, issuer=oidc.issuer, mode='service_account')
+    cache.subject = oidc.client_id
+    save_token_cache(cache)
+    return cache
+
+
+def _sa_cache_matches(cache: TokenCache, oidc: OidcClientConfig) -> bool:
+    """Whether a cached token belongs to this service account and is still fresh.
+
+    Requires the service-account mode, issuer, and client identity to match so a
+    human's interactive token (or another SA's token) is never reused here.
+    """
+    return (
+        cache.mode == 'service_account'
+        and cache.issuer == oidc.issuer
+        and cache.subject == oidc.client_id
+        and cache.is_fresh()
+    )
+
+
+def _build_client_assertion(oidc: OidcClientConfig) -> str:
+    """Build a signed JWT assertion from a service-account key file (RFC 7523).
+
+    Parses a Zitadel-style key JSON (``keyId``, ``key`` PEM, ``userId``), signs
+    a short-lived JWT, and returns it for the jwt-bearer token exchange. The
+    assertion's issuer/subject is the key's ``userId`` and its audience is the
+    OIDC issuer, per Zitadel's JWT-profile flow.
+    """
+    if not oidc.key_file:  # pragma: no cover - guarded by config validator
+        raise ValueError('jwt_profile grant requires key_file.')
+    raw = plb.Path(oidc.key_file).read_text(encoding='utf-8')
+    key_data = json.loads(raw)
+    key_id = key_data.get('keyId')
+    private_key = key_data.get('key')
+    user_id = key_data.get('userId')
+    if not (key_id and private_key and user_id):
+        raise ValueError(
+            f'Service-account key file {oidc.key_file!r} is missing keyId, key, or userId.'
+        )
+
+    now = int(time.time())
+    header = {'alg': 'RS256', 'kid': key_id}
+    payload = {
+        'iss': user_id,
+        'sub': user_id,
+        'aud': oidc.issuer,
+        'iat': now,
+        'exp': now + 3600,
+    }
+    token = jwt.encode(header, payload, private_key)
+    return token.decode('ascii') if isinstance(token, bytes) else token

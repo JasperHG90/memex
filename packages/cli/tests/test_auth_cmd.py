@@ -3,6 +3,7 @@
 import base64
 import json
 import time
+import types
 
 import httpx
 import pytest
@@ -47,9 +48,13 @@ class TestHelpers:
         assert auth_cmd._subject_from_id_token({'id_token': 'garbage'}) is None
 
 
+def _ctx(oidc=None):
+    return types.SimpleNamespace(obj=types.SimpleNamespace(oidc=oidc))
+
+
 class TestStatusLogout:
     def test_status_not_logged_in(self, capsys):
-        auth_cmd.status()
+        auth_cmd.status(_ctx())
         assert 'Not logged in' in capsys.readouterr().out
 
     def test_status_valid_token(self, capsys):
@@ -61,10 +66,22 @@ class TestStatusLogout:
                 subject='alice@example.com',
             )
         )
-        auth_cmd.status()
+        auth_cmd.status(_ctx())
         out = capsys.readouterr().out
         assert 'alice@example.com' in out
         assert 'valid' in out
+
+    def test_status_service_account_mode(self, capsys):
+        oidc = OidcClientConfig(
+            issuer=ISSUER,
+            client_id='svc',
+            grant='client_credentials',
+            client_secret='shh',
+        )
+        auth_cmd.status(_ctx(oidc))
+        out = capsys.readouterr().out
+        assert 'service account' in out
+        assert 'none cached' in out
 
     def test_logout_removes_cache(self, capsys):
         save_token_cache(TokenCache(issuer=ISSUER, access_token='a', expires_at=time.time() + 60))
@@ -75,6 +92,20 @@ class TestStatusLogout:
     def test_logout_when_absent(self, capsys):
         auth_cmd.logout()
         assert 'No cached token' in capsys.readouterr().out
+
+    def test_login_rejects_service_account_grant(self, capsys):
+        import typer
+
+        oidc = OidcClientConfig(
+            issuer=ISSUER,
+            client_id='svc',
+            grant='client_credentials',
+            client_secret='shh',
+        )
+        with pytest.raises(typer.Exit) as exc:
+            auth_cmd.login(_ctx(oidc), device=False)
+        assert exc.value.exit_code == 0
+        assert 'Service-account mode' in capsys.readouterr().out
 
 
 class TestDeviceLogin:

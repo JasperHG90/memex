@@ -71,6 +71,12 @@ def login(
 ) -> None:
     """Log in and cache a bearer token."""
     oidc = _require_oidc(ctx)
+    if oidc.grant != 'interactive':
+        console.print(
+            f"[yellow]Service-account mode (grant='{oidc.grant}'): no login needed. "
+            'Tokens are acquired and refreshed automatically.[/yellow]'
+        )
+        raise typer.Exit(0)
     try:
         if device:
             cache = asyncio.run(_device_login(oidc))
@@ -97,11 +103,19 @@ def logout() -> None:
 
 
 @app.command('status')
-def status() -> None:
-    """Show the cached token's identity and expiry."""
+def status(ctx: typer.Context) -> None:
+    """Show the current auth mode and the cached token's identity and expiry."""
+    config: MemexConfig = ctx.obj
+    oidc = config.oidc
+    if oidc is not None and oidc.grant != 'interactive':
+        console.print(f"Mode:    service account (grant='{oidc.grant}')")
+        console.print(f'Client:  {oidc.client_id}')
     cache = load_token_cache()
     if cache is None:
-        console.print('[yellow]Not logged in.[/yellow]')
+        if oidc is not None and oidc.grant != 'interactive':
+            console.print('Token:   [yellow]none cached[/yellow] (acquired on first request).')
+        else:
+            console.print('[yellow]Not logged in.[/yellow]')
         return
     remaining = int(cache.expires_at - time.time())
     state = '[green]valid[/green]' if cache.is_fresh() else '[red]expired[/red]'

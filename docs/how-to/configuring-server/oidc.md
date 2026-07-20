@@ -89,6 +89,53 @@ memex auth status   # shows the identity and expiry
 memex auth logout   # deletes the cached token
 ```
 
+## Service accounts (non-interactive)
+
+A machine caller (a scheduled job, a headless MCP deployment) authenticates without a browser. Set `grant` on the client `oidc` block to a service-account grant; tokens are then acquired and re-acquired automatically, with no `memex auth login` step.
+
+**Zitadel key file (JWT profile, recommended).** Download the service account's key JSON from Zitadel, then:
+
+```yaml
+oidc:
+  issuer: "https://your-instance.zitadel.cloud"
+  client_id: "memex-svc"
+  grant: "jwt_profile"
+  key_file: "/etc/memex/zitadel-key.json"
+  scopes:
+    - "openid"
+    - "urn:zitadel:iam:org:project:id:<project-id>:aud"   # adds your API as audience
+```
+
+The client signs a short-lived assertion with the key and exchanges it at the token endpoint (RFC 7523 `jwt-bearer`).
+
+**Client secret (client credentials).**
+
+```yaml
+oidc:
+  issuer: "https://your-instance.zitadel.cloud"
+  client_id: "memex-svc"
+  grant: "client_credentials"
+  client_secret: "env:MEMEX_OIDC_CLIENT_SECRET"
+  scopes: ["openid", "urn:zitadel:iam:org:project:id:<project-id>:aud"]
+```
+
+On the **server**, map a claim the service token actually carries. Machine tokens have no `groups`/`email`; key rules on `roles` (Zitadel project roles), or pin the machine identity by `sub`:
+
+```yaml
+server:
+  auth:
+    oidc:
+      - issuer: "https://your-instance.zitadel.cloud"
+        audience: ["<project-id>"]
+        grant_rules:
+          - claim: "sub"                 # the service user's id
+            value: "<service-user-id>"
+            policy: writer
+            vault_ids: ["ingest"]
+```
+
+Because rule matching does membership on list claims and equality on scalars, map on a `roles` array or a `sub` string, not a space-delimited `scope` string. `memex auth status` reports service-account mode.
+
 ## Verification
 
 With the server running and a token in hand:

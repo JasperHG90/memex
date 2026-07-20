@@ -1565,12 +1565,19 @@ class AuthConfig(BaseModel):
 
 
 class OidcClientConfig(BaseModel):
-    """Client-side OIDC login configuration for the CLI and MCP.
+    """Client-side OIDC configuration for the CLI and MCP.
 
-    The client logs in against a single provider (Authorization Code + PKCE,
-    or the Device Authorization Grant) to obtain a bearer token it then sends
-    to the Memex server. The server may trust several providers; the client
-    logs into exactly one.
+    Two modes, selected by ``grant``:
+
+    - ``interactive`` (default): a human runs ``memex auth login`` (Authorization
+      Code + PKCE, or the Device Authorization Grant) to obtain a bearer token.
+    - ``client_credentials`` / ``jwt_profile``: a service account authenticates
+      non-interactively. Tokens are acquired and refreshed automatically; no
+      ``memex auth login`` step is needed. ``jwt_profile`` uses a provider key
+      file (e.g. a Zitadel service-account key JSON) via the RFC 7523 JWT-bearer
+      grant; ``client_credentials`` uses ``client_secret``.
+
+    The server may trust several providers; the client uses exactly one.
     """
 
     issuer: str = Field(
@@ -1583,8 +1590,33 @@ class OidcClientConfig(BaseModel):
     )
     client_secret: SecretStr | None = Field(
         default=None,
-        description='Client secret for confidential clients. Omit for public (PKCE) clients.',
+        description='Client secret for confidential/client_credentials clients. '
+        'Omit for public (PKCE) clients.',
     )
+    grant: Literal['interactive', 'client_credentials', 'jwt_profile'] = Field(
+        default='interactive',
+        description=(
+            'How the client obtains tokens. "interactive" = human login via '
+            '`memex auth login`. "client_credentials" / "jwt_profile" = '
+            'non-interactive service-account auth, acquired automatically.'
+        ),
+    )
+    key_file: str | None = Field(
+        default=None,
+        description=(
+            'Path to a service-account key JSON (e.g. a Zitadel key file with '
+            'keyId/key/userId). Required for grant="jwt_profile".'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def validate_grant_requirements(self) -> Self:
+        """Each service-account grant needs its credential."""
+        if self.grant == 'client_credentials' and self.client_secret is None:
+            raise ValueError('grant="client_credentials" requires client_secret.')
+        if self.grant == 'jwt_profile' and not self.key_file:
+            raise ValueError('grant="jwt_profile" requires key_file.')
+        return self
 
 
 class CorsConfig(BaseModel):
