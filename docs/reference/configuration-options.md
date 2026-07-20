@@ -87,8 +87,24 @@ The top-level settings object. Lives at `MemexConfig` in `packages/common/src/me
 |---|---|---|---|---|
 | `server_url` | `str` | `""` (derived from `server.host:server.port`) | `MEMEX_SERVER_URL` | Memex Core server URL used by CLI and MCP clients. |
 | `api_key` | `SecretStr \| None` | `null` | `MEMEX_API_KEY` | API key the CLI and MCP clients send to the server. |
+| `oidc` | `OidcClientConfig \| None` | `null` | `MEMEX_OIDC__*` | Client-side OIDC login. When set with a cached token, clients send `Authorization: Bearer` instead of `X-API-Key`. See [OidcClientConfig](#oidcclientconfig). |
 | `vault` | `VaultConfig` | see [VaultConfig](#vaultconfig) | `MEMEX_VAULT__*` | Client-side vault preferences. |
 | `server` | `ServerConfig` | see [ServerConfig](#serverconfig) | `MEMEX_SERVER__*` | Server-side configuration. |
+
+### OidcClientConfig
+
+Client-side OIDC configuration for the CLI and MCP. Lives at `oidc`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `issuer` | `str` | — (required) | Issuer URL used to discover the authorization/token/device endpoints. |
+| `client_id` | `str` | — (required) | OAuth client ID registered with the provider. |
+| `scopes` | `list[str]` | `["openid","profile","email","offline_access"]` | Scopes requested. `offline_access` enables refresh tokens (interactive). |
+| `client_secret` | `SecretStr \| None` | `null` | Client secret for confidential / `client_credentials` clients. Omit for public (PKCE) clients. |
+| `grant` | `"interactive" \| "client_credentials" \| "jwt_profile"` | `interactive` | How tokens are obtained. `interactive` = `memex auth login`. The other two are non-interactive service-account grants. |
+| `key_file` | `str \| None` | `null` | Path to a service-account key JSON (e.g. a Zitadel key file). Required for `grant: jwt_profile`. |
+
+`grant: client_credentials` requires `client_secret`; `grant: jwt_profile` requires `key_file`. Both raise a validation error otherwise.
 
 **Derived properties (read-only).**
 
@@ -232,12 +248,15 @@ API key authentication. Lives at `server.auth`.
 
 | Key | Type | Default | Env var | Description |
 |---|---|---|---|---|
-| `enabled` | `bool` | `false` | `MEMEX_SERVER__AUTH__ENABLED` | Turn on API-key auth. |
+| `enabled` | `bool` | `false` | `MEMEX_SERVER__AUTH__ENABLED` | Turn on authentication (API keys and/or OIDC). |
 | `keys` | `list[ApiKeyConfig]` | `[]` | `MEMEX_SERVER__AUTH__KEYS` | API keys with associated policies. |
+| `oidc` | `list[OidcProviderConfig]` | `[]` | `MEMEX_SERVER__AUTH__OIDC` | Trusted OIDC providers for `Authorization: Bearer` tokens. Coexists with `keys`. |
 | `exempt_paths` | `list[str]` | `["/api/v1/health","/api/v1/ready","/api/v1/metrics"]` | `MEMEX_SERVER__AUTH__EXEMPT_PATHS` | Paths that skip auth. |
 | `webhook_secret` | `SecretStr \| None` | `null` | `MEMEX_SERVER__AUTH__WEBHOOK_SECRET` | Shared secret for `X-Webhook-Signature` HMAC-SHA256 validation. |
 
 The legacy `api_keys` field is rejected on load with a migration message.
+
+Enabling auth turns on both schemes at once: a request authenticates with an `X-API-Key` header or an `Authorization: Bearer` JWT. See [How-to: Authenticate with an OIDC provider](../how-to/configuring-server/oidc.md).
 
 ### ApiKeyConfig
 
@@ -260,6 +279,34 @@ One entry in `auth.keys`.
 | `admin` | `read`, `write`, `delete` |
 
 Setting `read_vault_ids` while `vault_ids` is `null` raises a validation error; use a separate `reader` key instead.
+
+### OidcProviderConfig
+
+One trusted OIDC provider in `auth.oidc`. Bearer tokens are verified locally against the provider's JWKS; the provider is selected by matching the token's `iss` claim. Only providers that issue signed JWT access tokens are supported.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `issuer` | `str` | — (required) | Issuer URL. Used for OIDC discovery (`<issuer>/.well-known/openid-configuration`) and to validate/select on the `iss` claim. |
+| `audience` | `list[str]` | — (required, non-empty) | Accepted values for the token `aud` claim. |
+| `jwks_uri` | `str \| None` | `null` | Explicit JWKS URL. Overrides discovery. |
+| `algorithms` | `list[str]` | `["RS256","ES256"]` | Allowed signing algorithms. Asymmetric only (`RS*`/`ES*`/`PS*`/`EdDSA`); symmetric algorithms are rejected on load. |
+| `leeway_seconds` | `int` | `60` | Clock-skew tolerance applied to `exp`/`nbf`/`iat`. |
+| `grant_rules` | `list[OidcGrantRule]` | `[]` | Claim-to-policy rules, evaluated in order (first match wins). |
+| `default_policy` | `Policy \| None` | `null` | Policy granted (unrestricted vaults) when no rule matches. `null` = reject unmatched tokens. |
+
+A provider must define at least one `grant_rule` or a `default_policy`, otherwise every token it issues is refused.
+
+#### OidcGrantRule
+
+One entry in a provider's `grant_rules`. Maps a claim value to a policy and optional vault scope, mirroring `ApiKeyConfig`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `claim` | `str` | — (required) | Token claim to inspect (e.g. `groups`, `roles`, `email`, `sub`). |
+| `value` | `str` | — (required) | Claim value that activates the rule. Membership for list claims, equality for scalar claims. |
+| `policy` | `Policy` | — (required) | Policy granted on match. |
+| `vault_ids` | `list[str] \| None` | `null` | Vault IDs/names this grant may access. `null` = all vaults. |
+| `read_vault_ids` | `list[str] \| None` | `null` | Extra read-only vault IDs/names. Only valid when `vault_ids` is set. |
 
 ---
 

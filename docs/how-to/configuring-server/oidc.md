@@ -4,6 +4,13 @@ Memex accepts bearer tokens from your own OIDC provider alongside API keys. A ve
 
 Only providers that issue **signed JWT access tokens** work here, because the server verifies tokens locally against the provider's JWKS. Providers with opaque access tokens (Google, GitHub) are not supported on this path; those callers keep using API keys.
 
+The server setup below is the same for everyone. Only the way a client obtains a token differs, so follow the section that fits your caller:
+
+- **A person at a terminal** signs in with a browser. Do the server setup, then [Log in as a person](#log-in-as-a-person-cli-and-mcp).
+- **A service account** (a cron job, a headless MCP deployment) authenticates with no browser. Do the server setup, then [Service accounts](#service-accounts-non-interactive).
+
+For the concepts behind this (why the token carries identity and the config carries only policy), see [How OIDC authentication works](../../explanation/how-memex-works/oidc-authentication.md).
+
 ## Prerequisites
 
 - A running Memex server you can restart.
@@ -12,7 +19,7 @@ Only providers that issue **signed JWT access tokens** work here, because the se
 
 ## Turn on OIDC (server)
 
-OIDC providers live under `server.auth.oidc`, next to `keys` <code-ref path="packages/common/src/memex_common/config.py" lines="1521-1527" />. Setting `enabled: true` switches on authentication; a request may then present either an API key or a bearer token.
+OIDC providers live under `server.auth.oidc`, next to `keys` <code-ref path="packages/common/src/memex_common/config.py" lines="1543-1549" />. Setting `enabled: true` switches on authentication; a request may then present either an API key or a bearer token.
 
 ```yaml
 server:
@@ -30,11 +37,11 @@ server:
             policy: writer
 ```
 
-Each provider is selected by matching the token's `iss` claim, then verified: signature against the JWKS, `aud` against `audience`, `iss` against `issuer`, and expiry with a small clock-skew allowance <code-ref path="packages/core/src/memex_core/server/oidc.py" lines="141-182" />. The allowed signing algorithms default to `RS256` and `ES256` and are enforced against the token header, so an `alg: none` token is rejected.
+Each provider is selected by matching the token's `iss` claim, then verified: signature against the JWKS, `aud` against `audience`, `iss` against `issuer`, and expiry with a small clock-skew allowance <code-ref path="packages/core/src/memex_core/server/oidc.py" lines="149-190" />. The allowed signing algorithms default to `RS256` and `ES256` and are enforced against the token header, so an `alg: none` token is rejected.
 
 ### Map claims to a policy
 
-A `grant_rule` matches when the named claim carries the given value: membership when the claim is a list (such as `groups` or `roles`), equality when it is a scalar (such as `email`). The first matching rule sets the request's policy and vault scope <code-ref path="packages/common/src/memex_common/config.py" lines="1399-1435" />. The three policies map to the same permission sets as API keys:
+A `grant_rule` matches when the named claim carries the given value: membership when the claim is a list (such as `groups` or `roles`), equality when it is a scalar (such as `email`). The first matching rule sets the request's policy and vault scope <code-ref path="packages/common/src/memex_common/config.py" lines="1399-1436" />. The three policies map to the same permission sets as API keys:
 
 | Policy | Reads | Writes | Deletes |
 |:------|:-----:|:------:|:-------:|
@@ -65,9 +72,9 @@ OIDC bearer-token authentication enabled (1 provider(s)).
 
 The non-localhost bind guard keys off `enabled`, so an OIDC-only server (providers set, `keys` empty) still binds. If Hermes or the browser extension also point at that server, keep at least one API key for them, since the login flow covers the CLI and MCP only.
 
-## Log in (CLI and MCP)
+## Log in as a person (CLI and MCP)
 
-Point the client at the same provider under the top-level `oidc` block <code-ref path="packages/common/src/memex_common/config.py" lines="2803-2809" />:
+Point the client at the same provider under the top-level `oidc` block <code-ref path="packages/common/src/memex_common/config.py" lines="2857-2863" />:
 
 ```yaml
 oidc:
@@ -161,7 +168,7 @@ You want `200`, `403`, `200`. A request with no credential at all returns `401`.
 
 ## Troubleshooting
 
-**Every bearer token returns `403`.** The token did not verify. Confirm the `iss` claim exactly matches a configured `issuer`, the `aud` claim contains one of the configured `audience` values, and the token is a JWT access token (not an opaque token or an id token). Provider selection is by `iss`, so a mismatch there means no provider is even tried <code-ref path="packages/core/src/memex_core/server/oidc.py" lines="141-156" />.
+**Every bearer token returns `403`.** The token did not verify. Confirm the `iss` claim exactly matches a configured `issuer`, the `aud` claim contains one of the configured `audience` values, and the token is a JWT access token (not an opaque token or an id token). Provider selection is by `iss`, so a mismatch there means no provider is even tried <code-ref path="packages/core/src/memex_core/server/oidc.py" lines="149-164" />.
 
 **A valid token authenticates but is denied.** It matched no `grant_rule` and there is no `default_policy`, so it authenticated without an authorization. Add a rule for its claims or set a `default_policy`.
 
@@ -171,6 +178,7 @@ You want `200`, `403`, `200`. A request with no credential at all returns `401`.
 
 ## See also
 
+- [Explanation: How OIDC authentication works](../../explanation/how-memex-works/oidc-authentication.md)
+- [Reference: AuthConfig and OIDC config](../../reference/configuration-options.md#authconfig)
 - [How-to: Secure Memex with an API key](./api-key.md)
-- [Reference: server configuration](../../reference/configuration-options.md)
 - [Explanation: architecture overview](../../explanation/how-memex-works/high-level-architecture.md)
