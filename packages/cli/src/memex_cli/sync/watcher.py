@@ -12,7 +12,9 @@ import structlog
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from memex_common.auth_client import MemexClientAuth
 from memex_common.client import RemoteMemexAPI
+from memex_common.config import MemexConfig
 
 from .config import ExcludeConfig, SyncConfig, WatchConfig, WatchMode
 from .scanner import _is_excluded
@@ -73,7 +75,7 @@ class VaultWatcher:
         sync_config: SyncConfig,
         watch_config: WatchConfig,
         server_url: str,
-        api_key: str | None,
+        config: MemexConfig,
         vault_id: str | None,
         on_sync: Any | None = None,
     ) -> None:
@@ -81,7 +83,7 @@ class VaultWatcher:
         self._sync_config = sync_config
         self._watch_config = watch_config
         self._server_url = server_url
-        self._api_key = api_key
+        self._config = config
         self._vault_id = vault_id
         self._on_sync = on_sync
         self._stop = False
@@ -89,10 +91,11 @@ class VaultWatcher:
     @asynccontextmanager
     async def _make_api(self) -> AsyncGenerator[RemoteMemexAPI, None]:
         base_url = f'{self._server_url.rstrip("/")}/api/v1/'
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers['X-API-Key'] = self._api_key
-        async with httpx.AsyncClient(base_url=base_url, timeout=240.0, headers=headers) as client:
+        # auth= re-resolves the credential per request so a refreshed OIDC token
+        # reaches this long-lived watcher without rebuilding the client.
+        async with httpx.AsyncClient(
+            base_url=base_url, timeout=240.0, auth=MemexClientAuth(self._config)
+        ) as client:
             yield RemoteMemexAPI(client)
 
     async def run(self) -> None:
@@ -205,11 +208,11 @@ async def run_watcher(
     sync_config: SyncConfig,
     watch_config: WatchConfig,
     server_url: str,
-    api_key: str | None,
+    config: MemexConfig,
     vault_id: str | None,
 ) -> None:
     """Run the watcher with signal handling."""
-    watcher = VaultWatcher(vault_path, sync_config, watch_config, server_url, api_key, vault_id)
+    watcher = VaultWatcher(vault_path, sync_config, watch_config, server_url, config, vault_id)
     loop = asyncio.get_running_loop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):

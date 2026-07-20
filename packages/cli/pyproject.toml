@@ -37,6 +37,11 @@ memex = "memex_cli:app"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "respx>=0.23.1",
+]
+
 [tool.hatch.version]
 source = "vcs"
 raw-options.root = "../.."

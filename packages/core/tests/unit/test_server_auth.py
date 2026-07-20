@@ -931,3 +931,112 @@ class TestCorsIntegration:
         )
         assert response.status_code == 200
         assert response.headers.get('access-control-allow-origin') == 'null'
+
+
+# ---------------------------------------------------------------------------
+# OIDC bearer-token authentication through the shared middleware
+# ---------------------------------------------------------------------------
+
+
+class _StubVerifier:
+    """Stands in for OidcVerifier: maps a token string to an AuthContext or None."""
+
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    async def verify(self, token):
+        return self._mapping.get(token)
+
+
+def _oidc_ctx(policy=Policy.WRITER, vault_ids=None):
+    return AuthContext(
+        key_prefix='oidc:user-1',
+        key_name='alice@example.com',
+        policy=policy,
+        permissions=POLICY_PERMISSIONS[policy],
+        vault_ids=vault_ids,
+        read_vault_ids=None,
+    )
+
+
+def _admin_app_with_verifier(auth_config, verifier):
+    app = FastAPI()
+    app.middleware('http')(auth_middleware)
+    setup_auth(app, auth_config)
+    if verifier is not None:
+        app.state.oidc_verifier = verifier
+
+    @app.get('/admin/test', dependencies=[Depends(require_admin_auth)])
+    async def admin_endpoint():
+        return {'ok': True}
+
+    return app
+
+
+class TestBearerTokenAuth:
+    """OIDC bearer tokens authenticate through the same middleware as API keys."""
+
+    def _app(self, auth_config, verifier):
+        app = _make_app(auth_config)
+        if verifier is not None:
+            app.state.oidc_verifier = verifier
+        return app
+
+    def test_valid_bearer_allowed(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, _StubVerifier({'good': _oidc_ctx()})))
+        r = client.get('/api/v1/notes', headers={'Authorization': 'Bearer good'})
+        assert r.status_code == 200
+
+    def test_invalid_bearer_returns_403(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, _StubVerifier({})))
+        r = client.get('/api/v1/notes', headers={'Authorization': 'Bearer bad'})
+        assert r.status_code == 403
+
+    def test_api_key_and_bearer_coexist(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, _StubVerifier({'good': _oidc_ctx()})))
+        assert client.get('/api/v1/notes', headers={'X-API-Key': VALID_KEY}).status_code == 200
+        assert (
+            client.get('/api/v1/notes', headers={'Authorization': 'Bearer good'}).status_code == 200
+        )
+
+    def test_api_key_header_takes_precedence(self):
+        """A present X-API-Key is authoritative: an invalid key is not rescued by a bearer."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, _StubVerifier({'good': _oidc_ctx()})))
+        r = client.get(
+            '/api/v1/notes',
+            headers={'X-API-Key': 'wrong', 'Authorization': 'Bearer good'},
+        )
+        assert r.status_code == 403
+
+    def test_bearer_rejected_without_verifier(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, None))
+        r = client.get('/api/v1/notes', headers={'Authorization': 'Bearer good'})
+        assert r.status_code == 403
+
+    def test_malformed_authorization_header_is_missing(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        client = TestClient(self._app(config, _StubVerifier({'good': _oidc_ctx()})))
+        # No "Bearer " scheme → treated as no credential → 401.
+        r = client.get('/api/v1/notes', headers={'Authorization': 'good'})
+        assert r.status_code == 401
+
+    def test_bearer_admin_allowed(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY, Policy.ADMIN)])
+        verifier = _StubVerifier({'admin': _oidc_ctx(Policy.ADMIN)})
+        client = TestClient(_admin_app_with_verifier(config, verifier))
+        assert (
+            client.get('/admin/test', headers={'Authorization': 'Bearer admin'}).status_code == 200
+        )
+
+    def test_bearer_non_admin_rejected_on_admin_route(self):
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY, Policy.ADMIN)])
+        verifier = _StubVerifier({'writer': _oidc_ctx(Policy.WRITER)})
+        client = TestClient(_admin_app_with_verifier(config, verifier))
+        assert (
+            client.get('/admin/test', headers={'Authorization': 'Bearer writer'}).status_code == 403
+        )

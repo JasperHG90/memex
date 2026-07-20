@@ -27,6 +27,7 @@ except ImportError:
 from memex_core.logging_config import configure_logging
 from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import auth_middleware, setup_auth
+from memex_core.server.oidc import setup_oidc
 from memex_core.server.consolidation import router as consolidation_router
 from memex_core.server.diagnostics import router as diagnostics_router
 from memex_core.server.lint import router as lint_router
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     configure_logging(level=log_level, json_output=config.server.logging.json_output)
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
+    setup_oidc(app, config.server.auth)
 
     # Set up OpenTelemetry tracing if enabled
     if config.server.tracing.enabled:

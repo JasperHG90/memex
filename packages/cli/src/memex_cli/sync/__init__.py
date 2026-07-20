@@ -292,7 +292,6 @@ async def watch(
 
     memex_config: MemexConfig = ctx.obj
     vault_id = cfg.vault_id or memex_config.write_vault
-    api_key_str = memex_config.api_key.get_secret_value() if memex_config.api_key else None
 
     console.print(f'Watch mode: [cyan]{cfg.watch.mode.value}[/cyan]')
     from .watcher import run_watcher
@@ -302,7 +301,7 @@ async def watch(
         sync_config=cfg.sync,
         watch_config=cfg.watch,
         server_url=memex_config.server_url,
-        api_key=api_key_str,
+        config=memex_config,
         vault_id=vault_id,
     )
 

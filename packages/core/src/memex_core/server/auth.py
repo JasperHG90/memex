@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -69,6 +69,74 @@ def _resolve_key(api_key: str, auth_config: AuthConfig) -> ApiKeyConfig | None:
         if secrets.compare_digest(api_key, key_config.key.get_secret_value()):
             return key_config
     return None
+
+
+def _context_from_key(api_key: str, key_config: ApiKeyConfig) -> AuthContext:
+    """Build an AuthContext from a resolved API key."""
+    return AuthContext(
+        key_prefix=api_key[:8] + '...',
+        key_name=key_config.description,
+        policy=key_config.policy,
+        permissions=POLICY_PERMISSIONS[key_config.policy],
+        vault_ids=key_config.vault_ids,
+        read_vault_ids=key_config.read_vault_ids,
+    )
+
+
+def _bearer_token(request: Request) -> str | None:
+    """Extract a non-empty bearer token from the Authorization header, or None."""
+    header = request.headers.get('Authorization')
+    if not header:
+        return None
+    scheme, _, value = header.partition(' ')
+    if scheme.lower() == 'bearer' and value.strip():
+        return value.strip()
+    return None
+
+
+@dataclass(frozen=True)
+class AuthFailure:
+    """A non-authenticated outcome. ``kind`` lets each caller pick its own
+    status code and audit action string without the shared resolver deciding
+    HTTP semantics (the middleware returns a response; the admin dependency
+    raises)."""
+
+    kind: Literal['missing', 'invalid']
+
+
+async def authenticate_request(
+    request: Request, auth_config: AuthConfig | None
+) -> AuthContext | AuthFailure:
+    """Resolve the request's credential into an AuthContext, or an AuthFailure.
+
+    Tries ``X-API-Key`` first (unchanged key path); if that header is absent,
+    tries ``Authorization: Bearer`` against the configured OIDC verifier
+    (``request.app.state.oidc_verifier``). Returns ``AuthFailure('missing')``
+    when neither credential is present and ``AuthFailure('invalid')`` when a
+    presented credential does not resolve.
+
+    This function never raises HTTP errors — raising inside
+    ``BaseHTTPMiddleware`` would bypass FastAPI's exception handlers and surface
+    as a 500. Callers translate the result into their own response.
+    """
+    api_key = request.headers.get('X-API-Key')
+    if api_key:
+        key_config = _resolve_key(api_key, auth_config) if auth_config else None
+        if key_config is None:
+            return AuthFailure('invalid')
+        return _context_from_key(api_key, key_config)
+
+    token = _bearer_token(request)
+    if token:
+        verifier = getattr(request.app.state, 'oidc_verifier', None)
+        if verifier is None:
+            return AuthFailure('invalid')
+        context = await verifier.verify(token)
+        if context is None:
+            return AuthFailure('invalid')
+        return context
+
+    return AuthFailure('missing')
 
 
 # ---------------------------------------------------------------------------
@@ -149,21 +217,22 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         return await call_next(request)
 
     audit = _get_audit_service(request)
-    api_key = request.headers.get('X-API-Key')
+    result = await authenticate_request(request, auth_config)
 
-    if not api_key:
-        if audit:
-            audit.log(
-                action='auth.missing_key',
-                details={'path': request_path, 'method': request.method},
+    if isinstance(result, AuthFailure):
+        if result.kind == 'missing':
+            if audit:
+                audit.log(
+                    action='auth.missing_key',
+                    details={'path': request_path, 'method': request.method},
+                )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    'detail': 'Missing API key. Provide an X-API-Key or '
+                    'Authorization: Bearer credential.'
+                },
             )
-        return JSONResponse(
-            status_code=401,
-            content={'detail': 'Missing API key. Provide X-API-Key header.'},
-        )
-
-    key_config = _resolve_key(api_key, auth_config)
-    if key_config is None:
         if audit:
             audit.log(
                 action='auth.failure',
@@ -171,23 +240,14 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
             )
         return JSONResponse(
             status_code=403,
-            content={'detail': 'Invalid API key.'},
+            content={'detail': 'Invalid API key or bearer token.'},
         )
 
-    # Build auth context and attach to request state.
-    key_prefix = api_key[:8] + '...'
-    key_name = key_config.description
-    request.state.auth_context = AuthContext(
-        key_prefix=key_prefix,
-        key_name=key_name,
-        policy=key_config.policy,
-        permissions=POLICY_PERMISSIONS[key_config.policy],
-        vault_ids=key_config.vault_ids,
-        read_vault_ids=key_config.read_vault_ids,
-    )
+    # Attach the resolved auth context to request state.
+    request.state.auth_context = result
 
     # Set actor in context for downstream middleware and route handlers
-    actor = f'{key_name} ({key_prefix})' if key_name else key_prefix
+    actor = f'{result.key_name} ({result.key_prefix})' if result.key_name else result.key_prefix
     set_actor(actor)
 
     return await call_next(request)
@@ -292,31 +352,31 @@ async def require_admin_auth(request: Request) -> None:
     request_path = request.scope['path']
 
     audit = _get_audit_service(request)
-    api_key = request.headers.get('X-API-Key')
-    if not api_key:
-        if audit:
-            audit.log(
-                action='auth.admin.missing_key',
-                details={'path': request_path, 'method': request.method},
+
+    # Fail-closed: unlike the global middleware, admin auth always resolves the
+    # credential even when auth_config is None (global auth disabled).
+    result = await authenticate_request(request, auth_config)
+
+    if isinstance(result, AuthFailure):
+        if result.kind == 'missing':
+            if audit:
+                audit.log(
+                    action='auth.admin.missing_key',
+                    details={'path': request_path, 'method': request.method},
+                )
+            raise HTTPException(
+                status_code=401,
+                detail='Admin endpoints require authentication. Provide a valid '
+                'X-API-Key or Authorization: Bearer credential.',
             )
-        raise HTTPException(
-            status_code=401,
-            detail='Admin endpoints require authentication. Provide a valid X-API-Key header.',
-        )
-
-    if auth_config is None:
-        raise HTTPException(status_code=403, detail='Invalid API key.')
-
-    key_config = _resolve_key(api_key, auth_config)
-    if key_config is None:
         if audit:
             audit.log(
                 action='auth.admin.failure',
                 details={'path': request_path, 'method': request.method},
             )
-        raise HTTPException(status_code=403, detail='Invalid API key.')
+        raise HTTPException(status_code=403, detail='Invalid API key or bearer token.')
 
-    if key_config.policy != Policy.ADMIN:
+    if result.policy != Policy.ADMIN:
         if audit:
             audit.log(
                 action='auth.admin.insufficient',

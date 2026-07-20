@@ -3244,6 +3244,11 @@ sync = [
     { name = "watchdog" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=25.1.0" },
@@ -3263,6 +3268,9 @@ requires-dist = [
 ]
 provides-extras = ["mcp", "server", "sync"]
 
+[package.metadata.requires-dev]
+dev = [{ name = "respx", specifier = ">=0.23.1" }]
+
 [[package]]
 name = "memex-common"
 source = { editable = "packages/common" }
@@ -3278,6 +3286,11 @@ dependencies = [
     { name = "tomli-w" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=5" },
@@ -3291,6 +3304,9 @@ requires-dist = [
     { name = "tomli-w", specifier = ">=1.0.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "respx", specifier = ">=0.23.1" }]
+
 [[package]]
 name = "memex-core"
 source = { editable = "packages/core" }
@@ -3301,6 +3317,7 @@ dependencies = [
     { name = "async-lru" },
     { name = "asyncpg" },
     { name = "asyncstdlib" },
+    { name = "authlib" },
     { name = "cachetools" },
     { name = "cachetools-async" },
     { name = "cloudscraper" },
@@ -3368,6 +3385,11 @@ tracing = [
     { name = "opentelemetry-sdk" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aioclock", specifier = ">=0.3.0" },
@@ -3376,6 +3398,7 @@ requires-dist = [
     { name = "async-lru", specifier = ">=2.1.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "asyncstdlib", specifier = ">=3.13.1" },
+    { name = "authlib", specifier = ">=1.6.6" },
     { name = "cachetools", specifier = ">=6.2.4" },
     { name = "cachetools-async", specifier = ">=0.0.5" },
     { name = "cloudscraper", specifier = ">=1.2.71,<2" },
@@ -3429,7 +3452,7 @@ requires-dist = [
 provides-extras = ["cloud", "dev-server", "diagnostics", "gcs", "gpu", "s3", "tracing"]
 
 [package.metadata.requires-dev]
-dev = []
+dev = [{ name = "respx", specifier = ">=0.23.1" }]
 
 [[package]]
 name = "memex-eval"

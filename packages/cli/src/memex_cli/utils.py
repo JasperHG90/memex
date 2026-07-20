@@ -17,6 +17,7 @@ from rich.console import Console
 from typer.core import TyperGroup
 from typer.main import get_command as typer_get_command
 
+from memex_common.auth_client import MemexClientAuth
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 
@@ -89,6 +90,7 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'lint': 'memex_cli.lint:app',
     'stats': 'memex_cli.stats:app',
     'config': 'memex_cli.config:app',
+    'auth': 'memex_cli.auth:app',
     'server': 'memex_cli.server:app',
     'database': 'memex_cli.db:app',
     'mcp': 'memex_cli.mcp:app',
@@ -112,11 +114,9 @@ async def get_api_context(
     server_url = config.server_url
     base_url = f'{server_url.rstrip("/")}/api/v1/'
 
-    headers = {}
-    if config.api_key:
-        headers['X-API-Key'] = config.api_key.get_secret_value()
-
-    async with httpx.AsyncClient(base_url=base_url, timeout=240.0, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=240.0, auth=MemexClientAuth(config)
+    ) as client:
         yield RemoteMemexAPI(client)
 
 

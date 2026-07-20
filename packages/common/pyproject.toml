@@ -38,3 +38,8 @@ artifacts = ["src/memex_common/prompts/*.toml"]
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/memex_common/__about__.py"
+
+[dependency-groups]
+dev = [
+    "respx>=0.23.1",
+]
