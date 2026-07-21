@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -1910,3 +1910,109 @@ def test_corrupt_spill_file_is_tolerated(tmp_path: Path, monkeypatch: pytest.Mon
             assert provider._pending == []
         finally:
             provider.shutdown()
+
+
+def test_spill_roundtrips_append_uuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A create + append queue must spill through _spill_to_disk (append_id
+    UUID->str) and reload through _load_spill (str->UUID) so a multi-chunk
+    session survives a restart and the reloaded append re-applies with the
+    same idempotency id. This pins the most common real path (one create,
+    N appends) — a regression there would silently lose whole sessions."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    # Session 1: server unreachable so both writes stay queued and spill.
+    api1 = _fake_ok_api()
+    api1.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    api1.append_to_note = AsyncMock(side_effect=RuntimeError('down'))
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api1):
+        p1 = MemexMemoryProvider()
+        p1.initialize('s1', hermes_home=str(tmp_path), platform='cli')
+        key = p1._session_note_key
+        p1.sync_turn('q1', 'a1')
+        p1.on_pre_compress([])  # create
+        _drain(p1)
+        p1.sync_turn('q2', 'a2')
+        p1.on_pre_compress([])  # append (create still pending → append)
+        _drain(p1)
+        assert [e['kind'] for e in p1._pending] == ['create', 'append']
+        original_append_id = p1._pending[1]['append_id']
+        assert isinstance(original_append_id, UUID)
+        p1.shutdown()
+
+    # The spill file went through _spill_to_disk: append_id is a str.
+    spill = _spill_file(tmp_path)
+    raw = json.loads(spill.read_text())
+    assert [e['kind'] for e in raw] == ['create', 'append']
+    assert raw[1]['append_id'] == str(original_append_id)
+
+    # Session 2: server healthy → replay drains; append_id round-trips to UUID.
+    api2 = _fake_ok_api()
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api2):
+        p2 = MemexMemoryProvider()
+        p2.initialize('s2', hermes_home=str(tmp_path), platform='cli')
+        try:
+            _drain(p2)
+            assert api2.ingest.call_args.args[0].note_key == key
+            api2.append_to_note.assert_awaited_once()
+            akw = api2.append_to_note.call_args.kwargs
+            assert akw['note_key'] == key
+            assert akw['append_id'] == original_append_id
+            assert p2._pending == []
+        finally:
+            p2.shutdown()
+    assert not spill.exists()
+
+
+def test_concurrent_enqueue_during_inflight_worker_drains_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Lost-wakeup handshake: a chunk enqueued WHILE the worker is mid-flight
+    must be drained by that same worker (no strand), and no second worker is
+    spawned. The create ingest is held until the second chunk is enqueued."""
+    import asyncio
+    import threading
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    api = _fake_ok_api()
+    row = {'exists': False}
+    gate = threading.Event()
+
+    async def _ingest(dto, background=True):
+        # Block the in-flight worker until the test enqueues the 2nd chunk.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, gate.wait, 2.0)
+        row['exists'] = True
+        return SimpleNamespace(status='ok', note_id=str(uuid4()))
+
+    async def _head(note_id):
+        return row['exists']
+
+    api.ingest = AsyncMock(side_effect=_ingest)
+    api.head_note = AsyncMock(side_effect=_head)
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        p = MemexMemoryProvider()
+        p.initialize('s', hermes_home=str(tmp_path), platform='cli')
+        try:
+            p.sync_turn('q1', 'a1')
+            p.on_pre_compress([])  # create → worker starts, blocks in ingest
+            worker = p._bg_drain_thread
+            p.sync_turn('q2', 'a2')
+            p.on_pre_compress([])  # append enqueued while worker is in-flight
+            # Same worker must still be the one on record (no 2nd spawn).
+            assert p._bg_drain_thread is worker
+            gate.set()  # release the create ingest
+            _drain(p)
+            assert p._pending == []
+            api.ingest.assert_awaited_once()
+            api.append_to_note.assert_awaited_once()
+        finally:
+            gate.set()
+            p.shutdown()
