@@ -4,12 +4,14 @@ import asyncio
 import importlib
 import json
 import logging
+from difflib import get_close_matches
 from enum import Enum
 from functools import wraps
 from typing import Annotated, Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
+import click
 import httpx
 import typer
 from box import Box
@@ -79,6 +81,17 @@ def resolve_list_format(output_format: ListFormat, json_flag: bool) -> ListForma
     return ListFormat.json if json_flag else output_format
 
 
+# Typer vendors its own copy of click in recent versions, so command resolution can
+# raise either the public click UsageError or typer's vendored one. Catch whichever
+# exist so the typo-suggestion handler below works across typer versions.
+_USAGE_ERRORS: tuple[type[click.exceptions.UsageError], ...]
+try:
+    from typer import _click as _typer_click
+
+    _USAGE_ERRORS = (click.exceptions.UsageError, _typer_click.exceptions.UsageError)
+except Exception:  # pragma: no cover - older typer without a vendored click
+    _USAGE_ERRORS = (click.exceptions.UsageError,)
+
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {
     'vault': 'memex_cli.vaults:app',
@@ -130,6 +143,28 @@ class LazyTyperGroup(TyperGroup):
         """List available commands, including lazy-loaded ones."""
         base = super().list_commands(ctx)
         return list(sorted(base + list(LAZY_SUBCOMMANDS.keys())))
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        """Resolve a command, including lazy-loaded names in typo suggestions.
+
+        Typer's base builds its "Did you mean ...?" suggestions from ``self.commands``,
+        which holds only the eagerly-registered commands. The lazy subcommands live in
+        ``LAZY_SUBCOMMANDS`` and would never be suggested. Delegate to the base, then —
+        when it produced no suggestion — match the typo against the full ``list_commands``
+        set (names only; no module import is triggered).
+        """
+        try:
+            return super().resolve_command(ctx, args)
+        except _USAGE_ERRORS as exc:
+            already_suggested = 'Did you mean' in (exc.message or '')
+            if getattr(self, 'suggest_commands', True) and args and not already_suggested:
+                matches = get_close_matches(args[0], self.list_commands(ctx))
+                if matches:
+                    suggestions = ', '.join(f'{match!r}' for match in matches)
+                    exc.message = f'{exc.message.rstrip(".")}. Did you mean {suggestions}?'
+            raise
 
     def get_command(self, ctx: Any, cmd_name: str) -> Any | None:
         """Get a command, loading it if it's in the lazy map."""
