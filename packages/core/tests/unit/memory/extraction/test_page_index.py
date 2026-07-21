@@ -1542,6 +1542,18 @@ class TestProcessSingleChunkMatching:
         assert elapsed < 2.0  # secondary smoke check
 
     @pytest.mark.asyncio
+    async def test_short_verbatim_header_kept_via_fast_path(self) -> None:
+        # A <4-char header present verbatim must be kept by the exact-match fast
+        # path (chunk.index + continue), NOT dropped by locate_span's <4 floor —
+        # which never runs for it because the fast path `continue`s first. Guards
+        # the exact-match branch against ever losing its append/continue.
+        chunk = 'preamble\nFAQ\nbody text here'
+        result = await _run_chunk([_mk_header('FAQ')], chunk, offset=0)
+        assert len(result) == 1
+        assert result[0].exact_text == 'FAQ'
+        assert result[0].start_index == chunk.index('FAQ')
+
+    @pytest.mark.asyncio
     async def test_verbatim_header_uses_fast_path_unchanged(self) -> None:
         chunk = 'intro text\nProject Overview\nbody text'
         result = await _run_chunk([_mk_header('Project Overview')], chunk, offset=100)
