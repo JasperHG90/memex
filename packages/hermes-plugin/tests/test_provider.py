@@ -2016,3 +2016,95 @@ def test_concurrent_enqueue_during_inflight_worker_drains_all(
         finally:
             gate.set()
             p.shutdown()
+
+
+def test_drain_worker_swallows_cancellation_on_daemon_thread(provider_with_append_api):
+    """The daemon-thread target must NOT let _PROPAGATE_EXCEPTIONS escape
+    (which would crash the worker with an unhandled-thread-exception). The
+    synchronous _drain_pending_sync still re-raises; the _drain_worker wrapper
+    swallows it. Items stay queued for retry."""
+    import asyncio
+
+    provider, api, _ = provider_with_append_api
+    api.ingest = AsyncMock(side_effect=asyncio.CancelledError())
+    provider._api.ingest = api.ingest
+    with provider._state_lock:
+        provider._pending.append(
+            {
+                'kind': 'create',
+                'content': 'q\n\na',
+                'title': 't',
+                'note_key': provider._session_note_key,
+                'vault_id': None,
+            }
+        )
+    # The thread target must return cleanly, not raise.
+    provider._drain_worker()
+    assert len(provider._pending) == 1
+    # Let fixture teardown drain cleanly.
+    provider._api.ingest = AsyncMock(
+        return_value=SimpleNamespace(status='ok', note_id=str(uuid4()))
+    )
+
+
+def test_worker_start_failure_clears_marker_and_recovers(provider_with_append_api):
+    """If threading.Thread.start() fails (resource exhaustion), the marker
+    must be cleared so a later flush can spawn a fresh worker — otherwise the
+    queue would grow without bound behind a dead marker."""
+    import threading
+
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q', 'a')
+
+    with patch.object(
+        threading.Thread, 'start', side_effect=RuntimeError("can't start new thread")
+    ):
+        provider.on_session_end([])
+
+    # Marker cleared; the chunk is still queued (never drained).
+    assert provider._bg_drain_thread is None
+    assert len(provider._pending) == 1
+
+    # Recovery: a normal drain now spawns a worker and drains the backlog.
+    provider._drain_pending()
+    _drain(provider)
+    api.ingest.assert_awaited_once()
+    assert provider._pending == []
+
+
+def test_spill_entry_with_non_str_vault_id_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A corrupt spill entry whose vault_id is not str|None must be dropped,
+    not passed through to the server."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(
+        json.dumps(
+            [
+                {
+                    'kind': 'create',
+                    'content': 'x',
+                    'title': 't',
+                    'note_key': 'k',
+                    'vault_id': 123,  # not str|None
+                }
+            ]
+        )
+    )
+
+    api = _fake_ok_api()
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-x', hermes_home=str(tmp_path), platform='cli')
+        try:
+            _drain(provider)
+            assert provider._pending == []
+            api.ingest.assert_not_awaited()
+        finally:
+            provider.shutdown()

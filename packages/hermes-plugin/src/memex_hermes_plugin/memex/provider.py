@@ -847,11 +847,35 @@ class MemexMemoryProvider(MemoryProvider):
                 return  # A worker is running; it will see the newly-enqueued item.
             if not self._pending:
                 return
-            worker = threading.Thread(
-                target=self._drain_pending_sync, name='memex-drain', daemon=True
-            )
+            worker = threading.Thread(target=self._drain_worker, name='memex-drain', daemon=True)
             self._bg_drain_thread = worker
-        worker.start()
+        try:
+            worker.start()
+        except (RuntimeError, OSError) as e:
+            # Thread-resource exhaustion. Clear the marker we just set so a
+            # future flush can retry — otherwise it points at an unstarted
+            # thread forever and the queue would grow without bound.
+            with self._state_lock:
+                if self._bg_drain_thread is worker:
+                    self._bg_drain_thread = None
+            logger.warning('Failed to start session-note drain worker: %s: %s', type(e).__name__, e)
+
+    def _drain_worker(self) -> None:
+        """Daemon-thread target wrapping the synchronous drain body.
+
+        ``_drain_pending_sync`` re-raises ``_PROPAGATE_EXCEPTIONS``
+        (cancellation / interpreter shutdown) so a synchronous caller — and
+        the A.6 test — can observe it. On this daemon thread there is no
+        caller to observe it, and letting it escape the target produces a
+        noisy unhandled-thread-exception. Swallow it here: the pending items
+        stay queued for the next flush (the "don't swallow into a generic
+        retry" contract is preserved on the synchronous path), and
+        ``_bg_drain_thread`` was already cleared by the inner ``finally``.
+        """
+        try:
+            self._drain_pending_sync()
+        except _PROPAGATE_EXCEPTIONS:
+            logger.debug('Session-note drain worker aborted (cancellation/shutdown)')
 
     def _drain_pending_sync(self) -> None:
         """Drain the pending queue FIFO (background worker body).
@@ -880,6 +904,11 @@ class MemexMemoryProvider(MemoryProvider):
                             self._bg_drain_thread = None
                         return
                     head = self._pending[0]
+                if self._api is None or self._config is None:
+                    # Torn down (e.g. shutdown nulled the client after the
+                    # bounded join timed out). Stop cleanly; items stay queued
+                    # and are spilled by shutdown.
+                    return
                 note_key = head['note_key']
                 try:
                     if head['kind'] == 'create':
@@ -1086,6 +1115,9 @@ class MemexMemoryProvider(MemoryProvider):
         if entry.get('kind') not in ('create', 'append'):
             return None
         if not entry.get('note_key') or not entry.get('content'):
+            return None
+        vault_id = entry.get('vault_id')
+        if vault_id is not None and not isinstance(vault_id, str):
             return None
         e = dict(entry)
         if e['kind'] == 'append':
