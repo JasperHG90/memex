@@ -17,6 +17,7 @@ scope = "local"
 1385a5f1be8c889c = "https://github.com/athola/claude-night-market"
 4290899e4697f267 = "https://github.com/jasperhg90/skills"
 8b8de8ec329cb5d5 = "https://github.com/jasperhg90/memex"
+ef9f6a17bd3105b7 = "https://github.com/jasperhg90/loop-engineering-harness"
 
 [[rule]]
 qualified_name = "1385a5f1be8c889c/slop-scan-for-docs"
@@ -58,20 +59,6 @@ qualified_name = "4290899e4697f267/uv-installer"
 repo_alias = "4290899e4697f267"
 source_path = "rules/uv-installer.md"
 pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-risk_acknowledged = false
-
-[[skill]]
-qualified_name = "4290899e4697f267/pageindex"
-repo_alias = "4290899e4697f267"
-source_path = "skills/tools/pageindex"
-target_dir = ".claude/skills/pageindex"
-risk_acknowledged = false
-
-[[skill]]
-qualified_name = "4290899e4697f267/terminal-gif"
-repo_alias = "4290899e4697f267"
-source_path = "skills/documentation/terminal-gif"
-target_dir = ".claude/skills/terminal-gif"
 risk_acknowledged = false
 
 [[skill]]
@@ -122,18 +109,18 @@ target_dir = ".claude/skills/release"
 pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 risk_acknowledged = false
 
-[[subagent]]
-qualified_name = "4290899e4697f267/dependency-analyst"
+[[skill]]
+qualified_name = "4290899e4697f267/pageindex"
 repo_alias = "4290899e4697f267"
-source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
-target_path = ".claude/agents/dependency-analyst.md"
+source_path = "skills/tools/pageindex"
+target_dir = ".claude/skills/pageindex"
 risk_acknowledged = false
 
-[[subagent]]
-qualified_name = "4290899e4697f267/grader"
+[[skill]]
+qualified_name = "4290899e4697f267/terminal-gif"
 repo_alias = "4290899e4697f267"
-source_path = "skills/tools/agent-creator/agents/grader.md"
-target_path = ".claude/agents/grader.md"
+source_path = "skills/documentation/terminal-gif"
+target_dir = ".claude/skills/terminal-gif"
 risk_acknowledged = false
 
 [[subagent]]
@@ -152,6 +139,20 @@ target_path = ".claude/agents/feature-planner.md"
 pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 risk_acknowledged = false
 
+[[subagent]]
+qualified_name = "4290899e4697f267/dependency-analyst"
+repo_alias = "4290899e4697f267"
+source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
+target_path = ".claude/agents/dependency-analyst.md"
+risk_acknowledged = false
+
+[[subagent]]
+qualified_name = "4290899e4697f267/grader"
+repo_alias = "4290899e4697f267"
+source_path = "skills/tools/agent-creator/agents/grader.md"
+target_path = ".claude/agents/grader.md"
+risk_acknowledged = false
+
 [[plugin]]
 qualified_name = "8b8de8ec329cb5d5/memex"
 repo_alias = "8b8de8ec329cb5d5"
@@ -159,4 +160,12 @@ flavor = "claude"
 source_path = "packages/claude-code-plugin"
 marketplace_name = "memex"
 pin = "df13d6b1a7ae5e6f4bcd8b7b0e6c7268dc937494"
+risk_acknowledged = false
+
+[[plugin]]
+qualified_name = "ef9f6a17bd3105b7/loop-harness"
+repo_alias = "ef9f6a17bd3105b7"
+flavor = "claude"
+source_path = ""
+marketplace_name = "loop-harness"
 risk_acknowledged = false
