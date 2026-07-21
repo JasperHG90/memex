@@ -7,6 +7,7 @@ import pytest
 
 from memex_core.memory.extraction.models import (
     BlockSummary,
+    DetectedHeader,
     PageIndexBlock,
     PageIndexOutput,
     SectionSummary,
@@ -20,13 +21,17 @@ from memex_core.memory.extraction.pipeline.diffing import (
 )
 from memex_core.memory.extraction.utils import (
     assess_structure_quality,
+    bounded_fuzzy,
     build_tree_from_regex_headers,
     compute_coverage,
     detect_markdown_headers_regex,
     filter_valid_nodes,
     generate_blocks_and_assign_ids,
     hydrate_tree,
+    locate_span,
+    normalize_with_offsets,
     strip_header_from_content,
+    verify_headers,
 )
 from memex_core.memory.extraction.core import AsyncMarkdownPageIndex, index_document
 
@@ -1388,3 +1393,236 @@ class TestConcurrencyKwargFlow:
         assert captured_kwargs['refine_max_concurrency'] == 3
         assert captured_kwargs['summarize_max_concurrency'] == 7
         assert captured_kwargs['gap_rescan_threshold_tokens'] == 1500
+
+
+# ---------------------------------------------------------------------------
+# Header-location matching: normalize_with_offsets / locate_span / bounded_fuzzy
+#
+# Regression for the page_index wedge: an unbounded synchronous approximate
+# regex (`{e<=tolerance}`) over the full chunk, whose cost is exponential in the
+# edit budget, ran on the asyncio event loop and pegged a CPU core forever on a
+# non-verbatim `exact_text`. These verify the replacement stays bounded and the
+# offset remapping is exact.
+# ---------------------------------------------------------------------------
+
+
+def _mk_header(exact_text: str, *, start_index: int | None = None) -> DetectedHeader:
+    return DetectedHeader(
+        reasoning='test',
+        exact_text=exact_text,
+        clean_title=exact_text.strip(),
+        level_hint='#',
+        start_index=start_index,
+    )
+
+
+class TestNormalizeWithOffsets:
+    def test_plain_ascii_is_identity_mapping(self) -> None:
+        norm, starts, ends = normalize_with_offsets('Hello')
+        assert norm == 'hello'
+        assert starts == [0, 1, 2, 3, 4]
+        assert ends == [1, 2, 3, 4, 5]
+
+    def test_whitespace_run_collapses_to_single_space_spanning_the_run(self) -> None:
+        norm, starts, ends = normalize_with_offsets('Foo   Bar')  # 3 spaces
+        assert norm == 'foo bar'
+        # The single collapsed space maps back to the whole 3-char run [3, 6).
+        space_idx = norm.index(' ')
+        assert (starts[space_idx], ends[space_idx]) == (3, 6)
+        # 'b' resumes at original index 6.
+        assert starts[space_idx + 1] == 6
+
+    def test_length_changing_casefold_shares_source_span(self) -> None:
+        # 'ß'.casefold() == 'ss' — two normalized chars, one source char.
+        norm, starts, ends = normalize_with_offsets('ßx')
+        assert norm == 'ssx'
+        assert starts == [0, 0, 1]
+        assert ends == [1, 1, 2]
+
+    def test_smart_quotes_and_dashes_fold_to_ascii(self) -> None:
+        norm, _, _ = normalize_with_offsets('Team’s — Report')
+        assert "team's - report" in norm
+
+
+class TestLocateSpan:
+    def _locate(self, haystack: str, needle: str) -> tuple[int, int] | None:
+        norm, starts, ends = normalize_with_offsets(haystack)
+        return locate_span(norm, starts, ends, needle)
+
+    def test_case_drift_returns_exact_original_span(self) -> None:
+        span = self._locate('The Quick Brown Fox', 'quick brown')
+        assert span is not None
+        start, end = span
+        assert 'The Quick Brown Fox'[start:end] == 'Quick Brown'
+
+    def test_whitespace_drift_needle_maps_to_verbatim_source(self) -> None:
+        # Needle has one space; source has three. The returned span is verbatim.
+        span = self._locate('Foo   Bar', 'Foo Bar')
+        assert span is not None
+        start, end = span
+        assert 'Foo   Bar'[start:end] == 'Foo   Bar'
+
+    def test_absent_needle_returns_none_not_bogus_span(self) -> None:
+        # str.find returns -1; without the guard this returns a reversed span.
+        assert self._locate('Hello world of things', 'xyzzy plugh') is None
+
+    def test_short_needle_rejected(self) -> None:
+        assert self._locate('The FAQ Section', 'faq') is None
+
+
+class TestBoundedFuzzy:
+    def test_needle_over_max_len_returns_none_without_regex_call(self) -> None:
+        # The length cap is the load-bearing guard: a long non-substring needle
+        # must short-circuit BEFORE any regex.search (the exponential path).
+        with patch('memex_core.memory.extraction.utils.regex.search') as mock_search:
+            result = bounded_fuzzy('x' * 5000, 'y' * 200, max_len=120)
+        assert result is None
+        mock_search.assert_not_called()
+
+    def test_regex_timeout_is_caught_and_returns_none(self) -> None:
+        # regex raises builtin TimeoutError (an OSError subclass) on timeout — it
+        # is NOT covered by regex.error/ValueError/RuntimeError, so it must be
+        # caught explicitly or it becomes an uncaught crash.
+        with patch(
+            'memex_core.memory.extraction.utils.regex.search',
+            side_effect=TimeoutError('timed out'),
+        ):
+            assert bounded_fuzzy('some haystack text here', 'needle') is None
+
+    def test_short_needle_rejected_before_regex(self) -> None:
+        # Mirrors locate_span's <4 floor: a mis-transcribed 1-3 char header must
+        # not fuzzy-match spuriously at position 0.
+        with patch('memex_core.memory.extraction.utils.regex.search') as mock_search:
+            assert bounded_fuzzy('Some Body Text Here', 'Zz') is None
+        mock_search.assert_not_called()
+
+    def test_typo_within_tolerance_matches(self) -> None:
+        span = bounded_fuzzy('See the Introduction below', 'Introducton')  # missing 'i'
+        assert span is not None
+        start, end = span
+        # Approximate matching may include a boundary space to minimize edit
+        # distance; the recovered token is what matters.
+        assert 'See the Introduction below'[start:end].strip() == 'Introduction'
+
+
+async def _run_chunk(
+    headers: list[DetectedHeader], chunk: str, offset: int = 0
+) -> list[DetectedHeader]:
+    indexer = AsyncMarkdownPageIndex(lm=MagicMock())
+    pred = MagicMock()
+    pred.detected_headers = headers
+    with patch(
+        'memex_core.memory.extraction.core.run_dspy_operation',
+        new_callable=AsyncMock,
+        return_value=pred,
+    ):
+        return await indexer._process_single_chunk(chunk, '', offset)
+
+
+class TestProcessSingleChunkMatching:
+    @pytest.mark.asyncio
+    async def test_pathological_non_verbatim_header_completes_fast_and_is_dropped(
+        self,
+    ) -> None:
+        import time
+
+        # ~54k-char header-less prose — the shape that wedged production.
+        chunk = 'lorem ipsum dolor sit amet consectetur ' * 1400
+        # A 330-char span that is NOT in the chunk. On the old code this pegged a
+        # core forever; the length cap now drops it instantly.
+        bogus = 'zephyr quux frobnicate '.join(['alpha'] * 15)
+        assert bogus not in chunk
+        header = _mk_header(bogus)
+
+        start = time.perf_counter()
+        result = await _run_chunk([header], chunk)
+        elapsed = time.perf_counter() - start
+
+        assert result == []  # behavioral guard: dropped, not wedged
+        assert elapsed < 2.0  # secondary smoke check
+
+    @pytest.mark.asyncio
+    async def test_short_verbatim_header_kept_via_fast_path(self) -> None:
+        # A <4-char header present verbatim must be kept by the exact-match fast
+        # path (chunk.index + continue), NOT dropped by locate_span's <4 floor —
+        # which never runs for it because the fast path `continue`s first. Guards
+        # the exact-match branch against ever losing its append/continue.
+        chunk = 'preamble\nFAQ\nbody text here'
+        result = await _run_chunk([_mk_header('FAQ')], chunk, offset=0)
+        assert len(result) == 1
+        assert result[0].exact_text == 'FAQ'
+        assert result[0].start_index == chunk.index('FAQ')
+
+    @pytest.mark.asyncio
+    async def test_verbatim_header_uses_fast_path_unchanged(self) -> None:
+        chunk = 'intro text\nProject Overview\nbody text'
+        result = await _run_chunk([_mk_header('Project Overview')], chunk, offset=100)
+        assert len(result) == 1
+        assert result[0].exact_text == 'Project Overview'
+        assert result[0].start_index == 100 + chunk.index('Project Overview')
+
+    @pytest.mark.parametrize(
+        'source_header, drifted_needle',
+        [
+            ('Project Overview', 'project overview'),  # case
+            ('Project   Overview', 'Project Overview'),  # collapsed whitespace
+            ('Pre–flight Checklist', 'Pre-flight Checklist'),  # en-dash -> hyphen
+            ('Team’s Goals', "Team's Goals"),  # smart quote -> ascii
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_drift_recovers_and_rewrites_exact_text_to_verbatim(
+        self, source_header: str, drifted_needle: str
+    ) -> None:
+        chunk = f'preamble line\n{source_header}\nfollowing body'
+        result = await _run_chunk([_mk_header(drifted_needle)], chunk, offset=0)
+        assert len(result) == 1
+        h = result[0]
+        # exact_text MUST be rewritten to the verbatim source substring, else the
+        # paraphrase flows into verify_headers' fuzzy branch and moves the wedge.
+        assert h.exact_text == source_header
+        assert h.start_index is not None
+        assert chunk[h.start_index : h.start_index + len(source_header)] == source_header
+
+    @pytest.mark.asyncio
+    async def test_empty_or_whitespace_exact_text_is_dropped(self) -> None:
+        headers = [
+            _mk_header(''),
+            _mk_header('   '),
+            _mk_header('Project Overview'),  # valid, must survive
+        ]
+        chunk = 'intro\nProject Overview\nbody'
+        result = await _run_chunk(headers, chunk)
+        assert len(result) == 1  # no phantom position-0 headers
+        assert result[0].exact_text == 'Project Overview'
+
+
+class TestVerifyHeadersMatching:
+    def test_case_drift_recovers_and_rewrites_to_verbatim(self) -> None:
+        full_text = 'aaaaaaaaaa Project Overview bbbbbbbbbb'
+        pos = full_text.index('Project Overview')
+        # exact check fails (case differs), window search recovers it.
+        header = _mk_header('project overview', start_index=pos)
+        (result,) = verify_headers([header], full_text)
+        assert result.verified is True
+        assert result.exact_text == 'Project Overview'
+        assert full_text[result.start_index : result.start_index + 16] == 'Project Overview'
+
+    def test_pathological_non_match_completes_fast_and_is_unverified(self) -> None:
+        import time
+
+        full_text = 'x' * 5000
+        header = _mk_header('z' * 300, start_index=100)  # 300 chars, not present
+        start = time.perf_counter()
+        (result,) = verify_headers([header], full_text)
+        elapsed = time.perf_counter() - start
+        assert result.verified is False
+        assert elapsed < 2.0
+
+    def test_exact_match_verifies_without_fuzzy(self) -> None:
+        full_text = 'zzz Introduction zzz'
+        pos = full_text.index('Introduction')
+        header = _mk_header('Introduction', start_index=pos)
+        (result,) = verify_headers([header], full_text)
+        assert result.verified is True
+        assert result.exact_text == 'Introduction'
