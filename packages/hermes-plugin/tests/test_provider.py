@@ -29,6 +29,19 @@ def _write_test_config(tmp_path: Path) -> None:
     cfg.write_text(json.dumps(existing))
 
 
+def _drain(provider: MemexMemoryProvider) -> None:
+    """Deterministically finish the async background drain in a test.
+
+    Production drains are fire-and-forget (a daemon worker). Joining the
+    active worker makes the post-conditions observable — the worker loops
+    until the queue is empty, so one call before the assertions drains
+    everything currently queued.
+    """
+    worker = provider._bg_drain_thread
+    if worker is not None:
+        worker.join(timeout=10.0)
+
+
 @pytest.fixture
 def provider_with_stubbed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
@@ -355,6 +368,7 @@ def test_on_session_end_ingests_transcript(provider_with_stubbed_api):
     provider, api, _ = provider_with_stubbed_api
     provider.sync_turn('ping', 'pong', session_id='s')
     provider.on_session_end([])
+    _drain(provider)
     api.ingest.assert_awaited()
     dto = api.ingest.call_args.args[0]
     assert dto.note_key == provider._session_note_key
@@ -438,6 +452,7 @@ def test_first_flush_creates_note_via_ingest(provider_with_append_api):
     provider.sync_turn('hi', 'hello')
     provider.sync_turn('ping', 'pong')
     provider.on_session_end([])
+    _drain(provider)
 
     api.ingest.assert_awaited_once()
     api.append_to_note.assert_not_awaited()
@@ -453,11 +468,13 @@ def test_pre_compress_then_session_end_appends(provider_with_append_api):
     provider.sync_turn('q2', 'a2')
 
     provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+    _drain(provider)
     api.ingest.assert_awaited_once()
     api.append_to_note.assert_not_awaited()
 
     provider.sync_turn('q3', 'a3')
     provider.on_session_end([])
+    _drain(provider)
 
     api.ingest.assert_awaited_once()  # still only one create
     assert api.append_to_note.await_count == 1
@@ -502,6 +519,7 @@ def test_two_pre_compresses_both_persist(provider_with_append_api):
     # Final tail.
     provider.sync_turn('q5', 'a5')
     provider.on_session_end([])
+    _drain(provider)
 
     assert api.ingest.await_count == 1
     assert api.append_to_note.await_count == 2
@@ -521,6 +539,7 @@ def test_append_id_is_stable_for_retry(provider_with_append_api):
     # First flush succeeds (create).
     provider.sync_turn('q1', 'a1')
     provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+    _drain(provider)
     api.ingest.assert_awaited_once()
 
     # Force the next append to fail.
@@ -530,6 +549,7 @@ def test_append_id_is_stable_for_retry(provider_with_append_api):
 
     provider.sync_turn('q2', 'a2')
     provider.on_pre_compress([{'role': 'user', 'content': 'q2'}])
+    _drain(provider)
 
     assert api.append_to_note.await_count == 1
     failed_append_id = api.append_to_note.call_args.kwargs['append_id']
@@ -552,6 +572,7 @@ def test_append_id_is_stable_for_retry(provider_with_append_api):
 
     provider.sync_turn('q3', 'a3')
     provider.on_session_end([])
+    _drain(provider)
 
     sent_append_ids = [c.kwargs['append_id'] for c in api.append_to_note.call_args_list]
     assert failed_append_id in sent_append_ids
@@ -565,6 +586,7 @@ def test_session_end_with_empty_messages_falls_back_to_buffer(
     provider, api, _ = provider_with_append_api
     provider.sync_turn('only', 'turn')
     provider.on_session_end([])
+    _drain(provider)
     api.ingest.assert_awaited_once()
     body = _decode_ingest_body(api)
     assert 'only' in body and 'turn' in body
@@ -582,6 +604,7 @@ def test_session_end_with_empty_buffer_falls_back_to_messages(
             {'role': 'assistant', 'content': 'hi back'},
         ]
     )
+    _drain(provider)
     api.ingest.assert_awaited_once()
     body = _decode_ingest_body(api)
     assert 'hello' in body and 'hi back' in body
@@ -616,22 +639,24 @@ def test_double_session_end_does_not_duplicate(provider_with_append_api):
     provider.sync_turn('q', 'a')
     provider.on_session_end([])
     provider.on_session_end([])
+    _drain(provider)
     api.ingest.assert_awaited_once()
     api.append_to_note.assert_not_awaited()
 
 
 def test_create_failure_does_not_flip_initialized(provider_with_append_api):
-    """If the first ingest raises, _note_initialized must stay False so the
-    next flush retries the create — NOT skip ahead to append (which would
-    fail because the note doesn't exist yet)."""
+    """If the first ingest raises, the note_key must stay OUT of
+    _initialized_note_keys so the next flush retries the create — NOT skip
+    ahead to append (which would fail because the note doesn't exist yet)."""
     provider, api, _ = provider_with_append_api
     api.ingest = AsyncMock(side_effect=RuntimeError('5xx'))
     provider._api.ingest = api.ingest
 
     provider.sync_turn('q', 'a')
     provider.on_session_end([])
+    _drain(provider)
 
-    assert provider._note_initialized is False
+    assert provider._session_note_key not in provider._initialized_note_keys
     assert len(provider._pending) == 1
     assert provider._pending[0]['kind'] == 'create'
 
@@ -642,7 +667,7 @@ def test_create_failure_does_not_flip_initialized(provider_with_append_api):
     # Re-buffer some content to trigger a flush. Use shutdown's drain path.
     provider.shutdown()
     api.ingest.assert_awaited()
-    assert provider._note_initialized is True
+    assert provider._session_note_key in provider._initialized_note_keys
 
 
 def test_pending_queue_capped_to_protect_memory(provider_with_append_api):
@@ -660,6 +685,7 @@ def test_pending_queue_capped_to_protect_memory(provider_with_append_api):
     for i in range(_PENDING_MAX + 5):
         provider.sync_turn(f'q{i}', f'a{i}')
         provider.on_pre_compress([])
+        _drain(provider)
 
     assert len(provider._pending) == _PENDING_MAX
     # The head must be the 'create' — appends would orphan onto a
@@ -697,6 +723,7 @@ def test_recovery_after_outage_drains_queue(provider_with_append_api):
     provider.on_pre_compress([])
     provider.sync_turn('q4', 'a4')
     provider.on_pre_compress([])
+    _drain(provider)
 
     assert len(provider._pending) == 4
     assert [p['kind'] for p in provider._pending] == ['create', 'append', 'append', 'append']
@@ -735,6 +762,7 @@ def test_non_transient_4xx_drops_failing_entry(provider_with_append_api):
     # First flush succeeds (create).
     provider.sync_turn('q1', 'a1')
     provider.on_pre_compress([])
+    _drain(provider)
     api.ingest.assert_awaited_once()
 
     # Next append: server returns 422 (delta validation failure).
@@ -746,6 +774,7 @@ def test_non_transient_4xx_drops_failing_entry(provider_with_append_api):
 
     provider.sync_turn('q2', 'a2')
     provider.on_pre_compress([])
+    _drain(provider)
 
     # Bad entry is dropped; queue is empty.
     assert provider._pending == []
@@ -764,6 +793,7 @@ def test_non_transient_4xx_drops_failing_entry(provider_with_append_api):
     provider._api.append_to_note = api.append_to_note
     provider.sync_turn('q3', 'a3')
     provider.on_pre_compress([])
+    _drain(provider)
     api.append_to_note.assert_awaited_once()
     assert provider._pending == []
 
@@ -778,6 +808,7 @@ def test_transient_5xx_keeps_entry_for_retry(provider_with_append_api):
 
     provider.sync_turn('q1', 'a1')
     provider.on_pre_compress([])
+    _drain(provider)
 
     fake_response = httpx.Response(status_code=503, text='busy')
     fake_response._request = httpx.Request('POST', 'http://test/notes/append')
@@ -787,6 +818,7 @@ def test_transient_5xx_keeps_entry_for_retry(provider_with_append_api):
 
     provider.sync_turn('q2', 'a2')
     provider.on_pre_compress([])
+    _drain(provider)
 
     # 503 is transient — entry stays at head.
     assert len(provider._pending) == 1
@@ -840,7 +872,8 @@ def test_vault_rebind_after_note_initialized_is_ignored(
                 # Land the create in vault A.
                 provider.sync_turn('q', 'a')
                 provider.on_session_end([])
-                assert provider._note_initialized is True
+                _drain(provider)
+                assert provider._session_note_key in provider._initialized_note_keys
                 assert provider._vault_id == vault_a
 
                 # Trigger the rebind cadence; must be ignored since note is created.
@@ -869,7 +902,7 @@ def test_wait_for_note_row_retries_on_transient_5xx(provider_with_append_api):
     api.head_note = AsyncMock(side_effect=[transient, transient, True])
     provider._api.head_note = api.head_note
 
-    assert provider._wait_for_note_row(timeout=5.0) is True
+    assert provider._wait_for_note_row(provider._session_note_key, timeout=5.0) is True
     assert api.head_note.await_count == 3
 
 
@@ -889,7 +922,7 @@ def test_wait_for_note_row_bails_on_definitive_4xx(provider_with_append_api):
     api.head_note = AsyncMock(side_effect=bad)
     provider._api.head_note = api.head_note
 
-    assert provider._wait_for_note_row(timeout=10.0) is False
+    assert provider._wait_for_note_row(provider._session_note_key, timeout=10.0) is False
     # Bailed early — only one call, not the full poll-loop count.
     assert api.head_note.await_count == 1
 
@@ -924,12 +957,13 @@ def test_create_409_waits_for_note_row_and_pops_on_success(provider_with_append_
     # leaked fixture state. Fixtures are function-scoped so this should be
     # impossible today, but a future refactor that shares state across
     # tests would silently turn this assertion into a no-op.
-    assert provider._note_initialized is False
+    assert provider._session_note_key not in provider._initialized_note_keys
     provider.on_pre_compress([])
+    _drain(provider)
 
-    # Head popped, _note_initialized flipped, no orphaned create stays queued.
+    # Head popped, note_key marked initialized, no orphaned create stays queued.
     assert provider._pending == []
-    assert provider._note_initialized is True
+    assert provider._session_note_key in provider._initialized_note_keys
     api.head_note.assert_awaited()
 
 
@@ -963,11 +997,12 @@ def test_create_409_keeps_head_queued_if_wait_times_out(provider_with_append_api
 
     provider.sync_turn('q', 'a')
     provider.on_pre_compress([])
+    _drain(provider)
 
-    # Head MUST stay; _note_initialized must NOT flip.
+    # Head MUST stay; the note_key must NOT be marked initialized.
     assert len(provider._pending) == 1
     assert provider._pending[0]['kind'] == 'create'
-    assert provider._note_initialized is False
+    assert provider._session_note_key not in provider._initialized_note_keys
 
 
 def test_append_409_still_drops(provider_with_append_api):
@@ -983,6 +1018,7 @@ def test_append_409_still_drops(provider_with_append_api):
     # First flush succeeds (create).
     provider.sync_turn('q1', 'a1')
     provider.on_pre_compress([])
+    _drain(provider)
     api.ingest.assert_awaited_once()
 
     # Next append: 409.
@@ -994,6 +1030,7 @@ def test_append_409_still_drops(provider_with_append_api):
 
     provider.sync_turn('q2', 'a2')
     provider.on_pre_compress([])
+    _drain(provider)
 
     # Append entry dropped (current contract — not the 409-create special case).
     assert provider._pending == []
@@ -1027,7 +1064,7 @@ def test_wait_for_note_row_uses_exponential_backoff(provider_with_append_api):
         'memex_hermes_plugin.memex.provider.time.sleep',
         side_effect=lambda s: sleeps.append(s),
     ):
-        assert provider._wait_for_note_row(timeout=60.0) is True
+        assert provider._wait_for_note_row(provider._session_note_key, timeout=60.0) is True
 
     # Schedule: 0.1, 0.2, 0.5, 1.0, 2.0 — verify the prefix.
     assert sleeps[:5] == [0.1, 0.2, 0.5, 1.0, 2.0]
@@ -1072,6 +1109,11 @@ def test_drain_pending_propagates_cancelled_error(provider_with_append_api):
     cancelled state). `concurrent.futures.CancelledError` inherits from
     `Exception`, so the bare `except Exception` clause would swallow it
     without the explicit re-raise added by A.6.
+
+    The public drain is now fire-and-forget (a daemon worker), so a
+    cancellation raised inside it would surface on the worker thread, not
+    the caller. We exercise the worker body — ``_drain_pending_sync`` — on
+    this thread directly to assert the re-raise contract deterministically.
     """
     import asyncio
     import concurrent.futures
@@ -1080,7 +1122,18 @@ def test_drain_pending_propagates_cancelled_error(provider_with_append_api):
     api.ingest = AsyncMock(side_effect=asyncio.CancelledError())
     provider._api.ingest = api.ingest
 
-    provider.sync_turn('q', 'a')
+    # Queue a create WITHOUT launching the async worker, so the drain runs
+    # synchronously on this thread and the CancelledError is observable.
+    with provider._state_lock:
+        provider._pending.append(
+            {
+                'kind': 'create',
+                'content': 'q\n\na',
+                'title': 't',
+                'note_key': provider._session_note_key,
+                'vault_id': None,
+            }
+        )
     # Empirically run_sync surfaces concurrent.futures.CancelledError on the
     # caller thread (verified via a standalone repro: an asyncio Task whose
     # coroutine raises CancelledError enters the cancelled state, and
@@ -1089,10 +1142,17 @@ def test_drain_pending_propagates_cancelled_error(provider_with_append_api):
     # below admits the asyncio variant too — defensive against future
     # Python changes that unify the two classes, at zero cost.
     with pytest.raises((concurrent.futures.CancelledError, asyncio.CancelledError)):
-        provider.on_pre_compress([])
+        provider._drain_pending_sync()
     # Head still queued; future flush can retry once cancellation is handled.
     assert len(provider._pending) == 1
     assert provider._pending[0]['kind'] == 'create'
+
+    # Let the fixture-teardown shutdown drain cleanly instead of re-raising
+    # CancelledError on its background worker (which would surface as an
+    # unhandled-thread-exception warning).
+    provider._api.ingest = AsyncMock(
+        return_value=SimpleNamespace(status='ok', note_id=str(uuid4()))
+    )
 
 
 def test_vault_rebind_with_pending_create_is_ignored(
@@ -1144,6 +1204,7 @@ def test_vault_rebind_with_pending_create_is_ignored(
                 # Queue a create against vault A (will fail).
                 provider.sync_turn('q', 'a')
                 provider.on_session_end([])
+                _drain(provider)
                 assert len(provider._pending) == 1
                 assert provider._pending[0]['kind'] == 'create'
                 assert provider._pending[0]['vault_id'] == str(vault_a)
@@ -1219,6 +1280,7 @@ def test_vault_rebind_toctou_reverify_under_lock(tmp_path: Path, monkeypatch: py
                 # No create queued yet; refresh_vault would normally rotate.
                 # The side-effect injects a create during the network call.
                 provider.on_turn_start(1, 'msg')
+                _drain(provider)
 
                 # The create should be queued (from the side-effect).
                 assert any(p['kind'] == 'create' for p in provider._pending)
@@ -1268,6 +1330,7 @@ def test_pending_survives_session_end_buffer_clear(provider_with_append_api):
 
     provider.sync_turn('q', 'a')
     provider.on_session_end([])
+    _drain(provider)
 
     # Buffer cleared, but pending entry preserved.
     assert provider._turn_buffer == []
@@ -1471,6 +1534,7 @@ class TestSessionTitle:
         p, api = self._provider(tmp_path, monkeypatch)
         p.sync_turn('hi', 'hello')
         p.on_session_end([])
+        _drain(p)
         try:
             api.ingest.assert_awaited()
             dto = api.ingest.call_args.args[0]
@@ -1493,9 +1557,356 @@ class TestSessionTitle:
         try:
             p.sync_turn('hi', 'hello')
             p.on_pre_compress([{'role': 'user', 'content': 'bye'}])
+            _drain(p)
             api.ingest.assert_awaited()
             dto = api.ingest.call_args.args[0]
             assert 'fragment' not in dto.name
             assert 'coder' in dto.name and 'cli' in dto.name
         finally:
             p.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Async fire-and-forget drain + disk-spill durability
+# ---------------------------------------------------------------------------
+
+
+def _fake_ok_api():
+    """A fake RemoteMemexAPI whose create succeeds and whose note row
+    materialises only AFTER ingest (so the replay pre-create probe sees no
+    row on first look, then the post-create wait sees one)."""
+    api = Mock()
+    note_uuid = uuid4()
+    row = {'exists': False}
+    api.kv_get = AsyncMock(return_value=None)
+    api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+    api.get_session_briefing = AsyncMock(return_value='')
+    api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+    api.kv_put = AsyncMock()
+
+    async def _ingest(dto, background=True):
+        row['exists'] = True
+        return SimpleNamespace(status='ok', note_id=str(note_uuid))
+
+    api.ingest = AsyncMock(side_effect=_ingest)
+
+    async def _head(note_id):
+        return row['exists']
+
+    api.head_note = AsyncMock(side_effect=_head)
+
+    async def _append(**kwargs):
+        return SimpleNamespace(
+            status='success',
+            note_id=note_uuid,
+            append_id=uuid4(),
+            content_hash='x',
+            delta_bytes=1,
+            new_unit_ids=[],
+        )
+
+    api.append_to_note = AsyncMock(side_effect=_append)
+    return api
+
+
+def _spill_file(tmp_path: Path) -> Path:
+    from memex_hermes_plugin.memex.provider import _SPILL_FILE_NAME
+
+    return tmp_path / 'memex' / _SPILL_FILE_NAME
+
+
+def test_drain_launcher_is_non_blocking(provider_with_append_api):
+    """_drain_pending spawns a daemon worker and returns; joining it drains."""
+    import threading
+
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q', 'a')
+    provider.on_session_end([])
+    worker = provider._bg_drain_thread
+    assert isinstance(worker, threading.Thread)
+    _drain(provider)
+    api.ingest.assert_awaited_once()
+    assert provider._pending == []
+
+
+def test_spill_replay_lands_in_original_note_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Regression: a write spilled by a PREVIOUS session must replay under
+    its OWN note_key, not the new session's (the cross-session contamination
+    bug). Reproduced live before the fix: session A's transcript was written
+    under session B's key."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    key_a = 'hermes:session:2020-01-01T00:00:00.000Z'
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(
+        json.dumps(
+            [
+                {
+                    'kind': 'create',
+                    'content': 'TRANSCRIPT-FROM-SESSION-A',
+                    'title': 'Session A',
+                    'note_key': key_a,
+                    'vault_id': None,
+                }
+            ]
+        )
+    )
+
+    api = _fake_ok_api()
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-B', hermes_home=str(tmp_path), platform='cli')
+        try:
+            assert provider._session_note_key != key_a
+            _drain(provider)
+            api.ingest.assert_awaited()
+            dto = api.ingest.call_args.args[0]
+            # The create landed under SESSION A's key, not session B's.
+            assert dto.note_key == key_a
+            import base64
+
+            assert 'TRANSCRIPT-FROM-SESSION-A' in base64.b64decode(dto.content).decode()
+        finally:
+            provider.shutdown()
+    # Spill file consumed on replay.
+    assert not spill.exists()
+
+
+def test_replayed_create_does_not_block_current_session_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Per-key gating: a replayed create for SESSION A must not make session
+    B's first chunk enqueue as an append onto B's (not-yet-existent) note."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    key_a = 'hermes:session:2020-01-01T00:00:00.000Z'
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(
+        json.dumps(
+            [{'kind': 'create', 'content': 'A', 'title': 'A', 'note_key': key_a, 'vault_id': None}]
+        )
+    )
+
+    # Make ingest fail so the replayed A-create stays queued while we inspect
+    # what session B enqueues.
+    api = _fake_ok_api()
+    api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-B', hermes_home=str(tmp_path), platform='cli')
+        try:
+            _drain(provider)  # A-create attempted, fails, stays queued.
+            key_b = provider._session_note_key
+            provider.sync_turn('q', 'a')
+            provider.on_session_end([])
+            _drain(provider)
+            # Session B's first chunk is a CREATE for B, not an append.
+            b_entries = [p for p in provider._pending if p['note_key'] == key_b]
+            assert b_entries, 'session B enqueued nothing under its own key'
+            assert b_entries[0]['kind'] == 'create'
+        finally:
+            provider.shutdown()
+
+
+def test_undrained_writes_spill_to_disk_on_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """If the server is unreachable, shutdown persists the pending queue to
+    disk (with note_key) so it survives the restart."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    api = _fake_ok_api()
+    api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-x', hermes_home=str(tmp_path), platform='cli')
+        key = provider._session_note_key
+        provider.sync_turn('q', 'a')
+        provider.on_session_end([])
+        _drain(provider)
+        assert len(provider._pending) == 1
+        provider.shutdown()
+
+    spill = _spill_file(tmp_path)
+    assert spill.exists()
+    data = json.loads(spill.read_text())
+    assert len(data) == 1
+    assert data[0]['kind'] == 'create'
+    assert data[0]['note_key'] == key
+
+
+def test_clean_shutdown_leaves_no_spill_file(provider_with_append_api, tmp_path: Path):
+    """On a healthy shutdown the worker drains everything, so no spill file
+    is left behind."""
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q', 'a')
+    provider.on_session_end([])
+    _drain(provider)
+    provider.shutdown()
+    assert not _spill_file(tmp_path).exists()
+
+
+def test_shutdown_joins_worker_so_slow_write_drains_not_spills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A slow-but-successful ingest must be JOINED at shutdown (up to the
+    bounded timeout) so it drains rather than getting spilled — proves the
+    join-before-teardown ordering."""
+    import asyncio
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    api = _fake_ok_api()
+    row = {'exists': False}
+
+    async def _slow_ingest(dto, background=True):
+        await asyncio.sleep(0.2)
+        row['exists'] = True
+        return SimpleNamespace(status='ok', note_id=str(uuid4()))
+
+    async def _head(note_id):
+        return row['exists']
+
+    api.ingest = AsyncMock(side_effect=_slow_ingest)
+    api.head_note = AsyncMock(side_effect=_head)
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-x', hermes_home=str(tmp_path), platform='cli')
+        provider.sync_turn('q', 'a')
+        # Do NOT pre-drain; shutdown must join the in-flight worker itself.
+        provider.shutdown()
+
+    api.ingest.assert_awaited_once()
+    assert not _spill_file(tmp_path).exists()
+
+
+def test_replay_keeps_head_when_over_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """An over-cap spill file must keep its HEAD (the leading create); the
+    tail is dropped so append-before-create can't happen on replay."""
+    from memex_hermes_plugin.memex.provider import _PENDING_MAX
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    key = 'hermes:session:2020-01-01T00:00:00.000Z'
+    entries: list[dict[str, Any]] = [
+        {'kind': 'create', 'content': 'HEAD', 'title': 't', 'note_key': key, 'vault_id': None}
+    ]
+    for i in range(_PENDING_MAX + 10):
+        entries.append(
+            {
+                'kind': 'append',
+                'content': f'a{i}',
+                'append_id': str(uuid4()),
+                'note_key': key,
+                'vault_id': None,
+            }
+        )
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(json.dumps(entries))
+
+    # Fail all writes so the replayed queue stays intact for inspection.
+    api = _fake_ok_api()
+    api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-B', hermes_home=str(tmp_path), platform='cli')
+        try:
+            _drain(provider)
+            assert len(provider._pending) == _PENDING_MAX
+            assert provider._pending[0]['kind'] == 'create'
+            assert provider._pending[0]['content'] == 'HEAD'
+        finally:
+            provider.shutdown()
+
+
+def test_replayed_create_with_existing_row_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A replayed create whose row already exists server-side must NOT be
+    re-ingested (which would mint a duplicate first-chunk-only version);
+    it's marked initialized and popped, and its spilled appends still apply."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    key = 'hermes:session:2020-01-01T00:00:00.000Z'
+    append_id = str(uuid4())
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(
+        json.dumps(
+            [
+                {
+                    'kind': 'create',
+                    'content': 'HEAD',
+                    'title': 't',
+                    'note_key': key,
+                    'vault_id': None,
+                },
+                {
+                    'kind': 'append',
+                    'content': 'tail',
+                    'append_id': append_id,
+                    'note_key': key,
+                    'vault_id': None,
+                },
+            ]
+        )
+    )
+
+    api = _fake_ok_api()
+    # Row already exists — the pre-create probe should short-circuit.
+    api.head_note = AsyncMock(return_value=True)
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-B', hermes_home=str(tmp_path), platform='cli')
+        try:
+            _drain(provider)
+            api.ingest.assert_not_awaited()  # no duplicate create
+            api.append_to_note.assert_awaited_once()  # tail still applied
+            assert api.append_to_note.call_args.kwargs['note_key'] == key
+            assert provider._pending == []
+        finally:
+            provider.shutdown()
+
+
+def test_corrupt_spill_file_is_tolerated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A garbage/partial spill file must not crash initialize."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'v')
+    _write_test_config(tmp_path)
+
+    spill = _spill_file(tmp_path)
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text('{not valid json at all')
+
+    api = _fake_ok_api()
+    with patch('memex_common.client.RemoteMemexAPI', return_value=api):
+        provider = MemexMemoryProvider()
+        # Must not raise.
+        provider.initialize('session-x', hermes_home=str(tmp_path), platform='cli')
+        try:
+            assert provider._pending == []
+        finally:
+            provider.shutdown()
