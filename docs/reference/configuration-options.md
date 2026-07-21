@@ -98,13 +98,15 @@ Client-side OIDC configuration for the CLI and MCP. Lives at `oidc`.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `issuer` | `str` | — (required) | Issuer URL used to discover the authorization/token/device endpoints. |
-| `client_id` | `str` | — (required) | OAuth client ID registered with the provider. |
+| `client_id` | `str \| None` | `null` | OAuth client ID. Required for `interactive`/`client_credentials`/`jwt_profile`; unused by the keyless `token_file`/`token_env` grants. |
 | `scopes` | `list[str]` | `["openid","profile","email","offline_access"]` | Scopes requested. `offline_access` enables refresh tokens (interactive). |
 | `client_secret` | `SecretStr \| None` | `null` | Client secret for confidential / `client_credentials` clients. Omit for public (PKCE) clients. |
-| `grant` | `"interactive" \| "client_credentials" \| "jwt_profile"` | `interactive` | How tokens are obtained. `interactive` = `memex auth login`. The other two are non-interactive service-account grants. |
+| `grant` | `"interactive" \| "client_credentials" \| "jwt_profile" \| "token_file" \| "token_env"` | `interactive` | How tokens are obtained. `interactive` = `memex auth login`. `client_credentials`/`jwt_profile` = non-interactive service accounts (hold a secret). `token_file`/`token_env` = keyless: present an ambient platform-issued JWT (e.g. Nomad Workload Identity). |
 | `key_file` | `str \| None` | `null` | Path to a service-account key JSON (e.g. a Zitadel key file). Required for `grant: jwt_profile`. |
+| `token_file` | `str \| None` | `null` | Path to a file holding an ambient bearer JWT (read fresh per request, no secret stored). Required for `grant: token_file`. |
+| `token_env` | `str \| None` | `null` | Name of an env var holding an ambient bearer JWT. Required for `grant: token_env`. |
 
-`grant: client_credentials` requires `client_secret`; `grant: jwt_profile` requires `key_file`. Both raise a validation error otherwise.
+Each grant requires its credential/identifier or raises a validation error: `interactive`/`client_credentials`/`jwt_profile` require `client_id`; `client_credentials` also requires `client_secret`; `jwt_profile` requires `key_file`; `token_file` requires `token_file`; `token_env` requires `token_env`.
 
 **Derived properties (read-only).**
 

@@ -329,3 +329,84 @@ class TestServiceAccount:
         )
         with pytest.raises(ValueError, match='missing keyId, key, or userId'):
             await acquire_service_token(oidc)
+
+
+class TestKeylessWorkloadGrants:
+    def _cfg(self, oidc, api_key=None):
+        return types.SimpleNamespace(oidc=oidc, api_key=SecretStr(api_key) if api_key else None)
+
+    async def test_token_file_presented_as_bearer(self, tmp_path):
+        token_path = tmp_path / 'nomad.jwt'
+        token_path.write_text('  header.payload.sig\n')  # whitespace stripped
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_file', token_file=str(token_path))
+        headers = await resolve_client_headers(self._cfg(oidc, api_key='fallback'))
+        assert headers == {'Authorization': 'Bearer header.payload.sig'}
+
+    async def test_token_file_read_fresh_no_cache_written(self, tmp_path):
+        token_path = tmp_path / 'nomad.jwt'
+        token_path.write_text('tok-1')
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_file', token_file=str(token_path))
+        cfg = self._cfg(oidc)
+
+        assert (await resolve_client_headers(cfg))['Authorization'] == 'Bearer tok-1'
+        # Rotate the file (as Nomad would) — next read reflects it, no cache in the way.
+        token_path.write_text('tok-2')
+        assert (await resolve_client_headers(cfg))['Authorization'] == 'Bearer tok-2'
+        # Keyless grants never write the interactive/service token cache.
+        assert load_token_cache() is None
+
+    async def test_token_env_presented_as_bearer(self, monkeypatch):
+        monkeypatch.setenv('NOMAD_WI_TOKEN', 'env.jwt.sig')
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_env', token_env='NOMAD_WI_TOKEN')
+        headers = await resolve_client_headers(self._cfg(oidc))
+        assert headers == {'Authorization': 'Bearer env.jwt.sig'}
+
+    async def test_missing_token_file_falls_back_to_api_key(self, tmp_path):
+        oidc = OidcClientConfig(
+            issuer=ISSUER, grant='token_file', token_file=str(tmp_path / 'nope.jwt')
+        )
+        headers = await resolve_client_headers(self._cfg(oidc, api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+
+    async def test_empty_token_file_falls_back(self, tmp_path):
+        token_path = tmp_path / 'empty.jwt'
+        token_path.write_text('   \n')
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_file', token_file=str(token_path))
+        headers = await resolve_client_headers(self._cfg(oidc, api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+
+    async def test_missing_token_env_falls_back(self, monkeypatch):
+        monkeypatch.delenv('NOMAD_WI_TOKEN', raising=False)
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_env', token_env='NOMAD_WI_TOKEN')
+        headers = await resolve_client_headers(self._cfg(oidc, api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+
+    async def test_permission_error_falls_back_and_does_not_leak_token(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        token_path = tmp_path / 'secret.jwt'
+        token_path.write_text('super-secret-token-bytes')
+
+        real_read_text = auth_client.plb.Path.read_text
+
+        def boom(self, *a, **k):
+            if str(self) == str(token_path):
+                raise PermissionError('denied')
+            return real_read_text(self, *a, **k)
+
+        monkeypatch.setattr(auth_client.plb.Path, 'read_text', boom)
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_file', token_file=str(token_path))
+        with caplog.at_level('WARNING'):
+            headers = await resolve_client_headers(self._cfg(oidc, api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+        assert 'super-secret-token-bytes' not in caplog.text
+
+    async def test_success_path_never_logs_token(self, tmp_path, caplog):
+        """A successful read must not log the token at any level (regression guard)."""
+        token_path = tmp_path / 'ok.jwt'
+        token_path.write_text('super-secret-success-token')
+        oidc = OidcClientConfig(issuer=ISSUER, grant='token_file', token_file=str(token_path))
+        with caplog.at_level('DEBUG'):
+            headers = await resolve_client_headers(self._cfg(oidc))
+        assert headers == {'Authorization': 'Bearer super-secret-success-token'}
+        assert 'super-secret-success-token' not in caplog.text

@@ -79,6 +79,21 @@ class _Provider:
         token = jwt.encode({'alg': 'RS256', 'kid': 'prov-1'}, payload, self.signing_key)
         return token.decode('ascii') if isinstance(token, bytes) else token
 
+    def mint_workload_token(self, job_id: str) -> str:
+        """A Nomad-Workload-Identity-shaped JWT: identity claims, no roles."""
+        now = int(time.time())
+        payload = {
+            'iss': self.issuer,
+            'sub': f'nomad:job:{job_id}',
+            'aud': AUDIENCE,
+            'nomad_job_id': job_id,
+            'nomad_namespace': 'default',
+            'iat': now,
+            'exp': now + 3600,
+        }
+        token = jwt.encode({'alg': 'RS256', 'kid': 'prov-1'}, payload, self.signing_key)
+        return token.decode('ascii') if isinstance(token, bytes) else token
+
     def handle_token(self, form: dict) -> tuple[int, dict]:
         grant = form.get('grant_type', [None])[0]
         if grant == 'client_credentials':
@@ -181,6 +196,7 @@ def _build_memex_app(provider: _Provider) -> FastAPI:
                 audience=[AUDIENCE],
                 grant_rules=[
                     OidcGrantRule(claim='roles', value='memex.writer', policy='writer'),
+                    OidcGrantRule(claim='nomad_job_id', value='hermes', policy='writer'),
                 ],
             )
         ],
@@ -296,3 +312,30 @@ async def test_garbage_bearer_rejected(provider):
         assert (await client.get('/whoami')).status_code == 401
         bad = await client.get('/whoami', headers={'Authorization': 'Bearer not.a.jwt'})
         assert bad.status_code == 403
+
+
+async def test_token_file_keyless_end_to_end(provider, tmp_path):
+    """Keyless workload: present a Nomad-WI JWT from a file — no stored secret.
+
+    The runtime (Nomad) writes the token to a file; the client reads it fresh and
+    presents it; the real verifier checks the signature and maps nomad_job_id.
+    """
+    token_path = tmp_path / 'nomad_token.jwt'
+    token_path.write_text(provider.mint_workload_token('hermes'))
+    app = _build_memex_app(provider)
+    oidc = OidcClientConfig(issuer=provider.issuer, grant='token_file', token_file=str(token_path))
+    resp = await _call_whoami(app, _client_config(provider, oidc))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body['policy'] == 'writer'
+    assert body['actor'] == 'oidc:nomad:job:hermes'
+
+
+async def test_token_file_missing_is_unauthenticated(provider, tmp_path):
+    """No token file and no api key => no credential => 401 (fail-closed)."""
+    app = _build_memex_app(provider)
+    oidc = OidcClientConfig(
+        issuer=provider.issuer, grant='token_file', token_file=str(tmp_path / 'absent.jwt')
+    )
+    resp = await _call_whoami(app, _client_config(provider, oidc))
+    assert resp.status_code == 401

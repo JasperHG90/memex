@@ -1567,7 +1567,7 @@ class AuthConfig(BaseModel):
 class OidcClientConfig(BaseModel):
     """Client-side OIDC configuration for the CLI and MCP.
 
-    Two modes, selected by ``grant``:
+    Modes, selected by ``grant``:
 
     - ``interactive`` (default): a human runs ``memex auth login`` (Authorization
       Code + PKCE, or the Device Authorization Grant) to obtain a bearer token.
@@ -1575,7 +1575,10 @@ class OidcClientConfig(BaseModel):
       non-interactively. Tokens are acquired and refreshed automatically; no
       ``memex auth login`` step is needed. ``jwt_profile`` uses a provider key
       file (e.g. a Zitadel service-account key JSON) via the RFC 7523 JWT-bearer
-      grant; ``client_credentials`` uses ``client_secret``.
+      grant; ``client_credentials`` uses ``client_secret``. Both hold a secret.
+    - ``token_file`` / ``token_env``: **keyless** workload auth. The client presents
+      an ambient, platform-issued bearer JWT (e.g. a Nomad Workload Identity token)
+      read from a file or env var — no stored secret, no token exchange.
 
     The server may trust several providers; the client uses exactly one.
     """
@@ -1583,7 +1586,12 @@ class OidcClientConfig(BaseModel):
     issuer: str = Field(
         description='OIDC issuer URL used to discover authorization/token/device endpoints.',
     )
-    client_id: str = Field(description='OAuth client ID registered with the provider.')
+    client_id: str | None = Field(
+        default=None,
+        description='OAuth client ID registered with the provider. Required for the '
+        'interactive/client_credentials/jwt_profile grants; unused by the keyless '
+        'token_file/token_env grants.',
+    )
     scopes: list[str] = Field(
         default_factory=lambda: ['openid', 'profile', 'email', 'offline_access'],
         description='Scopes requested at login. offline_access enables refresh tokens.',
@@ -1593,12 +1601,16 @@ class OidcClientConfig(BaseModel):
         description='Client secret for confidential/client_credentials clients. '
         'Omit for public (PKCE) clients.',
     )
-    grant: Literal['interactive', 'client_credentials', 'jwt_profile'] = Field(
+    grant: Literal[
+        'interactive', 'client_credentials', 'jwt_profile', 'token_file', 'token_env'
+    ] = Field(
         default='interactive',
         description=(
             'How the client obtains tokens. "interactive" = human login via '
             '`memex auth login`. "client_credentials" / "jwt_profile" = '
-            'non-interactive service-account auth, acquired automatically.'
+            'non-interactive service-account auth, acquired automatically. '
+            '"token_file" / "token_env" = keyless: present an ambient platform-issued '
+            'JWT (e.g. Nomad Workload Identity) read from a file or env var.'
         ),
     )
     key_file: str | None = Field(
@@ -1608,14 +1620,38 @@ class OidcClientConfig(BaseModel):
             'keyId/key/userId). Required for grant="jwt_profile".'
         ),
     )
+    token_file: str | None = Field(
+        default=None,
+        description=(
+            'Path to a file containing an ambient bearer JWT (e.g. a Nomad Workload '
+            'Identity token the runtime writes and rotates). Read fresh per request; '
+            'no secret is stored. Required for grant="token_file".'
+        ),
+    )
+    token_env: str | None = Field(
+        default=None,
+        description=(
+            'Name of an environment variable holding an ambient bearer JWT. '
+            'Required for grant="token_env".'
+        ),
+    )
 
     @model_validator(mode='after')
     def validate_grant_requirements(self) -> Self:
-        """Each service-account grant needs its credential."""
+        """Each grant needs its credential / identifier."""
+        if (
+            self.grant in ('interactive', 'client_credentials', 'jwt_profile')
+            and not self.client_id
+        ):
+            raise ValueError(f'grant="{self.grant}" requires client_id.')
         if self.grant == 'client_credentials' and self.client_secret is None:
             raise ValueError('grant="client_credentials" requires client_secret.')
         if self.grant == 'jwt_profile' and not self.key_file:
             raise ValueError('grant="jwt_profile" requires key_file.')
+        if self.grant == 'token_file' and not self.token_file:
+            raise ValueError('grant="token_file" requires token_file.')
+        if self.grant == 'token_env' and not self.token_env:
+            raise ValueError('grant="token_env" requires token_env.')
         return self
 
 

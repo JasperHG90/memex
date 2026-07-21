@@ -44,6 +44,7 @@ The same trust chain serves both audiences. What differs is how the caller obtai
 
 - **A person** runs `memex auth login`. The CLI performs the Authorization Code flow with PKCE (or a device flow when there is no browser), the provider authenticates the human, and the resulting token carries their `sub` and `email`. The audit trail records the person.
 - **A service account** carries no browser and no human. It authenticates with the client-credentials grant (a client secret) or the JWT-profile grant (a signed assertion from a downloaded key file, the way Zitadel recommends). The CLI and MCP acquire and refresh these tokens automatically, with no login step. The token's identity is the machine's `sub` or `client_id`.
+- **A keyless workload** goes one step further: it holds no secret at all. Its runtime already issues it an ambient identity token (a Nomad Workload Identity JWT, a Kubernetes projected token), delivered as a file or env var and rotated by the platform. The client just reads that token and presents it. There is nothing to store, sign, or exchange: the workload's only credential is the identity its runtime already vouches for, and Memex verifies it like any other JWT.
 
 Both paths end at the same verifier and the same `AuthContext`. The only practical difference on the server is which claim you map: human tokens usually carry `groups` or `email`, while machine tokens carry `roles` or just a `sub`, so a service account's grant rule keys on one of those instead.
 

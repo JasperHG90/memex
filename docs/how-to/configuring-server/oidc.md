@@ -143,6 +143,57 @@ server:
 
 Because rule matching does membership on list claims and equality on scalars, map on a `roles` array or a `sub` string, not a space-delimited `scope` string. `memex auth status` reports service-account mode.
 
+## Keyless workloads (Nomad Workload Identity)
+
+The `jwt_profile` and `client_credentials` grants above still put a long-lived secret (a key file or a client secret) on the workload host. A keyless grant removes it entirely: the workload presents an **ambient token its runtime already issues**, and the client just reads it. On Nomad that token is a **Workload Identity** JWT, delivered to the task and auto-rotated.
+
+**Client** (`grant: token_file`): point the client at the file the runtime writes.
+
+```yaml
+oidc:
+  issuer: "https://nomad.example.internal"   # your Nomad's OIDC issuer
+  grant: "token_file"
+  token_file: "/secrets/nomad_token.jwt"
+```
+
+The token is read fresh on every request (no cache, no secret stored). `grant: token_env` reads it from an environment variable instead, for runtimes that inject it there. `client_id` is not needed for these grants.
+
+**Nomad job** (`identity` stanza; Nomad signs the JWT, sets the audience, and writes it to the task):
+
+```hcl
+job "hermes" {
+  group "app" {
+    task "hermes" {
+      identity {
+        name = "memex"
+        aud  = ["memex"]
+        file = true          # writes the token to secrets/nomad_token.jwt
+        ttl  = "1h"          # Nomad re-renders before expiry
+      }
+      # ...
+    }
+  }
+}
+```
+
+**Server** (config only) trusts Nomad as one more provider and pins the job identity:
+
+```yaml
+server:
+  auth:
+    enabled: true
+    oidc:
+      - issuer: "https://nomad.example.internal"
+        audience: ["memex"]
+        grant_rules:
+          - claim: "nomad_job_id"     # Nomad WI tokens carry job/task identity
+            value: "hermes"
+            policy: writer
+            vault_ids: ["hermes"]
+```
+
+The memex server must be able to reach Nomad's OIDC discovery + JWKS endpoints to verify these tokens.
+
 ## Verification
 
 With the server running and a token in hand:

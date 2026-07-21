@@ -207,6 +207,8 @@ async def _resolve_bearer(
     oidc = config.oidc
     if oidc is None:
         return None
+    if oidc.grant in ('token_file', 'token_env'):
+        return _read_workload_token(oidc)
     if oidc.grant in ('client_credentials', 'jwt_profile'):
         return await _resolve_service_bearer(oidc, client=client)
     cache = load_token_cache()
@@ -230,6 +232,45 @@ async def _resolve_bearer(
             logger.warning('OIDC token refresh failed: %s', exc)
             return None
         return f'{refreshed.token_type} {refreshed.access_token}'
+
+
+# ---------------------------------------------------------------------------
+# Keyless workload authentication (ambient platform-issued token)
+# ---------------------------------------------------------------------------
+
+
+def _read_workload_token(oidc: OidcClientConfig) -> str | None:
+    """Return a Bearer header from an ambient platform-issued token, or None.
+
+    Reads a Nomad-Workload-Identity-style JWT from a file (``grant=token_file``)
+    or an env var (``grant=token_env``) fresh on each call — the runtime issues
+    and rotates the token, so there is no cache or expiry handling here. On any
+    read failure the source is treated as absent (warn, return None) so
+    :func:`resolve_client_headers` falls through to the API-key path. The token
+    contents are never logged.
+    """
+    if oidc.grant == 'token_file':
+        if not oidc.token_file:
+            return None
+        try:
+            raw = plb.Path(oidc.token_file).read_text(encoding='utf-8')
+        except OSError as exc:
+            logger.warning('Could not read workload token file %s: %s', oidc.token_file, exc)
+            return None
+    else:  # token_env
+        if not oidc.token_env:
+            return None
+        env_val = os.environ.get(oidc.token_env)
+        if env_val is None:
+            logger.warning('Workload token env var %s is not set.', oidc.token_env)
+            return None
+        raw = env_val
+
+    token = raw.strip()
+    if not token:
+        logger.warning('Workload token source is empty (grant=%s).', oidc.grant)
+        return None
+    return f'Bearer {token}'
 
 
 # ---------------------------------------------------------------------------

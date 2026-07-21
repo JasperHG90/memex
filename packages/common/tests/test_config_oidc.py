@@ -170,6 +170,38 @@ class TestOidcClientConfig:
         )
         assert client.key_file == '/etc/memex/key.json'
 
+    @pytest.mark.parametrize('grant', ['interactive', 'client_credentials', 'jwt_profile'])
+    def test_secretful_grants_require_client_id(self, grant):
+        kwargs = {'client_secret': 'shh', 'key_file': '/k.json'}
+        with pytest.raises(ValidationError, match='requires client_id'):
+            OidcClientConfig(issuer='https://issuer.example', grant=grant, **kwargs)
+
+    def test_token_file_grant(self):
+        client = OidcClientConfig(
+            issuer='https://issuer.example',
+            grant='token_file',
+            token_file='/secrets/nomad_token.jwt',
+        )
+        # client_id is optional for keyless grants.
+        assert client.client_id is None
+        assert client.token_file == '/secrets/nomad_token.jwt'
+
+    def test_token_file_requires_token_file(self):
+        with pytest.raises(ValidationError, match='requires token_file'):
+            OidcClientConfig(issuer='https://issuer.example', grant='token_file')
+
+    def test_token_env_grant(self):
+        client = OidcClientConfig(
+            issuer='https://issuer.example',
+            grant='token_env',
+            token_env='NOMAD_TOKEN',
+        )
+        assert client.token_env == 'NOMAD_TOKEN'
+
+    def test_token_env_requires_token_env(self):
+        with pytest.raises(ValidationError, match='requires token_env'):
+            OidcClientConfig(issuer='https://issuer.example', grant='token_env')
+
 
 class TestMemexConfigOidcField:
     """The client `oidc` field must be accepted under extra='forbid'."""
