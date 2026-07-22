@@ -64,6 +64,12 @@ _SPILL_FILE_NAME = 'pending-session-writes.json'
 # happy path; anything slower spills and replays on the next start.
 _SHUTDOWN_DRAIN_JOIN_TIMEOUT = 8.0
 
+# Pacing between drain-worker relaunches inside the shutdown drain window
+# (`_drain_with_deadline`). A failed attempt against an unreachable server
+# exits in ~ms; without pacing the window would spin-spawn hundreds of
+# workers, each burning a connect attempt.
+_SHUTDOWN_DRAIN_RELAUNCH_DELAY = 0.2
+
 # Non-transient HTTP statuses. The append/create will never succeed if
 # resent verbatim, so we drop the failing entry and continue draining the
 # rest of the queue. 5xx, 408, 429, and network errors are transient.
@@ -648,17 +654,13 @@ class MemexMemoryProvider(MemoryProvider):
                     self._enqueue_chunk(chunk, title=self._format_session_title())
                 except Exception as e:
                     logger.debug('Shutdown enqueue failed: %s', e)
-            # Ensure a drain worker is running, then wait a bounded time for
-            # it to finish BEFORE we close the client. Whatever it does not
-            # drain in time is spilled to disk and replayed on the next start.
-            try:
-                self._drain_pending()
-            except Exception as e:
-                logger.debug('Shutdown drain launch failed: %s', e)
-            with self._state_lock:
-                worker = self._bg_drain_thread
-            if worker is not None:
-                worker.join(timeout=_SHUTDOWN_DRAIN_JOIN_TIMEOUT)
+            # Keep the drain running for a bounded window BEFORE we close
+            # the client. A single launch+join is not enough: the running
+            # worker may be a leftover mid-outage attempt that exits with
+            # the queue intact, and joining it says nothing about the queue
+            # (the recovery-at-shutdown race). Whatever the window does not
+            # drain is spilled to disk and replayed on the next start.
+            self._drain_with_deadline(_SHUTDOWN_DRAIN_JOIN_TIMEOUT)
             try:
                 self._spill_to_disk()
             except Exception as e:
@@ -859,6 +861,50 @@ class MemexMemoryProvider(MemoryProvider):
                 if self._bg_drain_thread is worker:
                     self._bg_drain_thread = None
             logger.warning('Failed to start session-note drain worker: %s: %s', type(e).__name__, e)
+
+    def _drain_with_deadline(self, timeout: float) -> None:
+        """Keep the pending-queue drain running for up to ``timeout`` seconds.
+
+        Shutdown-only companion to ``_drain_pending``. Loop: while items
+        remain and the deadline has not passed, ensure a worker is running
+        and join it (bounded by the remaining window).
+
+        Rationale: launching once and joining once loses the queue in the
+        recovery-at-shutdown race — the joined worker can be a leftover
+        attempt launched mid-outage that fails transiently and exits with
+        every item still queued, even though the server is reachable again
+        by the time shutdown runs. Retrying inside the window drains a
+        drainable queue instead of abandoning it to the spill file after
+        the first failed attempt.
+
+        Relaunches after a failed attempt are paced by
+        ``_SHUTDOWN_DRAIN_RELAUNCH_DELAY`` so a hard outage (every attempt
+        fails in ~ms) does not spin-spawn workers for the whole window.
+        The first launch — including the relaunch right after joining a
+        leftover worker — is immediate, keeping the happy path fast.
+        """
+        deadline = time.monotonic() + timeout
+        pace_next_launch = False
+        while True:
+            with self._state_lock:
+                pending_left = bool(self._pending)
+                worker = self._bg_drain_thread
+            if worker is None and not pending_left:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if worker is not None:
+                worker.join(timeout=remaining)
+                continue
+            if pace_next_launch:
+                time.sleep(min(_SHUTDOWN_DRAIN_RELAUNCH_DELAY, remaining))
+            pace_next_launch = True
+            try:
+                self._drain_pending()
+            except Exception as e:
+                logger.debug('Shutdown drain launch failed: %s', e)
+                return
 
     def _drain_worker(self) -> None:
         """Daemon-thread target wrapping the synchronous drain body.
