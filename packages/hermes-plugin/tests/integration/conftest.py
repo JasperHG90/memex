@@ -186,6 +186,11 @@ def _set_memex_env_vars(pg: Any) -> None:
     os.environ['MEMEX_SERVER__META_STORE__INSTANCE__USER'] = parsed.username or 'test'
     os.environ['MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD'] = parsed.password or 'test'
     os.environ['MEMEX_SERVER__MEMORY__REFLECTION__BACKGROUND_REFLECTION_ENABLED'] = 'false'
+    # Disable the NLI polarity gate: these wiring tests never exercise lint_llm,
+    # and leaving it on makes the lifespan eager-warm the NLI model — a ~250MB
+    # HuggingFace download inside the server-boot deadline (issue #267). Off, the
+    # lifespan skips NLI warmup entirely and the boot path carries no NLI fetch.
+    os.environ['MEMEX_SERVER__MEMORY__LINT_LLM__POLARITY__ENABLED'] = 'false'
 
 
 @pytest_asyncio.fixture(scope='session')
@@ -233,10 +238,61 @@ async def _schema_ready(postgres_container: Any) -> AsyncGenerator[None, None]:
     yield
 
 
+@pytest_asyncio.fixture(scope='session')
+async def _models_prefetched(_schema_ready: None) -> None:
+    """Download the ONNX models the lifespan warms (embedding / reranker / NER /
+    NLI) BEFORE the server boots, on the main thread with no deadline.
+
+    The server's lifespan warmup loads these models, and on a fresh runner the
+    first-time Hugging Face download of ~200MB+ runs *inside* the fixture's
+    startup deadline. When it overruns, ``server.started`` never flips and every
+    test errors with a bare ``Memex test server failed to start`` (issue #267).
+
+    Fetching them here moves the unbounded download out of the timed boot
+    window and primes the in-process module caches (the server runs
+    in-process), so warmup is fast and deterministic. Uses the same loaders and
+    config the lifespan uses, so cache paths and revisions match exactly. The
+    set MUST mirror ``lifespan()`` in ``memex_core.server`` — any model warmed
+    there but skipped here would still cold-download inside the deadline.
+
+    Depends on ``_schema_ready`` only to guarantee ``_set_memex_env_vars`` has
+    run first (``MEMEX_LOAD_LOCAL_CONFIG``/``MEMEX_LOAD_GLOBAL_CONFIG=false``),
+    so ``parse_memex_config`` here resolves the same backend the lifespan will.
+    """
+    from memex_core.config import parse_memex_config
+    from memex_core.memory.models.embedding import get_embedding_model
+    from memex_core.memory.models.ner import get_ner_model
+    from memex_core.memory.models.nli import get_nli_model
+    from memex_core.memory.models.reranking import get_reranking_model
+
+    config = parse_memex_config()
+    await get_embedding_model(
+        config.server.embedding_model,
+        batch_size=config.server.embedding_batch_size,
+    )
+    await get_reranking_model(
+        config.server.memory.retrieval.reranker,
+        batch_size=config.server.memory.retrieval.reranker_batch_size,
+    )
+    await get_ner_model()
+    # NLI is eager-warmed by the lifespan only when the polarity gate is enabled.
+    # _set_memex_env_vars turns it OFF for this suite, so this branch is normally
+    # skipped. It stays gated on the same flag (mirroring lifespan) so that if a
+    # test ever re-enables polarity, the NLI download still happens here, outside
+    # the boot deadline. Best-effort like the lifespan's warmup (nli.py's tokenizer
+    # load can fail): a prefetch failure must not error every test at setup.
+    if config.server.memory.lint_llm.polarity.enabled:
+        try:
+            await get_nli_model(config.server.memory.lint_llm.polarity)
+        except Exception:  # noqa: BLE001 — mirrors lifespan best-effort warmup
+            pass
+
+
 @pytest.fixture(scope='session')
 def memex_server_url(
     postgres_container: Any,
     _schema_ready: None,
+    _models_prefetched: None,
 ) -> Generator[str, None, None]:
     """Run Memex FastAPI in a background thread with uvicorn. Yield base URL.
 
@@ -276,17 +332,37 @@ def memex_server_url(
         app=app, host='127.0.0.1', port=port, log_level='warning', lifespan='on'
     )
     server = _Server(config=config)
-    thread = threading.Thread(target=server.run, daemon=True, name='memex-test-uvicorn')
+
+    # Capture any exception raised during lifespan startup. Without this, a real
+    # startup crash is invisible: uvicorn runs at log_level='warning' on a daemon
+    # thread, so the fixture only sees ``server.started`` never flipping and
+    # raises a bare timeout that hides the actual cause (issue #267).
+    startup_error: dict[str, BaseException] = {}
+
+    def _run_server() -> None:
+        try:
+            server.run()
+        except BaseException as exc:  # noqa: BLE001 — surface the real cause
+            startup_error['exc'] = exc
+
+    thread = threading.Thread(target=_run_server, daemon=True, name='memex-test-uvicorn')
     thread.start()
 
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:
-        if server.started:
+        if server.started or 'exc' in startup_error:
             break
         time.sleep(0.05)
     if not server.started:
         scheduler_patch.stop()
-        raise RuntimeError('Memex test server failed to start')
+        if 'exc' in startup_error:
+            raise RuntimeError('Memex test server failed to start') from startup_error['exc']
+        raise RuntimeError(
+            'Memex test server did not report started within 60s (no exception '
+            'was raised on the server thread). If the log shows an in-progress '
+            'model download, a model the lifespan warms is missing from the '
+            '_models_prefetched fixture (it must mirror lifespan()).'
+        )
 
     url = f'http://127.0.0.1:{port}'
     try:

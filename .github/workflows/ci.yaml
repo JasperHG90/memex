@@ -240,6 +240,16 @@ jobs:
           enable-cache: true
       - name: Sync workspace with hermes-integration group
         run: uv sync --all-extras --all-packages --group hermes-integration
+      # Cache the ONNX models (embedding / reranker / NER / NLI) the server
+      # warms at startup. On a cold cache the integration suite's server-boot
+      # fixture prefetches them (~200MB from HF Hub); restoring the cache makes
+      # repeat runs fast and removes the download from the boot path entirely.
+      # Key hashes the model registry so a revision bump invalidates the cache.
+      - name: Cache Memex ONNX models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/memex
+          key: memex-models-${{ hashFiles('packages/core/src/memex_core/memory/models/base.py') }}
       - name: Run hermes-plugin integration tests
         run: uv run pytest packages/hermes-plugin/tests/integration/ -v --tb=short -m hermes_integration
 
