@@ -1435,6 +1435,31 @@ class OidcGrantRule(BaseModel):
         return self
 
 
+def _require_https_or_loopback(url: str | None) -> str | None:
+    """Reject non-HTTPS OIDC URLs (except loopback) at config load.
+
+    Over plain HTTP a network MITM can serve attacker-controlled JWKS (server
+    side) or intercept the credentials/tokens sent to the token endpoint (client
+    side), so a forged token would verify or a secret would leak — reject the
+    footgun at load rather than trust the operator. Loopback hosts are allowed so
+    local development and the e2e tests (http://127.0.0.1) still work.
+    """
+    if url is None:
+        return url
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme == 'https':
+        return url
+    if parsed.scheme == 'http' and host in ('localhost', '127.0.0.1', '::1'):
+        return url
+    raise ValueError(
+        f'OIDC issuer/jwks_uri must use HTTPS (got {url!r}). Plain HTTP is '
+        'only allowed for loopback hosts (localhost / 127.0.0.1 / ::1).'
+    )
+
+
 class OidcProviderConfig(BaseModel):
     """An OIDC provider trusted for bearer-token (JWT) authentication.
 
@@ -1489,28 +1514,7 @@ class OidcProviderConfig(BaseModel):
     @field_validator('issuer', 'jwks_uri')
     @classmethod
     def require_https(cls, url: str | None) -> str | None:
-        """Reject non-HTTPS issuer/JWKS URLs (except loopback) at config load.
-
-        Over plain HTTP a network MITM can serve attacker-controlled JWKS, so
-        every forged token would verify against it — a full auth bypass. Reject
-        the footgun at load rather than trust the operator, matching the stance
-        taken for symmetric algorithms above. Loopback hosts are allowed so
-        local development and the e2e tests (http://127.0.0.1) still work.
-        """
-        if url is None:
-            return url
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        host = (parsed.hostname or '').lower()
-        if parsed.scheme == 'https':
-            return url
-        if parsed.scheme == 'http' and host in ('localhost', '127.0.0.1', '::1'):
-            return url
-        raise ValueError(
-            f'OIDC issuer/jwks_uri must use HTTPS (got {url!r}). Plain HTTP is '
-            'only allowed for loopback hosts (localhost / 127.0.0.1 / ::1).'
-        )
+        return _require_https_or_loopback(url)
 
     leeway_seconds: int = Field(
         default=60,
@@ -1661,6 +1665,14 @@ class OidcClientConfig(BaseModel):
             'Required for grant="token_env".'
         ),
     )
+
+    @field_validator('issuer')
+    @classmethod
+    def require_https(cls, url: str) -> str:
+        # The client sends credentials / assertions / tokens to this issuer's
+        # endpoints; over plain HTTP they leak to a MITM. Same guard as the
+        # server-side OidcProviderConfig.
+        return _require_https_or_loopback(url) or url
 
     @model_validator(mode='after')
     def validate_grant_requirements(self) -> Self:

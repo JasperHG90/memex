@@ -173,6 +173,14 @@ class TestOidcClientConfig:
         client = OidcClientConfig(issuer='https://issuer.example', client_id='abc')
         assert client.grant == 'interactive'
 
+    def test_non_https_issuer_rejected(self):
+        with pytest.raises(ValidationError, match='must use HTTPS'):
+            OidcClientConfig(issuer='http://issuer.example', client_id='abc')
+
+    def test_http_loopback_issuer_allowed(self):
+        client = OidcClientConfig(issuer='http://localhost:8080', client_id='abc')
+        assert client.issuer == 'http://localhost:8080'
+
     def test_client_credentials_requires_secret(self):
         with pytest.raises(ValidationError, match='requires client_secret'):
             OidcClientConfig(
