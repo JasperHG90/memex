@@ -102,6 +102,37 @@ class TestOidcProviderConfig:
         )
         assert provider.algorithms == [good_alg]
 
+    @pytest.mark.parametrize(
+        'bad_url', ['http://issuer.example', 'http://evil.example/jwks', 'ftp://issuer.example']
+    )
+    def test_non_https_issuer_rejected(self, bad_url):
+        with pytest.raises(ValidationError, match='must use HTTPS'):
+            OidcProviderConfig(
+                issuer=bad_url,
+                audience=['api://memex'],
+                default_policy='reader',
+            )
+
+    def test_non_https_jwks_uri_rejected(self):
+        with pytest.raises(ValidationError, match='must use HTTPS'):
+            OidcProviderConfig(
+                issuer='https://issuer.example',
+                audience=['api://memex'],
+                default_policy='reader',
+                jwks_uri='http://evil.example/jwks',
+            )
+
+    @pytest.mark.parametrize(
+        'loopback', ['http://localhost:8080', 'http://127.0.0.1:5556', 'http://[::1]:9000']
+    )
+    def test_http_loopback_issuer_allowed(self, loopback):
+        provider = OidcProviderConfig(
+            issuer=loopback,
+            audience=['api://memex'],
+            default_policy='reader',
+        )
+        assert provider.issuer == loopback
+
 
 class TestAuthConfigOidc:
     def test_oidc_defaults_empty(self):

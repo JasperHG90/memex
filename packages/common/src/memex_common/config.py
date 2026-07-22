@@ -1486,6 +1486,32 @@ class OidcProviderConfig(BaseModel):
                 )
         return algorithms
 
+    @field_validator('issuer', 'jwks_uri')
+    @classmethod
+    def require_https(cls, url: str | None) -> str | None:
+        """Reject non-HTTPS issuer/JWKS URLs (except loopback) at config load.
+
+        Over plain HTTP a network MITM can serve attacker-controlled JWKS, so
+        every forged token would verify against it — a full auth bypass. Reject
+        the footgun at load rather than trust the operator, matching the stance
+        taken for symmetric algorithms above. Loopback hosts are allowed so
+        local development and the e2e tests (http://127.0.0.1) still work.
+        """
+        if url is None:
+            return url
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = (parsed.hostname or '').lower()
+        if parsed.scheme == 'https':
+            return url
+        if parsed.scheme == 'http' and host in ('localhost', '127.0.0.1', '::1'):
+            return url
+        raise ValueError(
+            f'OIDC issuer/jwks_uri must use HTTPS (got {url!r}). Plain HTTP is '
+            'only allowed for loopback hosts (localhost / 127.0.0.1 / ::1).'
+        )
+
     leeway_seconds: int = Field(
         default=60,
         ge=0,

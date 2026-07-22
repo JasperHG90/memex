@@ -238,3 +238,37 @@ async def test_malformed_token_rejected():
     verifier = OidcVerifier([_provider()])
     assert await verifier.verify('not-a-jwt') is None
     assert await verifier.verify('a.b') is None
+
+
+@respx.mock
+async def test_jwks_fetch_failure_returns_none_not_500():
+    """A JWKS endpoint error must deny (return None), never raise a 500.
+
+    verify()'s contract is None-on-failure and authenticate_request does not
+    wrap the call, so an unhandled httpx error would surface as HTTP 500.
+    """
+    key = _make_key('test-key')
+    respx.get(DISCOVERY_URL).mock(return_value=httpx.Response(200, json={'jwks_uri': JWKS_URL}))
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(503))
+    verifier = OidcVerifier([_provider()])
+
+    assert await verifier.verify(_mint(key, _valid_claims())) is None
+
+
+@respx.mock
+async def test_forced_refetch_failure_falls_back_to_stale_keyset():
+    """If the rotation refetch fails, fall back to the cached keyset and return
+    None for the unknown kid — the fetch error must not raise a 500."""
+    old_key = _make_key('old-kid')
+    new_key = _make_key('new-kid')
+    respx.get(DISCOVERY_URL).mock(return_value=httpx.Response(200, json={'jwks_uri': JWKS_URL}))
+    respx.get(JWKS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_jwks(old_key)),  # initial fetch OK
+            httpx.Response(500),  # forced refetch fails
+        ]
+    )
+    verifier = OidcVerifier([_provider()])
+
+    token = _mint(new_key, _valid_claims(), kid='new-kid')
+    assert await verifier.verify(token) is None

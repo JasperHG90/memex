@@ -163,7 +163,14 @@ class OidcVerifier:
         if provider is None:
             return None
 
-        keyset = await self._get_keyset(provider)
+        # A JWKS/discovery fetch failure must deny the request (return None),
+        # not raise out of verify() into an unhandled 500 (verify's contract is
+        # None-on-failure, and authenticate_request does not wrap this call).
+        try:
+            keyset = await self._get_keyset(provider)
+        except httpx.HTTPError as exc:
+            logger.info('OIDC JWKS fetch failed for issuer %s: %s', provider.issuer, exc)
+            return None
         kid = header.get('kid')
         if kid and not _keyset_has_kid(keyset, kid):
             # Unknown kid: the provider may have rotated keys, so refetch — but
@@ -174,8 +181,19 @@ class OidcVerifier:
             last = self._last_force_refetch.get(provider.issuer)
             now = time.monotonic()
             if last is None or (now - last) >= self._force_refetch_cooldown:
+                # Set the cooldown before fetching so a failed refetch still
+                # counts against the rate limit (preserves the DoS bound). On
+                # failure, keep the keyset already in hand: the unknown kid then
+                # fails verification (-> None) instead of raising a 500.
                 self._last_force_refetch[provider.issuer] = now
-                keyset = await self._get_keyset(provider, force=True)
+                try:
+                    keyset = await self._get_keyset(provider, force=True)
+                except httpx.HTTPError as exc:
+                    logger.info(
+                        'OIDC forced JWKS refetch failed for issuer %s: %s',
+                        provider.issuer,
+                        exc,
+                    )
 
         claims_options = {
             'iss': {'essential': True, 'value': provider.issuer},
