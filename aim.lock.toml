@@ -9,7 +9,57 @@ layout_profile = "claude"
 symlinks = [
     "CLAUDE.md",
 ]
-policy_hash = "db740a45d7056bb782e39c25e7f1b73b1f0a5a15b25042b2fb221762e5298593"
+policy_hash = "41777ed005ed95882a90daef3445a092ecf498ebec0f840de45ec5fa62e6529d"
+
+[[skill]]
+qualified_name = "4290899e4697f267/pageindex"
+repo_alias = "4290899e4697f267"
+source_path = "skills/tools/pageindex"
+target_dir = ".claude/skills/pageindex"
+content_hash = "2bd803b32799dd81fdae0b92776ca4a91340ce096b81ac36ae45a77f20704007"
+risk_acknowledged = false
+
+[skill.current]
+sha = "516c105a9d8260c80a9d1fd8cb4004fe22a74225"
+installed_at = "2026-07-21T09:15:28.216690Z"
+
+[[skill.history]]
+sha = "65c95907825ba0728bb0c18c89c95fd24d47583e"
+installed_at = "2026-07-21T09:09:27.194443Z"
+
+[[skill]]
+qualified_name = "4290899e4697f267/terminal-gif"
+repo_alias = "4290899e4697f267"
+source_path = "skills/documentation/terminal-gif"
+target_dir = ".claude/skills/terminal-gif"
+content_hash = "599a57b4fa4629c81fd9d53b3f7c6617b230fab04cd9dde33d318bb0c1756711"
+risk_acknowledged = false
+
+[skill.current]
+sha = "516c105a9d8260c80a9d1fd8cb4004fe22a74225"
+installed_at = "2026-07-21T09:15:28.433473Z"
+
+[[skill.history]]
+sha = "65c95907825ba0728bb0c18c89c95fd24d47583e"
+installed_at = "2026-07-21T09:09:27.193925Z"
+
+[[skill]]
+qualified_name = "4290899e4697f267/manifesto"
+repo_alias = "4290899e4697f267"
+source_path = "skills/architecture/manifesto"
+target_dir = ".claude/skills/manifesto"
+content_hash = "5906935b4b3fb44b2d113018526590b3337969fb20a0710c414b7824bf7b4bcb"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[skill.current]
+tag = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+installed_at = "2026-06-29T08:25:11.256649Z"
+
+[[skill.history]]
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+installed_at = "2026-06-29T08:25:11.235637Z"
 
 [[skill]]
 qualified_name = "4290899e4697f267/deep-explain"
@@ -48,37 +98,6 @@ sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.234360Z"
 
 [[skill]]
-qualified_name = "4290899e4697f267/manifesto"
-repo_alias = "4290899e4697f267"
-source_path = "skills/architecture/manifesto"
-target_dir = ".claude/skills/manifesto"
-content_hash = "5906935b4b3fb44b2d113018526590b3337969fb20a0710c414b7824bf7b4bcb"
-pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-risk_acknowledged = false
-
-[skill.current]
-tag = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.256649Z"
-
-[[skill.history]]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.235637Z"
-
-[[skill]]
-qualified_name = "4290899e4697f267/pageindex"
-repo_alias = "4290899e4697f267"
-source_path = "skills/tools/pageindex"
-target_dir = ".claude/skills/pageindex"
-history = []
-content_hash = "2bd803b32799dd81fdae0b92776ca4a91340ce096b81ac36ae45a77f20704007"
-risk_acknowledged = false
-
-[skill.current]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.233962Z"
-
-[[skill]]
 qualified_name = "4290899e4697f267/python-review"
 repo_alias = "4290899e4697f267"
 source_path = "skills/development/python-review"
@@ -115,19 +134,6 @@ sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.234866Z"
 
 [[skill]]
-qualified_name = "4290899e4697f267/terminal-gif"
-repo_alias = "4290899e4697f267"
-source_path = "skills/documentation/terminal-gif"
-target_dir = ".claude/skills/terminal-gif"
-history = []
-content_hash = "599a57b4fa4629c81fd9d53b3f7c6617b230fab04cd9dde33d318bb0c1756711"
-risk_acknowledged = false
-
-[skill.current]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.235544Z"
-
-[[skill]]
 qualified_name = "4290899e4697f267/release"
 repo_alias = "4290899e4697f267"
 source_path = "skills/ops/release"
@@ -144,6 +150,38 @@ installed_at = "2026-06-29T08:25:11.575279Z"
 [[skill.history]]
 sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.235782Z"
+
+[[subagent]]
+qualified_name = "4290899e4697f267/dependency-analyst"
+repo_alias = "4290899e4697f267"
+source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
+target_path = ".claude/agents/dependency-analyst.md"
+content_hash = "4bc1115997cf13d54e8ed4c86fbc31edd6bd597fb1d6047b08532001ddd5868b"
+risk_acknowledged = false
+
+[subagent.current]
+sha = "6e258a25cd78ced783774e4fca4d6c26e83755fa"
+installed_at = "2026-07-21T09:15:47.587937Z"
+
+[[subagent.history]]
+sha = "65c95907825ba0728bb0c18c89c95fd24d47583e"
+installed_at = "2026-07-21T09:09:27.197918Z"
+
+[[subagent]]
+qualified_name = "4290899e4697f267/grader"
+repo_alias = "4290899e4697f267"
+source_path = "skills/tools/agent-creator/agents/grader.md"
+target_path = ".claude/agents/grader.md"
+content_hash = "f4b8105617960359bc469984233a2159e947114411fbbc79c44b5765a34c1f88"
+risk_acknowledged = false
+
+[subagent.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-07-21T09:15:47.617477Z"
+
+[[subagent.history]]
+sha = "65c95907825ba0728bb0c18c89c95fd24d47583e"
+installed_at = "2026-07-21T09:09:27.196881Z"
 
 [[subagent]]
 qualified_name = "4290899e4697f267/adversarial-reviewer"
@@ -164,19 +202,6 @@ sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.236060Z"
 
 [[subagent]]
-qualified_name = "4290899e4697f267/dependency-analyst"
-repo_alias = "4290899e4697f267"
-source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
-target_path = ".claude/agents/dependency-analyst.md"
-history = []
-content_hash = "4bc1115997cf13d54e8ed4c86fbc31edd6bd597fb1d6047b08532001ddd5868b"
-risk_acknowledged = false
-
-[subagent.current]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.236793Z"
-
-[[subagent]]
 qualified_name = "4290899e4697f267/feature-planner"
 repo_alias = "4290899e4697f267"
 source_path = "agents/feature-planner.md"
@@ -193,36 +218,6 @@ installed_at = "2026-06-29T08:25:11.621853Z"
 [[subagent.history]]
 sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.237668Z"
-
-[[subagent]]
-qualified_name = "4290899e4697f267/grader"
-repo_alias = "4290899e4697f267"
-source_path = "skills/tools/agent-creator/agents/grader.md"
-target_path = ".claude/agents/grader.md"
-history = []
-content_hash = "f4b8105617960359bc469984233a2159e947114411fbbc79c44b5765a34c1f88"
-risk_acknowledged = false
-
-[subagent.current]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.239676Z"
-
-[[rule]]
-qualified_name = "4290899e4697f267/pre-existing-issues"
-repo_alias = "4290899e4697f267"
-source_path = "rules/pre-existing-issues.md"
-content_hash = "dcc55c18052e0fa373567766756108db80508e86d97c2599ef36d44f646fa846"
-pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-risk_acknowledged = false
-
-[rule.current]
-tag = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.679260Z"
-
-[[rule.history]]
-sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
-installed_at = "2026-06-29T08:25:11.240181Z"
 
 [[rule]]
 qualified_name = "1385a5f1be8c889c/slop-scan-for-docs"
@@ -251,6 +246,23 @@ risk_acknowledged = false
 tag = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
 installed_at = "2026-06-29T08:25:11.661998Z"
+
+[[rule]]
+qualified_name = "4290899e4697f267/pre-existing-issues"
+repo_alias = "4290899e4697f267"
+source_path = "rules/pre-existing-issues.md"
+content_hash = "dcc55c18052e0fa373567766756108db80508e86d97c2599ef36d44f646fa846"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[rule.current]
+tag = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+installed_at = "2026-06-29T08:25:11.679260Z"
+
+[[rule.history]]
+sha = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+installed_at = "2026-06-29T08:25:11.240181Z"
 
 [[rule]]
 qualified_name = "4290899e4697f267/prek-code-quality"
@@ -311,6 +323,22 @@ tag = "df13d6b1a7ae5e6f4bcd8b7b0e6c7268dc937494"
 sha = "df13d6b1a7ae5e6f4bcd8b7b0e6c7268dc937494"
 installed_at = "2026-06-29T08:25:11.886901Z"
 
+[[plugin]]
+qualified_name = "ef9f6a17bd3105b7/loop-harness"
+repo_alias = "ef9f6a17bd3105b7"
+flavor = "claude"
+source_path = ""
+target_dir = ".claude/plugins/aim-ef9f6a17bd3105b7/loop-harness"
+marketplace_name = "aim-ef9f6a17bd3105b7"
+history = []
+content_hash = "581f8c13bce37b737e6b81bd102d162c570ae5760567b314f761052bcec3227a"
+risk_acknowledged = false
+
+[plugin.current]
+tag = "0.1.0"
+sha = "6d3b80eaed69dee86cdd3e09d12a2c269cb35003"
+installed_at = "2026-07-21T09:09:14.512611Z"
+
 [managed_region_hashes]
 header = "8209ab5f5a7c8f642c374946c62b4af4bc0abcf6b44bc22fc745ebc94105a7bc"
 guidelines = "9f2811d5c944f66b8dd93552c313b774b0bb2ecc1796783b476131e17e808f69"
@@ -319,3 +347,4 @@ guidelines = "9f2811d5c944f66b8dd93552c313b774b0bb2ecc1796783b476131e17e808f69"
 1385a5f1be8c889c = "https://github.com/athola/claude-night-market"
 4290899e4697f267 = "https://github.com/jasperhg90/skills"
 8b8de8ec329cb5d5 = "https://github.com/jasperhg90/memex"
+ef9f6a17bd3105b7 = "https://github.com/jasperhg90/loop-engineering-harness"

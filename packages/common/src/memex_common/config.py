@@ -1396,12 +1396,160 @@ class ApiKeyConfig(BaseModel):
         return data
 
 
+class OidcGrantRule(BaseModel):
+    """Maps a token claim value onto a policy and optional vault scoping.
+
+    A rule matches when the verified token's ``claim`` contains ``value``
+    (membership when the claim is a list, e.g. ``groups``/``roles``; equality
+    when it is a scalar, e.g. ``email``). The first matching rule in a
+    provider's ``grant_rules`` wins and determines the request's policy and
+    vault scope, exactly as an :class:`ApiKeyConfig` would.
+    """
+
+    claim: str = Field(
+        description='Token claim to inspect (e.g. "groups", "roles", "email").',
+    )
+    value: str = Field(description='Claim value that activates this rule.')
+    policy: Policy = Field(description='Access policy granted on match: reader, writer, or admin.')
+    vault_ids: list[str] | None = Field(
+        default=None,
+        description='Vault IDs or names this grant is scoped to. None = all vaults.',
+    )
+    read_vault_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            'Additional vault IDs or names this grant may read from (read-only). '
+            'Effective read scope = vault_ids + read_vault_ids. '
+            'Only valid when vault_ids is set.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def validate_read_vault_ids(self) -> Self:
+        """Reject read_vault_ids when vault_ids is None (unrestricted)."""
+        if self.vault_ids is None and self.read_vault_ids is not None:
+            raise ValueError(
+                'read_vault_ids cannot be set when vault_ids is None '
+                '(grant already has unrestricted access to all vaults).'
+            )
+        return self
+
+
+def _require_https_or_loopback(url: str | None) -> str | None:
+    """Reject non-HTTPS OIDC URLs (except loopback) at config load.
+
+    Over plain HTTP a network MITM can serve attacker-controlled JWKS (server
+    side) or intercept the credentials/tokens sent to the token endpoint (client
+    side), so a forged token would verify or a secret would leak — reject the
+    footgun at load rather than trust the operator. Loopback hosts are allowed so
+    local development and the e2e tests (http://127.0.0.1) still work.
+    """
+    if url is None:
+        return url
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme == 'https':
+        return url
+    if parsed.scheme == 'http' and host in ('localhost', '127.0.0.1', '::1'):
+        return url
+    raise ValueError(
+        f'OIDC issuer/jwks_uri must use HTTPS (got {url!r}). Plain HTTP is '
+        'only allowed for loopback hosts (localhost / 127.0.0.1 / ::1).'
+    )
+
+
+class OidcProviderConfig(BaseModel):
+    """An OIDC provider trusted for bearer-token (JWT) authentication.
+
+    Access tokens presented as ``Authorization: Bearer <jwt>`` are verified
+    locally against the provider's JWKS (discovered from ``issuer`` unless
+    ``jwks_uri`` is set). The provider is selected by matching the token's
+    ``iss`` claim against ``issuer``. Only providers that issue signed JWT
+    access tokens are supported (e.g. Entra ID v2, Zitadel, Keycloak, Auth0);
+    providers with opaque access tokens (e.g. Google, GitHub) are not.
+    """
+
+    issuer: str = Field(
+        description=(
+            'OIDC issuer URL. Used to discover the JWKS endpoint via '
+            '<issuer>/.well-known/openid-configuration and to validate and '
+            'select on the token "iss" claim.'
+        ),
+    )
+    audience: list[str] = Field(
+        min_length=1,
+        description='Accepted values for the token "aud" claim (validation is mandatory).',
+    )
+    jwks_uri: str | None = Field(
+        default=None,
+        description='Explicit JWKS URL. Overrides OIDC discovery when set.',
+    )
+    algorithms: list[str] = Field(
+        default_factory=lambda: ['RS256', 'ES256'],
+        description='Allowed JWT signing algorithms. Asymmetric only; enforced against the token header.',
+    )
+
+    @field_validator('algorithms')
+    @classmethod
+    def reject_symmetric_algorithms(cls, algorithms: list[str]) -> list[str]:
+        """Only asymmetric algorithms are allowed, closing RS/HS confusion.
+
+        A symmetric alg (HS*) or ``none`` would let a token be forged from the
+        public JWKS material, so reject them at config load rather than trust
+        the operator to avoid the footgun.
+        """
+        allowed_prefixes = ('RS', 'ES', 'PS')
+        for alg in algorithms:
+            if alg == 'EdDSA':
+                continue
+            if not alg.startswith(allowed_prefixes):
+                raise ValueError(
+                    f'Unsupported OIDC signing algorithm {alg!r}. Only asymmetric '
+                    'algorithms are allowed (RS*, ES*, PS*, EdDSA).'
+                )
+        return algorithms
+
+    @field_validator('issuer', 'jwks_uri')
+    @classmethod
+    def require_https(cls, url: str | None) -> str | None:
+        return _require_https_or_loopback(url)
+
+    leeway_seconds: int = Field(
+        default=60,
+        ge=0,
+        description='Clock-skew tolerance (seconds) applied to exp/nbf/iat validation.',
+    )
+    grant_rules: list[OidcGrantRule] = Field(
+        default_factory=list,
+        description='Claim-to-policy mapping rules, evaluated in order (first match wins).',
+    )
+    default_policy: Policy | None = Field(
+        default=None,
+        description=(
+            'Policy granted (with unrestricted vault access) when no grant_rule '
+            'matches. None = reject tokens that match no rule.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def validate_has_authorization(self) -> Self:
+        """Require at least one way to authorize a verified token."""
+        if not self.grant_rules and self.default_policy is None:
+            raise ValueError(
+                'OIDC provider must define at least one grant_rule or a '
+                'default_policy, otherwise every verified token is rejected.'
+            )
+        return self
+
+
 class AuthConfig(BaseModel):
-    """Authentication configuration for API key-based auth."""
+    """Authentication configuration for API key and OIDC bearer-token auth."""
 
     enabled: bool = Field(
         default=False,
-        description='Enable API key authentication. Disabled by default for localhost.',
+        description='Enable authentication (API key and/or OIDC). Disabled by default for localhost.',
     )
     keys: list[ApiKeyConfig] = Field(
         default_factory=list,
@@ -1422,6 +1570,13 @@ class AuthConfig(BaseModel):
             'hex(HMAC-SHA256(secret, request_body)).'
         ),
     )
+    oidc: list[OidcProviderConfig] = Field(
+        default_factory=list,
+        description=(
+            'Trusted OIDC providers for Authorization: Bearer token auth. '
+            'Coexists with API keys; a request may authenticate via either scheme.'
+        ),
+    )
 
     @model_validator(mode='before')
     @classmethod
@@ -1437,6 +1592,105 @@ class AuthConfig(BaseModel):
                 '      description: "My admin key"'
             )
         return data
+
+
+class OidcClientConfig(BaseModel):
+    """Client-side OIDC configuration for the CLI and MCP.
+
+    Modes, selected by ``grant``:
+
+    - ``interactive`` (default): a human runs ``memex auth login`` (Authorization
+      Code + PKCE, or the Device Authorization Grant) to obtain a bearer token.
+    - ``client_credentials`` / ``jwt_profile``: a service account authenticates
+      non-interactively. Tokens are acquired and refreshed automatically; no
+      ``memex auth login`` step is needed. ``jwt_profile`` uses a provider key
+      file (e.g. a Zitadel service-account key JSON) via the RFC 7523 JWT-bearer
+      grant; ``client_credentials`` uses ``client_secret``. Both hold a secret.
+    - ``token_file`` / ``token_env``: **keyless** workload auth. The client presents
+      an ambient, platform-issued bearer JWT (e.g. a Nomad Workload Identity token)
+      read from a file or env var — no stored secret, no token exchange.
+
+    The server may trust several providers; the client uses exactly one.
+    """
+
+    issuer: str = Field(
+        description='OIDC issuer URL used to discover authorization/token/device endpoints.',
+    )
+    client_id: str | None = Field(
+        default=None,
+        description='OAuth client ID registered with the provider. Required for the '
+        'interactive/client_credentials/jwt_profile grants; unused by the keyless '
+        'token_file/token_env grants.',
+    )
+    scopes: list[str] = Field(
+        default_factory=lambda: ['openid', 'profile', 'email', 'offline_access'],
+        description='Scopes requested at login. offline_access enables refresh tokens.',
+    )
+    client_secret: SecretStr | None = Field(
+        default=None,
+        description='Client secret for confidential/client_credentials clients. '
+        'Omit for public (PKCE) clients.',
+    )
+    grant: Literal[
+        'interactive', 'client_credentials', 'jwt_profile', 'token_file', 'token_env'
+    ] = Field(
+        default='interactive',
+        description=(
+            'How the client obtains tokens. "interactive" = human login via '
+            '`memex auth login`. "client_credentials" / "jwt_profile" = '
+            'non-interactive service-account auth, acquired automatically. '
+            '"token_file" / "token_env" = keyless: present an ambient platform-issued '
+            'JWT (e.g. Nomad Workload Identity) read from a file or env var.'
+        ),
+    )
+    key_file: str | None = Field(
+        default=None,
+        description=(
+            'Path to a service-account key JSON (e.g. a Zitadel key file with '
+            'keyId/key/userId). Required for grant="jwt_profile".'
+        ),
+    )
+    token_file: str | None = Field(
+        default=None,
+        description=(
+            'Path to a file containing an ambient bearer JWT (e.g. a Nomad Workload '
+            'Identity token the runtime writes and rotates). Read fresh per request; '
+            'no secret is stored. Required for grant="token_file".'
+        ),
+    )
+    token_env: str | None = Field(
+        default=None,
+        description=(
+            'Name of an environment variable holding an ambient bearer JWT. '
+            'Required for grant="token_env".'
+        ),
+    )
+
+    @field_validator('issuer')
+    @classmethod
+    def require_https(cls, url: str) -> str:
+        # The client sends credentials / assertions / tokens to this issuer's
+        # endpoints; over plain HTTP they leak to a MITM. Same guard as the
+        # server-side OidcProviderConfig.
+        return _require_https_or_loopback(url) or url
+
+    @model_validator(mode='after')
+    def validate_grant_requirements(self) -> Self:
+        """Each grant needs its credential / identifier."""
+        if (
+            self.grant in ('interactive', 'client_credentials', 'jwt_profile')
+            and not self.client_id
+        ):
+            raise ValueError(f'grant="{self.grant}" requires client_id.')
+        if self.grant == 'client_credentials' and self.client_secret is None:
+            raise ValueError('grant="client_credentials" requires client_secret.')
+        if self.grant == 'jwt_profile' and not self.key_file:
+            raise ValueError('grant="jwt_profile" requires key_file.')
+        if self.grant == 'token_file' and not self.token_file:
+            raise ValueError('grant="token_file" requires token_file.')
+        if self.grant == 'token_env' and not self.token_env:
+            raise ValueError('grant="token_env" requires token_env.')
+        return self
 
 
 class CorsConfig(BaseModel):
@@ -2674,6 +2928,14 @@ class MemexConfig(BaseSettings):
         description='API key for authenticating with the Memex server. Used by CLI and MCP clients.',
     )
 
+    oidc: OidcClientConfig | None = Field(
+        default=None,
+        description=(
+            'OIDC login configuration for CLI/MCP. When set and a cached token exists, '
+            'clients send Authorization: Bearer instead of X-API-Key.'
+        ),
+    )
+
     vault: VaultConfig = Field(
         default_factory=VaultConfig,
         description='Client-side vault preferences (CLI, MCP). Overrides server defaults when set.',
@@ -2766,6 +3028,9 @@ def parse_memex_config(data: dict | None = None) -> MemexConfig:
 
 __all__ = [
     'AuthConfig',
+    'OidcGrantRule',
+    'OidcProviderConfig',
+    'OidcClientConfig',
     'CorsConfig',
     'ConfigWithRoot',
     'FileStoreConfig',

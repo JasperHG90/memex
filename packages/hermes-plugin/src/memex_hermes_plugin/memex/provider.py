@@ -247,6 +247,43 @@ class MemexMemoryProvider(MemoryProvider):
 
     # -- Initialization ------------------------------------------------------
 
+    def _build_api_client(self) -> httpx.AsyncClient:
+        """Build the HTTP client for the memex API.
+
+        Uses ``MemexClientAuth`` so the client picks up whatever auth the
+        environment provides: an OIDC bearer (interactive login, service account,
+        or a keyless workload token from ``MEMEX_OIDC__*`` — e.g. a Nomad Workload
+        Identity token via ``grant=token_file``) or the ``X-API-Key`` fallback.
+        Hermes' own resolved ``api_key`` is preferred as that fallback credential.
+
+        A malformed local memex config (or a partial ``MEMEX_OIDC__*`` env that
+        fails validation) must stay a soft fallback, not crash provider init, so
+        the shared-config path is guarded and degrades to an ``X-API-Key``-only
+        client.
+        """
+        assert self._config is not None, 'initialize() must run before _build_api_client()'
+        base_url = f'{self._config.server_url.rstrip("/")}/api/v1/'
+        try:
+            from pydantic import SecretStr
+
+            from memex_common.auth_client import MemexClientAuth
+            from memex_common.config import MemexConfig
+
+            memex_config = MemexConfig()
+            if self._config.api_key:
+                memex_config.api_key = SecretStr(self._config.api_key)
+            return httpx.AsyncClient(
+                base_url=base_url, timeout=240.0, auth=MemexClientAuth(memex_config)
+            )
+        except Exception as exc:  # noqa: BLE001 - never let auth config crash init
+            logger.warning(
+                'Falling back to X-API-Key client (shared memex config unusable): %s', exc
+            )
+            headers: dict[str, str] = {}
+            if self._config.api_key:
+                headers['X-API-Key'] = self._config.api_key
+            return httpx.AsyncClient(base_url=base_url, timeout=240.0, headers=headers)
+
     def initialize(self, session_id: str, **kwargs: Any) -> None:  # type: ignore[override]
         self._session_id = session_id
         self._hermes_home = _resolve_hermes_home(kwargs)
@@ -258,12 +295,7 @@ class MemexMemoryProvider(MemoryProvider):
         self._session_note_key = make_session_note_key()
         self._project_id = derive_project_id()
 
-        headers: dict[str, str] = {}
-        if self._config.api_key:
-            headers['X-API-Key'] = self._config.api_key
-
-        base_url = f'{self._config.server_url.rstrip("/")}/api/v1/'
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=240.0, headers=headers)
+        self._client = self._build_api_client()
 
         from memex_common.client import RemoteMemexAPI
 

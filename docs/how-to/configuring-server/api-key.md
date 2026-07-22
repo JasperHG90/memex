@@ -139,6 +139,7 @@ You want `200`, `401`, `200`. The middleware returns `401` when the header is mi
 
 ## See also
 
+- [How-to: Authenticate with an OIDC provider](./oidc.md)
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
 - [How-to: Configure Memex](./default-model.md)
 - [Reference: server configuration](../../reference/configuration-options.md)

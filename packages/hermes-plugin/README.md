@@ -111,6 +111,28 @@ Env vars override the config file. Useful for CI, containerized setups, or per-s
 - `MEMEX_VAULT` — alias for `vault_id`
 - `MEMEX_HERMES_MODE` — alias for `memory_mode`
 
+### OIDC / OAuth (optional, instead of an API key)
+
+When the Memex server enforces OIDC, Hermes authenticates with a bearer token via
+the same `MEMEX_OIDC__*` env vars the CLI/MCP use (parsed into the shared client
+config). If OIDC is not configured, Hermes falls back to `MEMEX_API_KEY`.
+
+- **Keyless workload** (recommended for a Nomad-run Hermes; no stored secret):
+
+  ```bash
+  MEMEX_OIDC__ISSUER=https://nomad.example.internal
+  MEMEX_OIDC__GRANT=token_file
+  MEMEX_OIDC__TOKEN_FILE=/secrets/nomad_token.jwt   # the Nomad Workload Identity token
+  ```
+
+- **Service account** (holds a secret): `MEMEX_OIDC__GRANT=client_credentials` with
+  `MEMEX_OIDC__CLIENT_ID` + `MEMEX_OIDC__CLIENT_SECRET`, or `MEMEX_OIDC__GRANT=jwt_profile`
+  with `MEMEX_OIDC__KEY_FILE`.
+
+`MEMEX_OIDC__ISSUER` is mandatory whenever any `MEMEX_OIDC__*` var is set. A malformed
+OIDC env is logged and falls back to the API-key client rather than crashing startup.
+See the [OIDC how-to](../../docs/how-to/configuring-server/oidc.md).
+
 ### Fallback to Memex's own config
 
 If `$HERMES_HOME/memex/config.json` is absent, the plugin reads `MemexConfig()` (which in turn reads `~/.config/memex/config.yaml` and local `.memex.yaml`). Users who already run Memex locally can skip the Hermes-side config file entirely.

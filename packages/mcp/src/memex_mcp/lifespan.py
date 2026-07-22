@@ -9,6 +9,7 @@ from fastmcp import Context, FastMCP
 from mcp.shared.context import RequestContext
 
 from memex_common.asset_cache import SessionAssetCache
+from memex_common.auth_client import MemexClientAuth
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_mcp.models import AppContext
@@ -27,10 +28,8 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     # In Client mode, we just use the remote server URL from config
     server_url = config.server_url
     base_url = f'{server_url.rstrip("/")}/api/v1/'
-    headers: dict[str, str] = {}
-    if config.api_key:
-        headers['X-API-Key'] = config.api_key.get_secret_value()
-    client = httpx.AsyncClient(base_url=base_url, timeout=120.0, headers=headers)
+    # auth= (not headers=) so a refreshed OIDC token reaches this long-lived client.
+    client = httpx.AsyncClient(base_url=base_url, timeout=120.0, auth=MemexClientAuth(config))
     api = RemoteMemexAPI(client)
 
     cache = SessionAssetCache()

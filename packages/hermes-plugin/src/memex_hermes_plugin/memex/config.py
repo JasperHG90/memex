@@ -8,6 +8,11 @@ Resolution order (highest precedence first):
    local ``.memex.yaml``. Frictionless for users who already run Memex locally.
 
 Secrets (api_key) belong in ``$HERMES_HOME/.env`` and load via env vars.
+
+For OIDC/OAuth (instead of an api_key), set the shared ``MEMEX_OIDC__*`` env vars
+(e.g. ``MEMEX_OIDC__GRANT=token_file`` for a keyless Nomad Workload Identity token);
+they are parsed by ``MemexConfig`` and consumed by the shared client auth layer.
+See the OIDC how-to and the plugin README.
 """
 
 from __future__ import annotations

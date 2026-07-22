@@ -27,6 +27,7 @@ nav = [
     ]},
     { "Server configuration" = [
       "how-to/configuring-server/api-key.md",
+      "how-to/configuring-server/oidc.md",
       "how-to/configuring-server/default-model.md",
       "how-to/configuring-server/reranker-and-embedding-models.md",
       "how-to/configuring-server/low-resource.md",
@@ -78,6 +79,7 @@ nav = [
       "explanation/how-memex-works/note-lifecycle.md",
       "explanation/how-memex-works/procedural-memory.md",
       "explanation/how-memex-works/contradiction-detection.md",
+      "explanation/how-memex-works/oidc-authentication.md",
     ]},
     "explanation/identifiers.md",
     "explanation/session-briefings.md",
