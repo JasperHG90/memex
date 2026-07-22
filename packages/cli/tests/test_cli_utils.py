@@ -5,7 +5,9 @@ from uuid import uuid4
 import httpx
 import pytest
 import typer
+from typer.testing import CliRunner
 
+from memex_cli import app
 from memex_cli.utils import (
     ListFormat,
     async_command,
@@ -211,3 +213,19 @@ def test_env_var_config_failure_not_misdiagnosed_as_missing(runner):
     assert result.exit_code == 1
     assert 'No Memex configuration found' not in result.output
     assert 'memex config show' in result.output
+
+
+def test_typo_suggests_lazy_subcommand():
+    # Lazy subcommands live in LAZY_SUBCOMMANDS, not the eager `commands` dict, so the
+    # LazyTyperGroup must include them in "Did you mean ...?" suggestions.
+    result = CliRunner().invoke(app, ['vaul'])
+    assert result.exit_code != 0
+    output = ' '.join(result.output.split())
+    assert "Did you mean 'vault'?" in output, output
+
+
+def test_typo_no_suggestion_when_nothing_close():
+    # A typo with no close match must not invent a suggestion.
+    result = CliRunner().invoke(app, ['zzzzzzzz'])
+    assert result.exit_code != 0
+    assert 'Did you mean' not in result.output

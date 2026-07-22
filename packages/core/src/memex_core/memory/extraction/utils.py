@@ -185,6 +185,116 @@ def assess_structure_quality(headers: list[DetectedHeader], doc_length: int) -> 
     )
 
 
+# Non-ASCII characters an LLM commonly substitutes for their ASCII equivalents
+# when transcribing a header. Folding them lets a near-verbatim header still
+# match the source. (Space-like characters such as NBSP are handled by the
+# whitespace-run collapse in normalize_with_offsets, not here.)
+_NORMALIZE_TRANSLATION = str.maketrans(
+    {
+        '‘': "'",  # left single quotation mark
+        '’': "'",  # right single quotation mark
+        '‚': "'",  # single low-9 quotation mark
+        '‛': "'",  # single high-reversed-9 quotation mark
+        '“': '"',  # left double quotation mark
+        '”': '"',  # right double quotation mark
+        '„': '"',  # double low-9 quotation mark
+        '–': '-',  # en dash
+        '—': '-',  # em dash
+        '−': '-',  # minus sign
+    }
+)
+
+
+def normalize_with_offsets(text: str) -> tuple[str, list[int], list[int]]:
+    """Normalize *text* for drift-tolerant matching, tracking original offsets.
+
+    Collapses each run of whitespace to a single space, folds smart quotes and
+    unicode dashes to ASCII, and casefolds. Returns the normalized string plus
+    two parallel arrays: ``starts[i]`` (inclusive) and ``ends[i]`` (exclusive)
+    are the ORIGINAL indices of the source span that produced ``norm[i]``. A
+    normalized-match position therefore maps back to an exact original span via
+    ``starts[match_start]`` and ``ends[match_end - 1]``. Length-changing folds
+    (e.g. ``ß`` -> ``ss``) emit one normalized char per output char, all sharing
+    the same source span.
+    """
+    norm_chars: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i].isspace():
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            norm_chars.append(' ')
+            starts.append(i)
+            ends.append(j)
+            i = j
+            continue
+        folded = text[i].translate(_NORMALIZE_TRANSLATION).casefold()
+        for c in folded:
+            norm_chars.append(c)
+            starts.append(i)
+            ends.append(i + 1)
+        i += 1
+    return ''.join(norm_chars), starts, ends
+
+
+def locate_span(
+    norm_hay: str, starts: list[int], ends: list[int], needle: str
+) -> tuple[int, int] | None:
+    """Locate *needle* in a normalized haystack; return its ORIGINAL-coord span.
+
+    *norm_hay*, *starts*, *ends* come from :func:`normalize_with_offsets` applied
+    to the haystack (normalize once, reuse across many needles). Returns the
+    ``(start, end)`` span in the original haystack, or ``None`` if absent.
+    Needles under 4 normalized characters are rejected to avoid spurious matches.
+    """
+    norm_needle = normalize_with_offsets(needle)[0].strip()
+    if len(norm_needle) < 4:
+        return None
+    idx = norm_hay.find(norm_needle)
+    if idx < 0:
+        # str.find returns -1, a valid negative index; guard before indexing.
+        return None
+    return starts[idx], ends[idx + len(norm_needle) - 1]
+
+
+def bounded_fuzzy(
+    haystack: str,
+    needle: str,
+    *,
+    max_len: int = 120,
+    max_tol: int = 3,
+    timeout: float = 1.0,
+) -> tuple[int, int] | None:
+    """Approximate-match *needle* in *haystack* under hard safety bounds.
+
+    The only retained approximate-regex path. Its bounds guarantee it can never
+    wedge the event loop: it refuses needles longer than *max_len* (fuzzy cost is
+    exponential in the edit budget, which scales with length), caps the tolerance
+    at *max_tol*, and passes ``timeout=`` to the regex engine. Returns the matched
+    ``(start, end)`` span in *haystack* coordinates, or ``None``.
+    """
+    if len(needle.strip()) < 4 or len(needle) > max_len:
+        # Mirror locate_span's floor: too-short needles match spuriously (a
+        # verbatim short header is already caught by the exact-match fast path).
+        return None
+    tolerance = min(max_tol, max(2, int(len(needle) * 0.1)))
+    pattern = f'({regex.escape(needle)}){{e<={tolerance}}}'
+    try:
+        match = regex.search(pattern, haystack, timeout=timeout)
+    except (regex.error, ValueError, RuntimeError, TimeoutError):
+        # TimeoutError is a builtin (OSError subclass) the regex engine raises on
+        # timeout — NOT covered by regex.error/ValueError/RuntimeError, so it must
+        # be listed explicitly or a timeout becomes an uncaught crash.
+        return None
+    if match is None:
+        return None
+    return match.start(), match.end()
+
+
 def verify_headers(headers: list[DetectedHeader], full_text: str) -> list[DetectedHeader]:
     """Verify LLM-detected headers against the source text using fuzzy matching."""
     for h in headers:
@@ -203,18 +313,18 @@ def verify_headers(headers: list[DetectedHeader], full_text: str) -> list[Detect
         window_end = min(len(full_text), h.start_index + len(h.exact_text) + 20)
         window = full_text[window_start:window_end]
 
-        try:
-            tolerance = max(2, int(len(h.exact_text) * 0.1))
-            pattern = f'({regex.escape(h.exact_text)}){{e<={tolerance}}}'
-            match = regex.search(pattern, window)
-            if match:
-                h.start_index = window_start + match.start()
-                h.exact_text = match.group(0)
-                h.verified = True
-            else:
-                h.verified = False
-        except (regex.error, ValueError, RuntimeError) as e:
-            logger.debug('Header verification failed for %r: %s', h.exact_text, e)
+        norm_window, starts, ends = normalize_with_offsets(window)
+        span = locate_span(norm_window, starts, ends, h.exact_text)
+        if span is None:
+            span = bounded_fuzzy(window, h.exact_text)
+        if span is not None:
+            w_start, w_end = span
+            h.start_index = window_start + w_start
+            # Rewrite to the verbatim matched substring so the exact check above
+            # holds on re-verification and downstream length math stays correct.
+            h.exact_text = window[w_start:w_end]
+            h.verified = True
+        else:
             h.verified = False
 
     return headers

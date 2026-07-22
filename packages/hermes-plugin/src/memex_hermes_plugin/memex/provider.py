@@ -16,8 +16,10 @@ import asyncio
 import atexit
 import base64
 import concurrent.futures
+import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -49,6 +51,24 @@ logger = logging.getLogger(__name__)
 # Hard cap on the in-memory retry queue: bounds memory if Memex is
 # unreachable for an entire session.
 _PENDING_MAX = 256
+
+# File name (under $HERMES_HOME/memex/, alongside config.json) for spilling
+# the pending queue to disk at process exit when the fire-and-forget drain
+# has not finished. Replayed on the next initialize() so no transcript chunk
+# is lost across a clean restart. SIGKILL / power-loss is out of scope — that
+# would require a write-ahead journal on every enqueue.
+_SPILL_FILE_NAME = 'pending-session-writes.json'
+
+# Bounded wait for the background drain worker to finish at shutdown, before
+# closing the client and spilling the remainder. Long enough for the fast
+# happy path; anything slower spills and replays on the next start.
+_SHUTDOWN_DRAIN_JOIN_TIMEOUT = 8.0
+
+# Pacing between drain-worker relaunches inside the shutdown drain window
+# (`_drain_with_deadline`). A failed attempt against an unreachable server
+# exits in ~ms; without pacing the window would spin-spawn hundreds of
+# workers, each burning a connect attempt.
+_SHUTDOWN_DRAIN_RELAUNCH_DELAY = 0.2
 
 # Non-transient HTTP statuses. The append/create will never succeed if
 # resent verbatim, so we drop the failing entry and continue draining the
@@ -138,19 +158,29 @@ class MemexMemoryProvider(MemoryProvider):
         # Watermark: turns at index < _flushed_index were already captured
         # into _pending. Avoids double-writes across flush boundaries.
         self._flushed_index = 0
-        self._note_initialized = False
+        # note_keys whose create has landed server-side. A set (not a bool)
+        # because the pending queue can hold entries for more than one
+        # note_key at a time — a replayed spill entry from a previous session
+        # carries its own note_key, so create/append gating must be per-key.
+        self._initialized_note_keys: set[str] = set()
         # FIFO queue of pending writes (create or append). Each entry
-        # snapshots the vault_id at enqueue time so a mid-session vault
-        # rebind doesn't redirect in-flight chunks.
+        # snapshots the note_key and vault_id at enqueue time so a
+        # mid-session vault rebind (or a cross-session spill replay) doesn't
+        # redirect in-flight chunks to the wrong note or vault.
         self._pending: list[dict[str, Any]] = []
         self._shutdown_registered = False
         self._shutdown_started = False
         self._state_lock = threading.Lock()
         self._atexit_lock = threading.Lock()
-        # Serializes _drain_pending so concurrent flush callers don't
-        # race on the head item. _state_lock alone isn't enough: the
-        # network call happens with _state_lock released.
+        # Serializes the drain worker body so a shutdown-spawned worker can't
+        # race a still-running one on the head item. _state_lock alone isn't
+        # enough: the network call happens with _state_lock released.
         self._drain_lock = threading.Lock()
+        # The single background drain worker, or None when idle. Guarded by
+        # _state_lock. The worker clears this in the same critical section
+        # that observes the queue empty, so "queue empty" and "no worker"
+        # flip together and an enqueue never loses its wakeup.
+        self._bg_drain_thread: threading.Thread | None = None
 
     @property
     def asset_cache(self) -> SessionAssetCache | None:
@@ -305,6 +335,11 @@ class MemexMemoryProvider(MemoryProvider):
             if not self._shutdown_registered:
                 atexit.register(self._atexit_shutdown)
                 self._shutdown_registered = True
+
+        # Replay any writes a previous process spilled to disk before it could
+        # finish draining. Each entry carries its own note_key, so replayed
+        # chunks land in their original session note, not this one.
+        self._load_spill()
 
         logger.debug(
             'Memex provider initialized: session=%s vault=%s project=%s',
@@ -485,10 +520,10 @@ class MemexMemoryProvider(MemoryProvider):
     def _refresh_vault_binding(self) -> None:
         """Best-effort re-resolve the active vault.
 
-        Once the session has committed to a vault — either because the
-        create landed (``_note_initialized``) OR because a create is
-        already queued with a snapshotted ``vault_id`` — we hold the
-        binding constant. Letting the active vault drift after the queued
+        Once the session has committed to a vault — either because this
+        session's create landed OR because a create for this session's
+        note_key is already queued with a snapshotted ``vault_id`` — we hold
+        the binding constant. Letting the active vault drift after the queued
         create would land the create in vault A but every subsequent
         snapshotted-against-B append in vault B, splitting the transcript.
 
@@ -517,12 +552,15 @@ class MemexMemoryProvider(MemoryProvider):
         new_vault_id = self._resolve_or_create_vault_id(new_vault_name)
         if new_vault_id is None:
             return
+        cur = self._session_note_key
         with self._state_lock:
             # Re-validate under the lock at the point of mutation: a create
             # may have been enqueued or initialized while the network calls
             # above were in flight. Mutating the binding now would split
             # the transcript across vaults.
-            if self._note_initialized or any(p['kind'] == 'create' for p in self._pending):
+            if cur in self._initialized_note_keys or any(
+                p['kind'] == 'create' and p['note_key'] == cur for p in self._pending
+            ):
                 return
             self._vault_name = new_vault_name
             self._vault_id = new_vault_id
@@ -530,15 +568,17 @@ class MemexMemoryProvider(MemoryProvider):
     def _committed_to_vault(self) -> bool:
         """True if the session has effectively bound a vault.
 
-        Either the create has succeeded (``_note_initialized``) or a
-        create is queued with a snapshotted ``vault_id``. Reads of
-        ``_pending`` are protected by ``_state_lock``; ``_note_initialized``
-        is sampled cheaply outside the lock as a fast-path.
+        Either this session's create has succeeded (its note_key is in
+        ``_initialized_note_keys``) or a create for this session's note_key
+        is queued with a snapshotted ``vault_id``. Reads of ``_pending`` are
+        protected by ``_state_lock``; the set membership is sampled cheaply
+        outside the lock as a fast-path.
         """
-        if self._note_initialized:
+        cur = self._session_note_key
+        if cur in self._initialized_note_keys:
             return True
         with self._state_lock:
-            return any(p['kind'] == 'create' for p in self._pending)
+            return any(p['kind'] == 'create' and p['note_key'] == cur for p in self._pending)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = '') -> None:  # type: ignore[override]
         """Buffer the turn locally. Flushes happen at chunk boundaries
@@ -646,10 +686,17 @@ class MemexMemoryProvider(MemoryProvider):
                     self._enqueue_chunk(chunk, title=self._format_session_title())
                 except Exception as e:
                     logger.debug('Shutdown enqueue failed: %s', e)
+            # Keep the drain running for a bounded window BEFORE we close
+            # the client. A single launch+join is not enough: the running
+            # worker may be a leftover mid-outage attempt that exits with
+            # the queue intact, and joining it says nothing about the queue
+            # (the recovery-at-shutdown race). Whatever the window does not
+            # drain is spilled to disk and replayed on the next start.
+            self._drain_with_deadline(_SHUTDOWN_DRAIN_JOIN_TIMEOUT)
             try:
-                self._drain_pending()
+                self._spill_to_disk()
             except Exception as e:
-                logger.debug('Shutdown drain failed: %s', e)
+                logger.debug('Shutdown spill failed: %s', e)
         client = self._client
         self._client = None
         self._api = None
@@ -764,10 +811,10 @@ class MemexMemoryProvider(MemoryProvider):
     def _enqueue_chunk(self, content: str, *, title: str) -> None:
         """Enqueue a transcript chunk and try to drain the pending queue.
 
-        First chunk of the session (when ``_note_initialized`` is False AND
-        no other create is pending) is enqueued as a ``create``; everything
-        else is an ``append`` with a freshly-minted ``append_id`` for
-        idempotent retry semantics.
+        First chunk of the session (when this session's note_key is not yet
+        in ``_initialized_note_keys`` AND no create for it is already pending)
+        is enqueued as a ``create``; everything else is an ``append`` with a
+        freshly-minted ``append_id`` for idempotent retry semantics.
 
         Backpressure: at cap we drop the NEW chunk rather than evicting
         an older one. Older transcript content is more valuable for
@@ -786,13 +833,17 @@ class MemexMemoryProvider(MemoryProvider):
                     len(content),
                 )
                 return
-            has_pending_create = any(p['kind'] == 'create' for p in self._pending)
+            cur = self._session_note_key
+            has_pending_create = any(
+                p['kind'] == 'create' and p['note_key'] == cur for p in self._pending
+            )
             vault_id = str(self._vault_id) if self._vault_id else None
-            if not self._note_initialized and not has_pending_create:
+            if cur not in self._initialized_note_keys and not has_pending_create:
                 entry: dict[str, Any] = {
                     'kind': 'create',
                     'content': content,
                     'title': title,
+                    'note_key': cur,
                     'vault_id': vault_id,
                 }
             else:
@@ -800,60 +851,178 @@ class MemexMemoryProvider(MemoryProvider):
                     'kind': 'append',
                     'content': content,
                     'append_id': uuid4(),
+                    'note_key': cur,
                     'vault_id': vault_id,
                 }
             self._pending.append(entry)
         self._drain_pending()
 
     def _drain_pending(self) -> None:
-        """Process the pending queue FIFO.
+        """Fire-and-forget launcher for the pending-queue drain.
 
-        Serialized via ``_drain_lock`` so concurrent callers (hooks,
-        atexit, shutdown) take turns instead of racing on the head item.
-        Successful items are popped; transient failures keep the head in
-        place for retry; non-transient failures (4xx HTTP statuses)
-        drop the failing entry so a poisoned item can't block the rest of
-        the queue.
+        Spawns a daemon worker running ``_drain_pending_sync`` and returns
+        immediately, so latency-sensitive hooks (``on_pre_compress`` /
+        ``on_session_end`` / ``sync_turn`` flushes) never block on network
+        I/O or the 120s note-row wait. ``shutdown`` joins the worker
+        (bounded) before tearing down the client and spills whatever did
+        not drain in time.
 
-        Latency profile (A.2 trade-off): the 409-on-create branch waits
-        up to ``_WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT`` (120s) for the
-        in-flight ingest to materialise. Callers on latency-sensitive
-        paths (UI threads, outer timeouts) should be aware that
-        ``on_pre_compress`` / ``on_session_end`` / ``shutdown`` can
-        therefore block for up to 2 minutes when the overlap branch
-        fires. The previous 10s ceiling was the root cause of the
-        404+409 storm — see tech report Bug A for the trade-off.
+        Lost-wakeup guard: the worker clears ``_bg_drain_thread`` under
+        ``_state_lock`` in the same critical section that observes the queue
+        empty, and the launcher spawns iff ``_bg_drain_thread is None`` under
+        the same lock. So "queue empty" and "no worker" flip together — an
+        enqueue either sees a live worker that will still process its item,
+        or a cleared marker and spawns a fresh worker.
         """
         if self._api is None or self._config is None:
             return
-        if not self._drain_lock.acquire(blocking=False):
-            return  # Another caller is already draining; let them.
+        with self._state_lock:
+            if self._bg_drain_thread is not None:
+                return  # A worker is running; it will see the newly-enqueued item.
+            if not self._pending:
+                return
+            worker = threading.Thread(target=self._drain_worker, name='memex-drain', daemon=True)
+            self._bg_drain_thread = worker
+        try:
+            worker.start()
+        except (RuntimeError, OSError) as e:
+            # Thread-resource exhaustion. Clear the marker we just set so a
+            # future flush can retry — otherwise it points at an unstarted
+            # thread forever and the queue would grow without bound.
+            with self._state_lock:
+                if self._bg_drain_thread is worker:
+                    self._bg_drain_thread = None
+            logger.warning('Failed to start session-note drain worker: %s: %s', type(e).__name__, e)
+
+    def _drain_with_deadline(self, timeout: float) -> None:
+        """Keep the pending-queue drain running for up to ``timeout`` seconds.
+
+        Shutdown-only companion to ``_drain_pending``. Loop: while items
+        remain and the deadline has not passed, ensure a worker is running
+        and join it (bounded by the remaining window).
+
+        Rationale: launching once and joining once loses the queue in the
+        recovery-at-shutdown race — the joined worker can be a leftover
+        attempt launched mid-outage that fails transiently and exits with
+        every item still queued, even though the server is reachable again
+        by the time shutdown runs. Retrying inside the window drains a
+        drainable queue instead of abandoning it to the spill file after
+        the first failed attempt.
+
+        Relaunches after a failed attempt are paced by
+        ``_SHUTDOWN_DRAIN_RELAUNCH_DELAY`` so a hard outage (every attempt
+        fails in ~ms) does not spin-spawn workers for the whole window.
+        The first launch — including the relaunch right after joining a
+        leftover worker — is immediate, keeping the happy path fast.
+        """
+        deadline = time.monotonic() + timeout
+        pace_next_launch = False
+        while True:
+            with self._state_lock:
+                pending_left = bool(self._pending)
+                worker = self._bg_drain_thread
+            if worker is None and not pending_left:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if worker is not None:
+                worker.join(timeout=remaining)
+                continue
+            if pace_next_launch:
+                time.sleep(min(_SHUTDOWN_DRAIN_RELAUNCH_DELAY, remaining))
+            pace_next_launch = True
+            try:
+                self._drain_pending()
+            except Exception as e:
+                logger.debug('Shutdown drain launch failed: %s', e)
+                return
+
+    def _drain_worker(self) -> None:
+        """Daemon-thread target wrapping the synchronous drain body.
+
+        ``_drain_pending_sync`` re-raises ``_PROPAGATE_EXCEPTIONS``
+        (cancellation / interpreter shutdown) so a synchronous caller — and
+        the A.6 test — can observe it. On this daemon thread there is no
+        caller to observe it, and letting it escape the target produces a
+        noisy unhandled-thread-exception. Swallow it here: the pending items
+        stay queued for the next flush (the "don't swallow into a generic
+        retry" contract is preserved on the synchronous path), and
+        ``_bg_drain_thread`` was already cleared by the inner ``finally``.
+        """
+        try:
+            self._drain_pending_sync()
+        except _PROPAGATE_EXCEPTIONS:
+            logger.debug('Session-note drain worker aborted (cancellation/shutdown)')
+
+    def _drain_pending_sync(self) -> None:
+        """Drain the pending queue FIFO (background worker body).
+
+        Serialized via ``_drain_lock`` so a shutdown-spawned worker can't
+        race a still-running one on the head item. Successful items are
+        popped; transient failures keep the head in place for retry;
+        non-transient failures (4xx HTTP statuses) drop the failing entry so
+        a poisoned item can't block the rest of the queue.
+
+        Each entry carries its own ``note_key`` (snapshotted at enqueue),
+        so a replayed spill entry from an earlier session lands in its
+        original note rather than this session's. ``_bg_drain_thread`` is
+        cleared on every exit path (via the empty-branch under the lock, and
+        defensively in ``finally``) so a future flush can always spawn a
+        fresh worker.
+        """
+        self._drain_lock.acquire()
         try:
             while True:
                 with self._state_lock:
                     if not self._pending:
+                        # Clear the marker in the SAME critical section that
+                        # observes the queue empty (lost-wakeup guard).
+                        if self._bg_drain_thread is threading.current_thread():
+                            self._bg_drain_thread = None
                         return
                     head = self._pending[0]
+                if self._api is None or self._config is None:
+                    # Torn down (e.g. shutdown nulled the client after the
+                    # bounded join timed out). Stop cleanly; items stay queued
+                    # and are spilled by shutdown.
+                    return
+                note_key = head['note_key']
                 try:
                     if head['kind'] == 'create':
+                        # Probe before re-ingesting a REPLAYED create: its
+                        # original ingest may have landed server-side after the
+                        # first process gave up waiting. Re-ingesting would mint
+                        # a second version holding only the first chunk
+                        # (append_id-idempotent appends would not re-apply),
+                        # losing the tail. A fresh (non-replayed) create never
+                        # has a pre-existing row, so skip the extra HEAD there.
+                        if head.get('replayed') and self._note_row_exists(note_key):
+                            with self._state_lock:
+                                self._initialized_note_keys.add(note_key)
+                                if self._pending and self._pending[0] is head:
+                                    self._pending.pop(0)
+                            continue
                         self._do_create(
                             head['content'],
                             title=head['title'],
+                            note_key=note_key,
                             vault_id=head.get('vault_id'),
                         )
-                        if not self._wait_for_note_row():
+                        if not self._wait_for_note_row(note_key):
                             logger.warning(
                                 'Session note row did not appear after ingest; '
                                 'will retry on next flush.',
                             )
                             return
                         with self._state_lock:
-                            self._note_initialized = True
+                            self._initialized_note_keys.add(note_key)
                             if self._pending and self._pending[0] is head:
                                 self._pending.pop(0)
                     else:
                         self._do_append(
                             head['content'],
+                            note_key=note_key,
                             append_id=head['append_id'],
                             vault_id=head.get('vault_id'),
                         )
@@ -878,9 +1047,9 @@ class MemexMemoryProvider(MemoryProvider):
                             'waiting for in-flight job at %s',
                             e.response.headers.get('Location', '<unknown>'),
                         )
-                        if self._wait_for_note_row():
+                        if self._wait_for_note_row(note_key):
                             with self._state_lock:
-                                self._note_initialized = True
+                                self._initialized_note_keys.add(note_key)
                                 if self._pending and self._pending[0] is head:
                                     self._pending.pop(0)
                             continue
@@ -912,21 +1081,162 @@ class MemexMemoryProvider(MemoryProvider):
                     raise
                 except Exception as e:
                     logger.warning(
-                        'Session note %s failed; will retry on next flush: %s',
+                        'Session note %s failed; will retry on next flush: %s: %s',
                         head['kind'],
+                        type(e).__name__,
                         e,
                     )
                     return
         finally:
+            with self._state_lock:
+                if self._bg_drain_thread is threading.current_thread():
+                    self._bg_drain_thread = None
             self._drain_lock.release()
 
-    def _do_create(self, content: str, *, title: str, vault_id: str | None) -> None:
+    def _note_row_exists(self, note_key: str) -> bool:
+        """Single-shot check: is the note row already materialised?
+
+        Used before (re-)issuing a create so a replayed spill entry whose
+        original ingest actually landed does not create a duplicate version.
+        Any error (network, non-200) is treated as 'not confirmed' → proceed
+        with the create, which handles 409-overlap / retries itself.
+        """
+        if self._api is None:
+            return False
+        note_id = derive_note_uuid_from_key(note_key)
+        try:
+            return bool(run_sync(self._api.head_note(note_id), timeout=1.0))
+        except _PROPAGATE_EXCEPTIONS:
+            raise
+        except Exception:
+            return False
+
+    def _spill_path(self) -> Path | None:
+        """Path to the on-disk spill file, or None if HERMES_HOME is unset."""
+        if self._hermes_home is None:
+            return None
+        return self._hermes_home / 'memex' / _SPILL_FILE_NAME
+
+    def _spill_to_disk(self) -> None:
+        """Persist the pending queue to disk so it survives a process restart.
+
+        Called from ``shutdown`` after the drain worker has been joined
+        (bounded). Whatever the worker did not drain is written atomically
+        and replayed by ``_load_spill`` on the next ``initialize``. An empty
+        queue removes any stale spill file.
+        """
+        path = self._spill_path()
+        if path is None:
+            return
+        with self._state_lock:
+            pending = list(self._pending)
+        if not pending:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        serialisable = []
+        for entry in pending:
+            e = dict(entry)
+            if isinstance(e.get('append_id'), UUID):
+                e['append_id'] = str(e['append_id'])
+            serialisable.append(e)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write_json(path, serialisable)
+            logger.info('Spilled %d pending session-note writes to %s', len(serialisable), path)
+        except Exception as e:
+            logger.warning('Failed to spill pending writes to disk: %s: %s', type(e).__name__, e)
+
+    def _load_spill(self) -> None:
+        """Replay writes spilled by a previous process, then kick a drain.
+
+        Tolerant of a missing/corrupt/partial file (warn, return — never
+        crash ``initialize``). Keeps the head of an over-cap file so the
+        leading ``create`` is never dropped (which would strand its appends).
+        """
+        path = self._spill_path()
+        if path is None or not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except Exception as e:
+            logger.warning('Failed to read spill file %s: %s: %s', path, type(e).__name__, e)
+            return
+        replayed = 0
+        if isinstance(data, list):
+            with self._state_lock:
+                # Slice keeps the head: dropping a leading create would cause
+                # append-before-create (404) on replay.
+                for entry in data[:_PENDING_MAX]:
+                    parsed = self._parse_spill_entry(entry)
+                    if parsed is None:
+                        continue
+                    if len(self._pending) >= _PENDING_MAX:
+                        break
+                    self._pending.append(parsed)
+                    replayed += 1
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if replayed:
+            logger.info('Replayed %d spilled session-note writes from %s', replayed, path)
+            self._drain_pending()
+
+    @staticmethod
+    def _parse_spill_entry(entry: Any) -> dict[str, Any] | None:
+        """Validate + normalise one spilled entry, or None if malformed."""
+        if not isinstance(entry, dict):
+            return None
+        if entry.get('kind') not in ('create', 'append'):
+            return None
+        if not entry.get('note_key') or not entry.get('content'):
+            return None
+        vault_id = entry.get('vault_id')
+        if vault_id is not None and not isinstance(vault_id, str):
+            return None
+        e = dict(entry)
+        if e['kind'] == 'append':
+            aid = e.get('append_id')
+            if not isinstance(aid, str):
+                return None
+            try:
+                e['append_id'] = UUID(aid)
+            except ValueError:
+                return None
+        elif not e.get('title'):
+            return None
+        # Mark as replayed so the drain probes for an existing row before
+        # re-ingesting a create (avoids a duplicate version on the rare
+        # landed-but-timed-out create).
+        e['replayed'] = True
+        return e
+
+    @staticmethod
+    def _atomic_write_json(path: Path, data: Any) -> None:
+        """Write JSON atomically: temp file in the target dir + os.replace."""
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f'.{path.name}.', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _do_create(self, content: str, *, title: str, note_key: str, vault_id: str | None) -> None:
         """Create the session note via ``api.ingest``. May raise.
 
         Uses ``background=True`` so the LLM extraction phase runs
-        asynchronously server-side. ``_drain_pending`` calls
+        asynchronously server-side. ``_drain_pending_sync`` calls
         ``_wait_for_note_row`` afterwards to confirm the row is visible
-        before issuing appends.
+        before issuing appends. ``note_key`` is the entry's snapshotted key
+        (which may differ from ``self._session_note_key`` on spill replay).
         """
         assert self._api is not None and self._config is not None
         from memex_common.schemas import NoteCreateDTO
@@ -935,15 +1245,17 @@ class MemexMemoryProvider(MemoryProvider):
             name=title,
             description=f'Hermes session transcript ({self._session_id})',
             content=base64.b64encode(content.encode('utf-8')),
-            note_key=self._session_note_key,
+            note_key=note_key,
             vault_id=vault_id,
             tags=['hermes', self._agent_identity] if self._agent_identity else ['hermes'],
             author='hermes',
             template=self._config.retain.session_template or HERMES_SESSION_TEMPLATE,
         )
-        run_sync(self._api.ingest(dto, background=True), timeout=30.0)
+        run_sync(self._api.ingest(dto, background=True), timeout=180.0)
 
-    def _wait_for_note_row(self, *, timeout: float = _WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT) -> bool:
+    def _wait_for_note_row(
+        self, note_key: str, *, timeout: float = _WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT
+    ) -> bool:
         """Poll for the session note row to appear server-side.
 
         Returns True if the row is visible, False on timeout. The id is
@@ -967,7 +1279,7 @@ class MemexMemoryProvider(MemoryProvider):
         """
         if self._api is None:
             return False
-        note_id = derive_note_uuid_from_key(self._session_note_key)
+        note_id = derive_note_uuid_from_key(note_key)
         deadline = time.monotonic() + timeout
         attempt = 0
         while time.monotonic() < deadline:
@@ -1005,22 +1317,26 @@ class MemexMemoryProvider(MemoryProvider):
             attempt += 1
         return False
 
-    def _do_append(self, content: str, *, append_id: UUID, vault_id: str | None) -> None:
+    def _do_append(
+        self, content: str, *, note_key: str, append_id: UUID, vault_id: str | None
+    ) -> None:
         """Append a delta to the existing session note. May raise.
 
         Idempotent on ``append_id``: the server replays a cached outcome
         if the same id was previously processed, so retries are safe.
+        ``note_key`` is the entry's snapshotted key (which may differ from
+        ``self._session_note_key`` on spill replay).
         """
         assert self._api is not None
         run_sync(
             self._api.append_to_note(
-                note_key=self._session_note_key,
+                note_key=note_key,
                 vault_id=vault_id,
                 delta=content,
                 append_id=append_id,
                 joiner='paragraph',
             ),
-            timeout=30.0,
+            timeout=180.0,
         )
 
 

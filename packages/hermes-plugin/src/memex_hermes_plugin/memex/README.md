@@ -49,4 +49,19 @@ survey, how to chain entity tools.
 - `context` — briefing + prefetch, no tools
 - `tools` — tools only, no auto-inject
 
+## Session transcript persistence
+
+The session transcript is captured incrementally and written to a
+per-session note. Writes run on a background worker, so hooks never block
+on network I/O. Any writes that have not completed when the process exits
+are spilled to `$HERMES_HOME/memex/pending-session-writes.json` and replayed
+on the next start. Each spilled write carries its own `note_key`, so a
+replayed write lands in its original session note.
+
+Durability covers clean exits and uncaught-exception exits. A hard kill
+(SIGKILL, power loss) can still lose an in-memory write, since the spill
+happens at shutdown. Known limitation: a create replayed from a previous
+session is stamped with the new session's description and tags. Its title,
+`note_key`, and vault are correct.
+
 See the full README at https://github.com/JasperHG90/memex/blob/main/packages/hermes-plugin/README.md.

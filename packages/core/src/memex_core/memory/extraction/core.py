@@ -6,7 +6,6 @@ import asyncio
 from typing import Any, Coroutine, cast
 
 import dspy
-import regex as regex_lib
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
@@ -34,6 +33,7 @@ from memex_core.memory.extraction.signatures import (
 )
 from memex_core.memory.extraction.utils import (
     assess_structure_quality,
+    bounded_fuzzy,
     build_tree_from_regex_headers,
     collect_node_summaries_for_block,
     compute_coverage,
@@ -42,7 +42,9 @@ from memex_core.memory.extraction.utils import (
     filter_valid_nodes,
     generate_blocks_and_assign_ids,
     hydrate_tree,
+    locate_span,
     merge_header_lists,
+    normalize_with_offsets,
     sanitize_text,
     verify_headers,
 )
@@ -1192,7 +1194,15 @@ class AsyncMarkdownPageIndex(dspy.Module):
                         operation_name='extraction.header_scan',
                     )
 
+                # Normalized chunk for drift-tolerant matching, built lazily on
+                # the first non-verbatim header and reused for the rest — most
+                # chunks are all-verbatim and pay nothing.
+                norm_chunk: tuple[str, list[int], list[int]] | None = None
                 for h in pred.detected_headers:
+                    if not h.exact_text.strip():
+                        # Empty/whitespace exact_text: chunk.index('') returns 0,
+                        # which would anchor a phantom header at position 0.
+                        continue
                     try:
                         rel_idx = chunk.index(h.exact_text)
                         h.start_index = offset + rel_idx
@@ -1201,16 +1211,20 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     except ValueError:
                         pass
 
-                    tolerance = max(2, int(len(h.exact_text) * 0.15))
-                    try:
-                        pattern = f'({regex_lib.escape(h.exact_text)}){{e<={tolerance}}}'
-                        match = regex_lib.search(pattern, chunk)
-                        if match:
-                            h.exact_text = match.group(0)
-                            h.start_index = offset + match.start()
-                            valid_headers.append(h)
-                    except (regex_lib.error, ValueError, RuntimeError) as e:
-                        self._logger.debug('Fuzzy regex match failed for header: %s', e)
+                    if norm_chunk is None:
+                        norm_chunk = normalize_with_offsets(chunk)
+                    norm_hay, starts, ends = norm_chunk
+
+                    span = locate_span(norm_hay, starts, ends, h.exact_text)
+                    if span is None:
+                        span = bounded_fuzzy(chunk, h.exact_text)
+                    if span is not None:
+                        s_start, s_end = span
+                        # Rewrite to the verbatim matched substring so verify_headers'
+                        # exact check passes and gap/hydrate length math stays correct.
+                        h.exact_text = chunk[s_start:s_end]
+                        h.start_index = offset + s_start
+                        valid_headers.append(h)
             except (ValueError, RuntimeError, OSError, KeyError) as e:
                 self._logger.error(f'Scanner Error at offset {offset}: {e}')
 
