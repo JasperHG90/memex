@@ -751,6 +751,64 @@ def test_recovery_after_outage_drains_queue(provider_with_append_api):
     assert provider._pending == []
 
 
+def test_shutdown_drains_queue_when_doomed_worker_still_running(provider_with_append_api):
+    """Recovery-at-shutdown race (hermes-integration drain-recovery test).
+
+    A drain worker launched mid-outage is STILL running when ``shutdown``
+    fires. The old launch-once-join-once shutdown saw the live worker,
+    skipped its own launch, joined the doomed worker (which exits on the
+    transient failure with the queue intact), and went straight to spill —
+    never draining via the recovered API. ``_drain_with_deadline`` must
+    relaunch inside the bounded window and drain everything.
+    """
+    import asyncio
+    import threading
+
+    provider, api, _ = provider_with_append_api
+
+    in_create = threading.Event()
+    release = threading.Event()
+
+    async def _blocked_failing_ingest(*_a: Any, **_kw: Any) -> Any:
+        in_create.set()
+        # Suspend the coroutine WITHOUT blocking the bridge loop (the
+        # relaunched worker needs the loop to drain).
+        await asyncio.get_running_loop().run_in_executor(None, release.wait, 10.0)
+        raise RuntimeError('connect failed (outage)')
+
+    api.ingest = AsyncMock(side_effect=_blocked_failing_ingest)
+    provider._api.ingest = api.ingest
+
+    # First flush spawns the worker, which blocks inside the failing create.
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([])
+    assert in_create.wait(5.0), 'drain worker never reached the create call'
+
+    # Stack more chunks while the doomed worker holds the drain.
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([])
+    provider.sync_turn('q3', 'a3')
+    provider.on_pre_compress([])
+
+    assert len(provider._pending) == 3
+    assert [p['kind'] for p in provider._pending] == ['create', 'append', 'append']
+    assert provider._bg_drain_thread is not None, 'doomed worker must still be registered'
+
+    # Recovery: the NEXT create attempt succeeds. The in-flight doomed call
+    # keeps its captured side effect and will still fail.
+    api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+    provider._api.ingest = api.ingest
+
+    # Let the doomed worker fail only after shutdown has started joining it,
+    # so shutdown's first drain launch is guaranteed to be a no-op.
+    threading.Timer(0.3, release.set).start()
+    provider.shutdown()
+
+    api.ingest.assert_awaited_once()
+    assert api.append_to_note.await_count == 2
+    assert provider._pending == []
+
+
 def test_non_transient_4xx_drops_failing_entry(provider_with_append_api):
     """A 409 / 422 / 400 / 404 cannot succeed on retry; drop the entry so
     the queue can keep draining. Otherwise one bad chunk poisons the rest.
