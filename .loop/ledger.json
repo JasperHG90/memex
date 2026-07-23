@@ -69,6 +69,16 @@
       "commit_sha": null,
       "review_verdict": null,
       "dropped": false
+    },
+    "page-index-headerless-doc-fallback": {
+      "slug": "page-index-headerless-doc-fallback",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
     }
   }
 }
