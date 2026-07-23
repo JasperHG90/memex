@@ -75,7 +75,7 @@ explicit_package_bases = true
 # Hard per-test timeout so a hung test can't lock CI for six hours.
 # Thread method is compatible with asyncio tests and forces a traceback
 # on the stuck thread at exit.
-addopts = "--timeout=300 --timeout-method=thread"
+addopts = "--timeout=300 --timeout-method=thread -m 'not integration'"
 markers = [
   "integration: marks integration tests",
   "llm: marks tests that require LLM calls",

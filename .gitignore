@@ -212,3 +212,8 @@ MagicMock/
 /SPRINT.md
 /DONE.md
 site/
+
+# loop harness — per-run local state (config.json + ledger.json ARE committed)
+.loop/stamp.json
+.loop/HALT
+.loop/handoff.log
