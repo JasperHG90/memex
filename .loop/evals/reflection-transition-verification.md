@@ -1,0 +1,15 @@
+eval: reflection-transition-verification
+
+Definition of Done: the reflection Phase-4 transition is scored deterministically on coverage (omission) and faithfulness (hallucination) over evidence-id sets, sub-threshold transitions are recorded (log + metric) but NEVER block the Phase-5 write, and the whole check is inert when disabled.
+
+Defaults encoded here follow the ticket's recommendations: Q5 `transition_verification_enabled=True` (record-only) — PENDING USER CONFIRMATION; Q3 no hard-fail (record-only); Q1 no `transition_log` DB table in this slice.
+
+| Behavior | Input | Expected | Scorer | Threshold |
+|----------|-------|----------|--------|-----------|
+| A faithful consolidation raises no flag | Source = 2 observations citing evidence ids {A,B} and {B,C}; target = 1 merged observation citing {A,B,C} (every id drawn from the source union) | Verdict: `coverage == 1.0`, `faithfulness == 1.0`, `flags == []` | Deterministic (`verify_reflection_transition` unit case, root `tests/`) | 100% |
+| A dropped source fact is flagged as omission | Source union = {A,B,C,D} (4 ids); target retains only {A,B,C} (D dropped), no unsupported ids; `coverage_min=0.9` | Verdict: `coverage == 0.75`, `'omission' in flags`, `faithfulness == 1.0` | Deterministic (unit case, root `tests/`) | 100% |
+| An invented citation is flagged as hallucination | Source union = {A,B}; target observation cites {A,B,Z} where Z is in no source observation; `faithfulness_min=1.0` | Verdict: `faithfulness < 1.0`, `'hallucination' in flags`, `coverage == 1.0` | Deterministic (unit case, root `tests/`) | 100% |
+| Coverage and faithfulness flag independently | Source union = {A,B,C}; target = {A,B,Z}: drops C AND adds unsupported Z; `coverage_min=0.9`, `faithfulness_min=1.0` | Verdict flags BOTH: `{'omission','hallucination'} <= set(flags)`; `coverage == 2/3`, `faithfulness == 2/3` | Deterministic (unit case, root `tests/`) | 100% |
+| Empty evidence sets never divide-by-zero or false-flag | Source with no evidence ids (empty union); target with no evidence ids | Verdict: `coverage == 1.0`, `faithfulness == 1.0`, `flags == []`; no exception raised | Deterministic (unit case, root `tests/`) | 100% |
+| GUARDRAIL: a flagged transition still persists (record-only, no block) | A reflection cycle whose Phase-4 output is omission- and hallucination-flagged, `transition_verification_enabled=True` | Phase-5 CAS `UPDATE mental_models` still runs and commits the target observations; a `reflection.transition.flagged` log line is emitted and `REFLECTION_TRANSITION_FLAGGED_TOTAL` is incremented per dimension; the verdict never short-circuits Phase 5 | Deterministic (wiring test asserts Phase-5 invoked + counter incremented; ticket §5/§9 record-only invariant) | 100% |
+| GUARDRAIL: disabled flag is a byte-for-byte no-op | Same reflection cycle with `transition_verification_enabled=False` | Verifier is NOT called; no `reflection.transition.flagged` log, no counter increment; reflection observations, summary, and Phase-5 write are identical to pre-feature behaviour | Deterministic (wiring test asserts verifier uncalled + counter unchanged) | 100% |

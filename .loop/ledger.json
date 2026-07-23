@@ -79,6 +79,162 @@
       "commit_sha": null,
       "review_verdict": null,
       "dropped": false
+    },
+    "pre-extraction-dedup-gate": {
+      "slug": "pre-extraction-dedup-gate",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "atomic-ops-retrieval-eval-suite": {
+      "slug": "atomic-ops-retrieval-eval-suite",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "retrieval-need-classifier": {
+      "slug": "retrieval-need-classifier",
+      "stage": "blocked",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": {
+        "code": "unresolved-design-fork",
+        "reason": "Hard prerequisite: atomic-ops-retrieval-eval-suite (#206 Phoenix-trace eval) must land first \u2014 acceptance is measured by that eval. Unblock once #206 is done."
+      },
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "reflection-transition-verification": {
+      "slug": "reflection-transition-verification",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "retrieval-provenance-trace": {
+      "slug": "retrieval-provenance-trace",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "ghost-memory-fact-succession": {
+      "slug": "ghost-memory-fact-succession",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "surprise-gated-extraction": {
+      "slug": "surprise-gated-extraction",
+      "stage": "blocked",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": {
+        "code": "unresolved-design-fork",
+        "reason": "Hard dependency: pre-extraction-dedup-gate (#210) must land first \u2014 this ticket extends admission/decision.py and AdmissionConfig which #210 creates. Unblock (loopctl resume/register flow) once #210 is done."
+      },
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "memory-search-coverage-gap-signal": {
+      "slug": "memory-search-coverage-gap-signal",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "memory-unit-usage-tracking-columns": {
+      "slug": "memory-unit-usage-tracking-columns",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "knowledge-versioning": {
+      "slug": "knowledge-versioning",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": true
+    },
+    "knowledge-versioning-spike": {
+      "slug": "knowledge-versioning-spike",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "note-version-history": {
+      "slug": "note-version-history",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "mental-model-version-history": {
+      "slug": "mental-model-version-history",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "knowledge-temporal-queries": {
+      "slug": "knowledge-temporal-queries",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
+    },
+    "knowledge-rollback": {
+      "slug": "knowledge-rollback",
+      "stage": "ready",
+      "attempts": 0,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": null,
+      "dropped": false
     }
   }
 }
