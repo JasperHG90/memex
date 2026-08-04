@@ -102,6 +102,7 @@ Client-side OIDC configuration for the CLI and MCP. Lives at `oidc`.
 | `scopes` | `list[str]` | `["openid","profile","email","offline_access"]` | Scopes requested. `offline_access` enables refresh tokens (interactive). |
 | `client_secret` | `SecretStr \| None` | `null` | Client secret for confidential / `client_credentials` clients. Omit for public (PKCE) clients. |
 | `grant` | `"interactive" \| "client_credentials" \| "jwt_profile" \| "token_file" \| "token_env"` | `interactive` | How tokens are obtained. `interactive` = `memex auth login`. `client_credentials`/`jwt_profile` = non-interactive service accounts (hold a secret). `token_file`/`token_env` = keyless: present an ambient platform-issued JWT (e.g. Nomad Workload Identity). |
+| `credential` | `"access_token" \| "id_token"` | `access_token` | Which token from the login response is sent as the bearer. Set `id_token` for a provider that signs the id_token and issues an opaque access token (e.g. HashiCorp Vault); the server's `audience` must then accept the `client_id`. Only valid with `grant: interactive`, and requires `openid` in `scopes`. See [the OIDC how-to](../how-to/configuring-server/oidc.md#providers-that-sign-the-id_token) for the security tradeoff. |
 | `key_file` | `str \| None` | `null` | Path to a service-account key JSON (e.g. a Zitadel key file). Required for `grant: jwt_profile`. |
 | `token_file` | `str \| None` | `null` | Path to a file holding an ambient bearer JWT (read fresh per request, no secret stored). Required for `grant: token_file`. |
 | `token_env` | `str \| None` | `null` | Name of an env var holding an ambient bearer JWT. Required for `grant: token_env`. |
@@ -284,7 +285,7 @@ Setting `read_vault_ids` while `vault_ids` is `null` raises a validation error; 
 
 ### OidcProviderConfig
 
-One trusted OIDC provider in `auth.oidc`. Bearer tokens are verified locally against the provider's JWKS; the provider is selected by matching the token's `iss` claim. Only providers that issue signed JWT access tokens are supported.
+One trusted OIDC provider in `auth.oidc`. Bearer tokens are verified locally against the provider's JWKS, and the provider is selected by matching the token's `iss` claim. The bearer must be a signed JWT: an opaque token cannot be verified. Which of the provider's tokens carries the signature does not matter here. A signed access token verifies as is, and a provider that signs only the id_token works once its client sets `oidc.credential: id_token` and `audience` accepts the `client_id`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|

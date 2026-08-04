@@ -1466,9 +1466,15 @@ class OidcProviderConfig(BaseModel):
     Access tokens presented as ``Authorization: Bearer <jwt>`` are verified
     locally against the provider's JWKS (discovered from ``issuer`` unless
     ``jwks_uri`` is set). The provider is selected by matching the token's
-    ``iss`` claim against ``issuer``. Only providers that issue signed JWT
-    access tokens are supported (e.g. Entra ID v2, Zitadel, Keycloak, Auth0);
-    providers with opaque access tokens (e.g. Google, GitHub) are not.
+    ``iss`` claim against ``issuer``. The bearer must be a *signed JWT*: the
+    verifier cannot check an opaque token. Which OAuth token carries the
+    signature is the provider's choice and does not matter here: providers that
+    sign the access token (Entra ID v2, Zitadel, Keycloak, Auth0) work as is,
+    and providers that issue an opaque access token but sign the id_token (e.g.
+    HashiCorp Vault, Google) work once the client sets ``credential: id_token``
+    and ``audience`` accepts the client_id. A provider that issues no signed JWT
+    at all (e.g. a GitHub OAuth app) cannot use this path; those callers keep
+    using API keys.
     """
 
     issuer: str = Field(
@@ -1610,6 +1616,11 @@ class OidcClientConfig(BaseModel):
       an ambient, platform-issued bearer JWT (e.g. a Nomad Workload Identity token)
       read from a file or env var — no stored secret, no token exchange.
 
+    ``credential`` selects WHICH token from an interactive login is sent as the
+    bearer. It defaults to the access token; set it to ``id_token`` for a
+    provider that signs the id_token and issues an opaque access token (e.g.
+    HashiCorp Vault). See the OIDC how-to for the security tradeoff.
+
     The server may trust several providers; the client uses exactly one.
     """
 
@@ -1641,6 +1652,17 @@ class OidcClientConfig(BaseModel):
             'non-interactive service-account auth, acquired automatically. '
             '"token_file" / "token_env" = keyless: present an ambient platform-issued '
             'JWT (e.g. Nomad Workload Identity) read from a file or env var.'
+        ),
+    )
+    credential: Literal['access_token', 'id_token'] = Field(
+        default='access_token',
+        description=(
+            'Which token from the login response is sent as the bearer. '
+            '"access_token" (default) suits providers that issue signed JWT '
+            'access tokens. "id_token" suits providers that sign the id_token '
+            'and issue an opaque access token (e.g. HashiCorp Vault); it is '
+            'only valid with grant="interactive" and requires the "openid" '
+            'scope. The server must then accept the client_id as an audience.'
         ),
     )
     key_file: str | None = Field(
@@ -1690,6 +1712,24 @@ class OidcClientConfig(BaseModel):
             raise ValueError('grant="token_file" requires token_file.')
         if self.grant == 'token_env' and not self.token_env:
             raise ValueError('grant="token_env" requires token_env.')
+        if self.credential == 'id_token':
+            # Only an interactive login yields an id_token: the service-account
+            # grants exchange for an access token alone, and the keyless grants
+            # read a raw token from the runtime. Reject at load rather than let
+            # the client discover it as a 403 at request time.
+            if self.grant != 'interactive':
+                raise ValueError(
+                    f'credential="id_token" requires grant="interactive" (got '
+                    f'grant="{self.grant}"). Service-account and keyless grants '
+                    'never receive an id_token.'
+                )
+            # Without the openid scope the provider returns no id_token at all,
+            # so every login would fail at runtime instead.
+            if 'openid' not in self.scopes:
+                raise ValueError(
+                    'credential="id_token" requires the "openid" scope; without '
+                    f'it the provider returns no id_token (got scopes={self.scopes!r}).'
+                )
         return self
 
 

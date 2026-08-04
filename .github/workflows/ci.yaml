@@ -125,6 +125,24 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
+      # packages/common and packages/cli also ran in NO CI job, so the config
+      # loader, the OIDC client, and the whole CLI surface were untested on
+      # push. Separate steps, not one combined invocation: sharing a pytest
+      # process across suites leaks module-level state between them.
+      - name: Run common package tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/common/tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not llm"
+      - name: Run cli package tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/cli/tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not llm"
 
   mcp-import-check:
     needs: changes

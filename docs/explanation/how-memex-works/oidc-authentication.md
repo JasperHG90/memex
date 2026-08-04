@@ -52,7 +52,7 @@ Both paths end at the same verifier and the same `AuthContext`. The only practic
 
 - **It does not issue tokens.** Memex is a resource server, not an authorization server. It has no `/authorize` or `/token` endpoint of its own; your provider issues tokens and Memex only verifies them.
 - **It does not persist users.** Identity is ephemeral, present only for the life of a request. The audit log records a subject string, not a row in a user table.
-- **It does not accept opaque tokens.** Verification is local, against the provider's JWKS, so a provider whose access tokens are opaque strings rather than signed JWTs (Google, GitHub) cannot be used on this path. Those callers keep using API keys.
+- **It does not accept opaque tokens.** Verification is local, against the provider's JWKS, so the credential has to be a signed JWT. Which of the provider's tokens carries that signature is the provider's choice, and memex does not care: it verifies whatever JWT arrives in the `Authorization` header. A provider that signs the access token works as is. A provider that issues an opaque access token but signs the id_token, such as HashiCorp Vault or Google, works once its client is configured to send that one instead. Only a provider that issues no signed JWT at all, such as a GitHub OAuth app, is shut out, and those callers keep using API keys.
 
 ## See also
 

@@ -5,8 +5,12 @@ configured provider's JWKS, then maps the token's claims onto the existing
 :class:`~memex_core.server.auth.AuthContext` (policy + vault scope) so every
 downstream permission dependency works unchanged.
 
-Only OIDC providers that issue *signed JWT* access tokens are supported; the
-provider is selected by matching the token's ``iss`` claim.
+The bearer must be a *signed JWT*, because verification is local against the
+JWKS; an opaque token cannot be verified here. Which OAuth token carries the
+signature is the provider's choice: a signed access token verifies as is, and a
+provider that signs only the id_token works once its client sends that instead
+(``oidc.credential: id_token``). The provider is selected by matching the
+token's ``iss`` claim.
 """
 
 from __future__ import annotations
@@ -47,6 +51,19 @@ _JWKS_CACHE_TTL_SECONDS = 3600.0
 _FORCE_REFETCH_COOLDOWN_SECONDS = 30.0
 # Outbound timeout for discovery / JWKS fetches.
 _HTTP_TIMEOUT_SECONDS = 10.0
+# Cap on the unverified `iss` echoed into the rejection log. The claim is
+# attacker-controlled and unbounded, so it is repr()'d and then truncated.
+_MAX_LOGGED_ISSUER_CHARS = 200
+
+# Every reason a bearer is REFUSED logs at WARNING, not INFO, because the
+# server's default level is WARNING (`LoggingConfig.level`) and an operator
+# debugging a 403 must see the cause without first discovering a log-level knob.
+# That includes a JWKS/discovery fetch failure, which refuses every bearer.
+# This does not add an amplification channel: the audit middleware already
+# writes one record per request, 403s included, so a refused bearer was already
+# one write. Lines that do NOT by themselves refuse anything stay at INFO: the
+# forced-refetch failure falls back to the cached keyset (a real refusal after
+# it logs through the verification path), and the startup line.
 
 
 def _b64url_json(segment: str) -> dict:
@@ -156,11 +173,36 @@ class OidcVerifier:
         try:
             header, payload = _unverified_parts(token)
         except (ValueError, binascii.Error, json.JSONDecodeError):
+            # Almost always an opaque token. Some providers (HashiCorp Vault,
+            # Google) issue an opaque access token but DO sign the id_token, so
+            # their clients work by sending that instead; others (GitHub OAuth)
+            # issue no JWT at all and cannot use this path. Logging the segment
+            # count distinguishes both from a signature or claim failure, which
+            # logs below. The token itself is never logged.
+            logger.warning(
+                'OIDC bearer rejected: not a parseable JWT (%d dot-separated segments). '
+                'Memex verifies signed JWT bearer tokens locally against the '
+                "provider's JWKS; an opaque token cannot be verified. If the provider "
+                'signs the id_token instead, set oidc.credential="id_token" on the client.',
+                token.count('.') + 1,
+            )
             return None
 
         issuer = payload.get('iss')
         provider = self._providers.get(issuer) if isinstance(issuer, str) else None
         if provider is None:
+            # `issuer` here is UNVERIFIED, attacker-controlled input. repr() it
+            # FIRST and truncate the result, so a newline or terminal escape
+            # cannot forge a log line and a huge claim cannot flood the log.
+            # repr-then-slice is also total: a non-string or absent `iss` (which
+            # reaches here via the isinstance guard above) would raise under
+            # slice-then-repr.
+            logger.warning(
+                'OIDC bearer rejected: no configured provider matches issuer %s. '
+                'Configured issuers: %s.',
+                repr(issuer)[:_MAX_LOGGED_ISSUER_CHARS],
+                sorted(self._providers),
+            )
             return None
 
         # A JWKS/discovery fetch failure must deny the request (return None),
@@ -169,7 +211,7 @@ class OidcVerifier:
         try:
             keyset = await self._get_keyset(provider)
         except httpx.HTTPError as exc:
-            logger.info('OIDC JWKS fetch failed for issuer %s: %s', provider.issuer, exc)
+            logger.warning('OIDC JWKS fetch failed for issuer %s: %s', provider.issuer, exc)
             return None
         kid = header.get('kid')
         if kid and not _keyset_has_kid(keyset, kid):
@@ -206,14 +248,28 @@ class OidcVerifier:
             )
             claims.validate(now=int(time.time()), leeway=provider.leeway_seconds)
         except JoseError as exc:
-            logger.info('OIDC token rejected for issuer %s: %s', provider.issuer, exc)
+            logger.warning('OIDC token rejected for issuer %s: %s', provider.issuer, exc)
             return None
         except ValueError as exc:
             # find_by_kid / malformed key material.
-            logger.info('OIDC token verification error for issuer %s: %s', provider.issuer, exc)
+            logger.warning('OIDC token verification error for issuer %s: %s', provider.issuer, exc)
             return None
 
-        return _claims_to_context(dict(claims), provider)
+        verified = dict(claims)
+        context = _claims_to_context(verified, provider)
+        if context is None:
+            # The token is genuine but authorizes nothing: no grant_rule matched
+            # and the provider sets no default_policy. Without this line the
+            # result is a 403 indistinguishable from a bad signature. Claim
+            # NAMES only: the values are the caller's identity data.
+            logger.warning(
+                'OIDC token verified for issuer %s but matched no grant_rule and the '
+                'provider has no default_policy, so it authorizes nothing. Claims '
+                'present on the token: %s.',
+                provider.issuer,
+                sorted(verified),
+            )
+        return context
 
     async def _get_keyset(self, provider: OidcProviderConfig, *, force: bool = False) -> object:
         issuer = provider.issuer

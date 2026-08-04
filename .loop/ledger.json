@@ -8,7 +8,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "enforce-add-note-routing": {
       "slug": "enforce-add-note-routing",
@@ -18,7 +26,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": true
+      "dropped": true,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "memory-search-inline-metadata": {
       "slug": "memory-search-inline-metadata",
@@ -28,7 +44,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "retrieval-staleness-score-spike": {
       "slug": "retrieval-staleness-score-spike",
@@ -38,7 +62,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": true
+      "dropped": true,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "atomic-failure-paired-write": {
       "slug": "atomic-failure-paired-write",
@@ -48,7 +80,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": true
+      "dropped": true,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "surface-node-assets-in-note-metadata": {
       "slug": "surface-node-assets-in-note-metadata",
@@ -58,7 +98,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "disable-litellm-aiohttp-transport": {
       "slug": "disable-litellm-aiohttp-transport",
@@ -68,7 +116,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "page-index-headerless-doc-fallback": {
       "slug": "page-index-headerless-doc-fallback",
@@ -78,7 +134,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "pre-extraction-dedup-gate": {
       "slug": "pre-extraction-dedup-gate",
@@ -88,7 +152,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "atomic-ops-retrieval-eval-suite": {
       "slug": "atomic-ops-retrieval-eval-suite",
@@ -98,7 +170,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "retrieval-need-classifier": {
       "slug": "retrieval-need-classifier",
@@ -111,7 +191,15 @@
       },
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "reflection-transition-verification": {
       "slug": "reflection-transition-verification",
@@ -121,7 +209,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "retrieval-provenance-trace": {
       "slug": "retrieval-provenance-trace",
@@ -131,7 +227,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "ghost-memory-fact-succession": {
       "slug": "ghost-memory-fact-succession",
@@ -141,7 +245,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "surprise-gated-extraction": {
       "slug": "surprise-gated-extraction",
@@ -154,7 +266,15 @@
       },
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "memory-search-coverage-gap-signal": {
       "slug": "memory-search-coverage-gap-signal",
@@ -164,7 +284,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "memory-unit-usage-tracking-columns": {
       "slug": "memory-unit-usage-tracking-columns",
@@ -174,7 +302,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "knowledge-versioning": {
       "slug": "knowledge-versioning",
@@ -184,7 +320,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": true
+      "dropped": true,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "knowledge-versioning-spike": {
       "slug": "knowledge-versioning-spike",
@@ -194,7 +338,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "note-version-history": {
       "slug": "note-version-history",
@@ -204,7 +356,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "mental-model-version-history": {
       "slug": "mental-model-version-history",
@@ -214,7 +374,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "knowledge-temporal-queries": {
       "slug": "knowledge-temporal-queries",
@@ -224,7 +392,15 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     },
     "knowledge-rollback": {
       "slug": "knowledge-rollback",
@@ -234,7 +410,33 @@
       "blocker": null,
       "commit_sha": null,
       "review_verdict": null,
-      "dropped": false
+      "dropped": false,
+      "drop_reason": null,
+      "epic": null,
+      "dependencies": [],
+      "priority": 0,
+      "summary": null,
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
+    },
+    "oidc-id-token-credential": {
+      "slug": "oidc-id-token-credential",
+      "stage": "done",
+      "attempts": 1,
+      "review_cycles": 0,
+      "blocker": null,
+      "commit_sha": null,
+      "review_verdict": ".loop/verdicts/oidc-id-token-credential.adversarial.md, .loop/verdicts/oidc-id-token-credential.documentation.md",
+      "dropped": false,
+      "drop_reason": null,
+      "epic": "auth",
+      "dependencies": [],
+      "priority": 20,
+      "summary": "Let a client send the id_token as its bearer credential (opt-in\n`oidc.credential: id_token`), so OIDC human login works against providers that\nsign the id_token and issue an opaque access_token (HashiCorp Vault). Plus:\nclose all three silent-403 paths with diagnostics, name the real blocker in the\ndocs, and reject at config load the combinations that cannot work.\n",
+      "relay_block_nonfork": null,
+      "tags": [],
+      "stub": false
     }
   }
 }

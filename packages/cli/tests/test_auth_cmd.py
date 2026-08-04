@@ -8,6 +8,7 @@ import types
 import httpx
 import pytest
 import respx
+import typer
 
 from memex_common import auth_client
 from memex_common.auth_client import TokenCache, load_token_cache, save_token_cache
@@ -94,8 +95,6 @@ class TestStatusLogout:
         assert 'No cached token' in capsys.readouterr().out
 
     def test_login_rejects_service_account_grant(self, capsys):
-        import typer
-
         oidc = OidcClientConfig(
             issuer=ISSUER,
             client_id='svc',
@@ -185,3 +184,74 @@ class TestDeviceLogin:
         )
         with pytest.raises(auth_cmd.LoginError, match='access_denied'):
             await auth_cmd._device_login(_oidc())
+
+
+def _vault_oidc():
+    """A client configured for a provider that signs only the id_token."""
+    return OidcClientConfig(issuer=ISSUER, client_id='client-1', credential='id_token')
+
+
+def _device_endpoints() -> None:
+    respx.get(DISCOVERY_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={'device_authorization_endpoint': DEVICE_URL, 'token_endpoint': TOKEN_URL},
+        )
+    )
+    respx.post(DEVICE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                'device_code': 'dev-1',
+                'user_code': 'WXYZ',
+                'verification_uri': 'https://issuer.example/device',
+                'interval': 0,
+                'expires_in': 60,
+            },
+        )
+    )
+
+
+class TestIdTokenCredentialLogin:
+    @respx.mock
+    async def test_login_caches_the_id_token_as_the_bearer(self):
+        _device_endpoints()
+        signed = _id_token(email='alice@example.com', exp=int(time.time()) + 3600)
+        respx.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    # Vault's access_token is opaque and unverifiable.
+                    'access_token': 'hvb.AAAAAQKO3xkQ7Xr1YQ',
+                    'expires_in': 3600,
+                    'refresh_token': 'r1',
+                    'id_token': signed,
+                },
+            )
+        )
+
+        cache = await auth_cmd._device_login(_vault_oidc())
+
+        assert cache.credential == 'id_token'
+        assert cache.id_token == signed
+        assert cache.bearer_token == signed
+        assert cache.subject == 'alice@example.com'
+
+    @respx.mock
+    def test_login_exits_cleanly_when_the_id_token_is_missing(self, capsys):
+        # Sync: `login` drives the flow with asyncio.run() itself.
+        _device_endpoints()
+        respx.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200, json={'access_token': 'hvb.opaque', 'expires_in': 3600}
+            )
+        )
+
+        # A traceback here would be the wrong failure mode for a CLI.
+        with pytest.raises(typer.Exit) as exc:
+            auth_cmd.login(_ctx(_vault_oidc()), device=True)
+        assert exc.value.exit_code == 1
+        out = capsys.readouterr().out
+        assert 'Login failed' in out
+        assert 'no id_token' in out
+        assert load_token_cache() is None

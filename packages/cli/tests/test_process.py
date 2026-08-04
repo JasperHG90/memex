@@ -58,7 +58,15 @@ class TestPidFileLifecycle:
 
 class TestCheckPortAvailable:
     def test_available_port(self):
-        assert check_port_available('127.0.0.1', 59999) is True
+        """A port nothing is listening on reports available."""
+        import socket
+
+        # Ask the OS for a free port rather than hardcoding one: a fixed port
+        # makes this pass or fail by whatever else runs on the machine.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            port = s.getsockname()[1]
+        assert check_port_available('127.0.0.1', port) is True
 
     def test_occupied_port(self):
         """Binding and listening on a socket reports occupied."""

@@ -85,7 +85,9 @@ def login(
     except httpx.HTTPError as exc:
         console.print(f'[red]Login failed: {exc}[/red]')
         raise typer.Exit(1)
-    except (LoginError, KeyError) as exc:
+    except (LoginError, KeyError, ValueError) as exc:
+        # ValueError: the provider returned a response the configured credential
+        # cannot be built from (e.g. credential="id_token" with no id_token).
         console.print(f'[red]Login failed: {exc}[/red]')
         raise typer.Exit(1)
     save_token_cache(cache)
@@ -241,7 +243,7 @@ async def _loopback_login(oidc: OidcClientConfig) -> TokenCache:
         response.raise_for_status()
         data = response.json()
 
-    cache = token_cache_from_response(data, issuer=oidc.issuer)
+    cache = token_cache_from_response(data, issuer=oidc.issuer, credential=oidc.credential)
     cache.subject = _subject_from_id_token(data)
     return cache
 
@@ -281,7 +283,9 @@ async def _device_login(oidc: OidcClientConfig) -> TokenCache:
             poll = await client.post(token_endpoint, data=form)
             if poll.status_code == 200:
                 data = poll.json()
-                cache = token_cache_from_response(data, issuer=oidc.issuer)
+                cache = token_cache_from_response(
+                    data, issuer=oidc.issuer, credential=oidc.credential
+                )
                 cache.subject = _subject_from_id_token(data)
                 return cache
             error = poll.json().get('error')

@@ -10,6 +10,8 @@ fall back to the ``X-API-Key`` header. The cache lives at
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -20,7 +22,7 @@ from typing import TYPE_CHECKING
 import httpx
 from authlib.jose import jwt
 from platformdirs import user_config_dir
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -51,6 +53,33 @@ class TokenCache(BaseModel):
     # an interactive login token and a service-account token never get reused
     # across modes on a shared config dir.
     mode: str = 'interactive'
+    id_token: str | None = None
+    # Which token this cache's bearer is drawn from, mirroring the client's
+    # `oidc.credential`. Read paths require a matching credential so flipping
+    # the setting never resends a token minted under the other one. Defaults so
+    # a cache file written before this field existed still loads.
+    credential: str = 'access_token'
+
+    @model_validator(mode='after')
+    def validate_credential_present(self) -> TokenCache:
+        """A cache naming the id_token as its bearer must actually carry one.
+
+        Without this, ``bearer_token`` would need a fallback, and the obvious
+        one (``self.id_token or self.access_token``) silently sends the access
+        token: exactly the failure the id_token credential exists to avoid.
+        """
+        if self.credential == 'id_token' and not self.id_token:
+            raise ValueError("credential='id_token' requires a non-empty id_token.")
+        return self
+
+    @property
+    def bearer_token(self) -> str:
+        """The token to send as the bearer, per this cache's credential."""
+        if self.credential == 'id_token':
+            if self.id_token is None:  # pragma: no cover - validator guarantees it
+                raise ValueError("credential='id_token' requires a non-empty id_token.")
+            return self.id_token
+        return self.access_token
 
     def is_fresh(self, *, skew: float = _EXPIRY_SKEW_SECONDS) -> bool:
         return time.time() < (self.expires_at - skew)
@@ -111,26 +140,73 @@ async def discover_oidc(issuer: str, *, client: httpx.AsyncClient | None = None)
         return response.json()
 
 
+def _jwt_exp(token: str) -> float | None:
+    """Read a JWT's ``exp`` claim without verifying it, or None if unreadable.
+
+    Used only to schedule the client's own refresh; the server verifies the
+    signature and expiry for real, so an unverified read is safe here.
+    """
+    try:
+        payload_b64 = token.split('.')[1]
+    except IndexError:
+        return None
+    payload_b64 += '=' * (-len(payload_b64) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except (ValueError, binascii.Error):
+        return None
+    exp = claims.get('exp') if isinstance(claims, dict) else None
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        return None
+    return float(exp)
+
+
 def token_cache_from_response(
     data: dict,
     *,
     issuer: str,
     previous: TokenCache | None = None,
     mode: Literal['interactive', 'service_account'] = 'interactive',
+    credential: str = 'access_token',
 ) -> TokenCache:
-    """Build a TokenCache from an OAuth token-endpoint response."""
+    """Build a TokenCache from an OAuth token-endpoint response.
+
+    ``credential`` names which token becomes the bearer. Under ``id_token`` the
+    response must carry a usable id_token: a missing one, or one whose ``exp``
+    cannot be read, raises rather than falling back to the access token or to
+    ``expires_in``. Either fallback would silently resend the credential the
+    provider does not sign, which is the failure this option exists to fix.
+    """
     expires_in = float(data.get('expires_in', 3600))
+    expires_at = time.time() + expires_in
+    id_token = data.get('id_token')
+    if credential == 'id_token':
+        if not isinstance(id_token, str) or not id_token:
+            raise ValueError("credential='id_token' but the token response carried no id_token.")
+        id_exp = _jwt_exp(id_token)
+        if id_exp is None:
+            raise ValueError("credential='id_token' but the id_token has no readable exp claim.")
+        # The earlier of the two: `expires_in` describes the ACCESS token, so
+        # trusting it alone can send an already-expired id_token, while trusting
+        # the id_token's exp alone can stretch the refresh interval past the
+        # refresh token's idle timeout. min() has neither failure.
+        expires_at = min(expires_at, id_exp)
     # Refresh tokens may rotate; keep the previous one if the response omits it.
     refresh_token = data.get('refresh_token') or (previous.refresh_token if previous else None)
     return TokenCache(
         issuer=issuer,
         access_token=data['access_token'],
         token_type=data.get('token_type', 'Bearer'),
-        expires_at=time.time() + expires_in,
+        expires_at=expires_at,
         refresh_token=refresh_token,
         scope=data.get('scope', previous.scope if previous else None),
         subject=previous.subject if previous else None,
         mode=mode,
+        # Only persisted when it is the credential actually being sent. Storing
+        # it otherwise would write a second live credential to disk that no code
+        # path reads.
+        id_token=id_token if credential == 'id_token' else None,
+        credential=credential,
     )
 
 
@@ -162,7 +238,9 @@ async def _refresh_token(
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as owned:
             data = await _post(owned)
 
-    refreshed = token_cache_from_response(data, issuer=oidc.issuer, previous=cache)
+    refreshed = token_cache_from_response(
+        data, issuer=oidc.issuer, previous=cache, credential=oidc.credential
+    )
     save_token_cache(refreshed)
     return refreshed
 
@@ -212,26 +290,46 @@ async def _resolve_bearer(
     if oidc.grant in ('client_credentials', 'jwt_profile'):
         return await _resolve_service_bearer(oidc, client=client)
     cache = load_token_cache()
-    if cache is None or cache.issuer != oidc.issuer or cache.mode != 'interactive':
+    if cache is not None and cache.issuer == oidc.issuer and cache.mode == 'interactive':
+        if cache.credential != oidc.credential:
+            # The upgrade path this feature creates: the operator flipped
+            # `credential` but did not log in again. Say so, rather than falling
+            # through to the API key (or to no auth header at all) and leaving
+            # them with an unexplained 401/403 -- the very failure this feature
+            # exists to remove.
+            logger.warning(
+                'Cached OIDC token was obtained for credential=%r but the client is '
+                'configured for credential=%r; ignoring it. Run `memex auth login` '
+                'again to get a token for the configured credential.',
+                cache.credential,
+                oidc.credential,
+            )
+            return None
+    else:
         # Not logged in, logged into a different provider, or the cache holds a
         # service-account token (wrong mode): fall back.
         return None
     if cache.is_fresh():
-        return f'{cache.token_type} {cache.access_token}'
+        return f'{cache.token_type} {cache.bearer_token}'
     if not cache.refresh_token:
         logger.warning('Cached OIDC token expired and no refresh token is available.')
         return None
     async with _refresh_lock:
         # Re-load inside the lock: another coroutine may have refreshed already.
         current = load_token_cache() or cache
-        if current.issuer == oidc.issuer and current.mode == 'interactive' and current.is_fresh():
-            return f'{current.token_type} {current.access_token}'
+        if (
+            current.issuer == oidc.issuer
+            and current.mode == 'interactive'
+            and current.credential == oidc.credential
+            and current.is_fresh()
+        ):
+            return f'{current.token_type} {current.bearer_token}'
         try:
             refreshed = await _refresh_token(oidc, current, client=client)
         except (httpx.HTTPError, ValueError, KeyError) as exc:
             logger.warning('OIDC token refresh failed: %s', exc)
             return None
-        return f'{refreshed.token_type} {refreshed.access_token}'
+        return f'{refreshed.token_type} {refreshed.bearer_token}'
 
 
 # ---------------------------------------------------------------------------

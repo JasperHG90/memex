@@ -14,6 +14,24 @@ from memex_common.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_user_config(monkeypatch):
+    """Isolate every test in this module from the developer's real config.
+
+    A bare ``MemexConfig()`` otherwise reads ~/.config/memex/config.yaml, any
+    .memex.yaml above the cwd, and whatever MEMEX_CONFIG_PATH points at, so the
+    assertions below pass or fail by machine rather than by code. Module-wide
+    and autouse on purpose: a per-test opt-in is one forgotten decorator away
+    from reintroducing the leak, and this suite is gated in CI.
+
+    MEMEX_CONFIG_PATH must be cleared, not just disabled: it is checked BEFORE
+    the MEMEX_LOAD_LOCAL_CONFIG hatch and short-circuits it.
+    """
+    monkeypatch.setenv('MEMEX_LOAD_GLOBAL_CONFIG', 'false')
+    monkeypatch.setenv('MEMEX_LOAD_LOCAL_CONFIG', 'false')
+    monkeypatch.delenv('MEMEX_CONFIG_PATH', raising=False)
+
+
 def test_config_nested_structure():
     config = MemexConfig(
         server={
@@ -75,8 +93,7 @@ def test_default_model_propagation():
 
 def test_default_model_override_propagates():
     """A custom default_model propagates to all sub-configs."""
-    with patch.dict(os.environ, {'MEMEX_LOAD_LOCAL_CONFIG': 'false'}):
-        config = MemexConfig(server={'default_model': {'model': 'custom/model'}})
+    config = MemexConfig(server={'default_model': {'model': 'custom/model'}})
     assert config.server.memory.extraction.model.model == 'custom/model'
     assert config.server.memory.reflection.model.model == 'custom/model'
     assert config.server.document.model.model == 'custom/model'

@@ -242,6 +242,61 @@ class TestOidcClientConfig:
             OidcClientConfig(issuer='https://issuer.example', grant='token_env')
 
 
+class TestOidcClientCredentialField:
+    """`credential` selects which token from the login response is the bearer."""
+
+    def test_defaults_to_access_token(self):
+        client = OidcClientConfig(issuer='https://issuer.example', client_id='abc')
+        assert client.credential == 'access_token'
+
+    def test_id_token_with_interactive_grant(self):
+        client = OidcClientConfig(
+            issuer='https://issuer.example', client_id='abc', credential='id_token'
+        )
+        assert client.credential == 'id_token'
+        assert client.grant == 'interactive'
+
+    @pytest.mark.parametrize(
+        ('grant', 'extra'),
+        [
+            ('client_credentials', {'client_id': 'abc', 'client_secret': 'shh'}),
+            ('jwt_profile', {'client_id': 'abc', 'key_file': '/k.json'}),
+            ('token_file', {'token_file': '/secrets/nomad_token.jwt'}),
+            ('token_env', {'token_env': 'NOMAD_TOKEN'}),
+        ],
+    )
+    def test_id_token_rejected_on_non_interactive_grants(self, grant, extra):
+        # Those grants never receive an id_token, so the combination can only
+        # ever fail at request time. Reject it at load instead.
+        with pytest.raises(ValidationError, match='requires grant="interactive"'):
+            OidcClientConfig(
+                issuer='https://issuer.example', grant=grant, credential='id_token', **extra
+            )
+
+    def test_id_token_requires_openid_scope(self):
+        with pytest.raises(ValidationError, match='requires the "openid" scope'):
+            OidcClientConfig(
+                issuer='https://issuer.example',
+                client_id='abc',
+                credential='id_token',
+                scopes=['profile', 'email'],
+            )
+
+    def test_access_token_credential_needs_no_openid_scope(self):
+        # The check is scoped to the id_token credential: an access-token client
+        # with an unusual scope set keeps working.
+        client = OidcClientConfig(
+            issuer='https://issuer.example', client_id='abc', scopes=['profile']
+        )
+        assert client.credential == 'access_token'
+
+    def test_rejects_unknown_credential(self):
+        with pytest.raises(ValidationError):
+            OidcClientConfig(
+                issuer='https://issuer.example', client_id='abc', credential='refresh_token'
+            )
+
+
 class TestMemexConfigOidcField:
     """The client `oidc` field must be accepted under extra='forbid'."""
 

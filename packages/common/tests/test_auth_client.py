@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import stat
 import time
 import types
@@ -160,6 +161,185 @@ class TestResolveClientHeaders:
             _cache(access_token='old', expires_at=time.time() - 10, refresh_token=None)
         )
         headers = await resolve_client_headers(_config(api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+
+
+def _unsigned_jwt(claims: dict) -> str:
+    """A structurally valid JWT with the given claims and a dummy signature.
+
+    Only the payload matters here: the client reads `exp` without verifying,
+    and the server (not under test in this module) does the real verification.
+    """
+
+    def _seg(obj: dict) -> str:
+        raw = json.dumps(obj).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+
+    return f'{_seg({"alg": "RS256"})}.{_seg(claims)}.sig'
+
+
+class TestIdTokenCredential:
+    """`credential='id_token'` sends the id_token that a Vault-style provider signs."""
+
+    def _id_config(self, *, api_key=None):
+        oidc = OidcClientConfig(issuer=ISSUER, client_id='client-1', credential='id_token')
+        return types.SimpleNamespace(oidc=oidc, api_key=SecretStr(api_key) if api_key else None)
+
+    def test_from_response_stores_id_token_and_clamps_expiry(self):
+        # id_token expires FIRST: expires_in would send an expired token.
+        id_token = _unsigned_jwt({'exp': int(time.time()) + 300})
+        cache = auth_client.token_cache_from_response(
+            {'access_token': 'opaque-hvb', 'id_token': id_token, 'expires_in': 3600},
+            issuer=ISSUER,
+            credential='id_token',
+        )
+        assert cache.id_token == id_token
+        assert cache.credential == 'id_token'
+        assert cache.bearer_token == id_token
+        assert cache.expires_at == pytest.approx(time.time() + 300, abs=5)
+
+    def test_from_response_expiry_uses_the_earlier_bound(self):
+        # id_token expires LAST: exp alone would stretch the refresh interval.
+        id_token = _unsigned_jwt({'exp': int(time.time()) + 3600})
+        cache = auth_client.token_cache_from_response(
+            {'access_token': 'opaque-hvb', 'id_token': id_token, 'expires_in': 300},
+            issuer=ISSUER,
+            credential='id_token',
+        )
+        assert cache.expires_at == pytest.approx(time.time() + 300, abs=5)
+
+    def test_from_response_without_id_token_raises(self):
+        with pytest.raises(ValueError, match='carried no id_token'):
+            auth_client.token_cache_from_response(
+                {'access_token': 'opaque-hvb', 'expires_in': 3600},
+                issuer=ISSUER,
+                credential='id_token',
+            )
+
+    @pytest.mark.parametrize(
+        'id_token',
+        [
+            _unsigned_jwt({'sub': 'alice'}),  # no exp claim
+            'not-a-jwt',  # unparseable payload
+            _unsigned_jwt({'exp': 'tomorrow'}),  # non-numeric exp
+        ],
+    )
+    def test_from_response_unreadable_exp_raises(self, id_token):
+        # Falling back to expires_in here is the bug the clamp exists to prevent.
+        with pytest.raises(ValueError, match='no readable exp claim'):
+            auth_client.token_cache_from_response(
+                {'access_token': 'opaque-hvb', 'id_token': id_token, 'expires_in': 3600},
+                issuer=ISSUER,
+                credential='id_token',
+            )
+
+    def test_access_token_credential_does_not_persist_the_id_token(self):
+        # Persisting it would put a second live credential on disk that nothing
+        # reads: `_subject_from_id_token` parses the token RESPONSE, not the cache.
+        id_token = _unsigned_jwt({'exp': int(time.time()) + 300})
+        cache = auth_client.token_cache_from_response(
+            {'access_token': 'access-1', 'id_token': id_token, 'expires_in': 3600},
+            issuer=ISSUER,
+        )
+        assert cache.credential == 'access_token'
+        assert cache.id_token is None
+        assert cache.bearer_token == 'access-1'
+        assert cache.expires_at == pytest.approx(time.time() + 3600, abs=5)
+        save_token_cache(cache)
+        assert id_token not in token_cache_path().read_text(encoding='utf-8')
+
+    def test_cache_naming_id_token_without_one_is_rejected(self):
+        with pytest.raises(ValueError, match='requires a non-empty id_token'):
+            TokenCache(
+                issuer=ISSUER,
+                access_token='access-1',
+                expires_at=time.time() + 3600,
+                credential='id_token',
+            )
+
+    async def test_sends_the_id_token(self):
+        save_token_cache(_cache(id_token='signed-id-token', credential='id_token'))
+        headers = await resolve_client_headers(self._id_config(api_key='fallback'))
+        assert headers == {'Authorization': 'Bearer signed-id-token'}
+
+    async def test_cache_from_other_credential_is_not_reused(self, caplog):
+        # Cache minted under access_token, config now asks for id_token.
+        save_token_cache(_cache())
+        with caplog.at_level(logging.WARNING, logger='memex.common.auth_client'):
+            headers = await resolve_client_headers(self._id_config(api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+        # Silently dropping the cache would leave the user with an unexplained
+        # 401/403 and no hint to log in again.
+        assert len(caplog.records) == 1
+        assert 'memex auth login' in caplog.records[0].getMessage()
+
+    async def test_id_token_cache_not_reused_by_access_token_config(self):
+        # The mirror case: sending an id_token to a provider expecting the
+        # access token would be just as wrong.
+        save_token_cache(_cache(id_token='signed-id-token', credential='id_token'))
+        headers = await resolve_client_headers(_config(api_key='fallback'))
+        assert headers == {'X-API-Key': 'fallback'}
+
+    def test_old_cache_file_without_the_new_fields_still_loads(self):
+        # A token.json written before this feature existed.
+        legacy = {
+            'issuer': ISSUER,
+            'access_token': 'access-1',
+            'token_type': 'Bearer',
+            'expires_at': time.time() + 3600,
+            'mode': 'interactive',
+        }
+        token_cache_path().write_text(json.dumps(legacy), encoding='utf-8')
+        loaded = load_token_cache()
+        assert loaded.credential == 'access_token'
+        assert loaded.id_token is None
+        assert loaded.bearer_token == 'access-1'
+
+    @respx.mock
+    async def test_refresh_preserves_the_credential(self):
+        save_token_cache(
+            _cache(
+                id_token=_unsigned_jwt({'exp': int(time.time()) - 10}),
+                credential='id_token',
+                expires_at=time.time() - 10,
+            )
+        )
+        fresh_id = _unsigned_jwt({'exp': int(time.time()) + 3600})
+        respx.get(DISCOVERY_URL).mock(
+            return_value=httpx.Response(200, json={'token_endpoint': TOKEN_URL})
+        )
+        respx.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={'access_token': 'opaque-new', 'id_token': fresh_id, 'expires_in': 3600},
+            )
+        )
+
+        headers = await resolve_client_headers(self._id_config(api_key='fallback'))
+        assert headers == {'Authorization': f'Bearer {fresh_id}'}
+        assert load_token_cache().credential == 'id_token'
+
+    @respx.mock
+    async def test_refresh_dropping_the_id_token_falls_back(self):
+        # Never quietly resend the opaque access token: that is the 403 this
+        # credential exists to avoid.
+        save_token_cache(
+            _cache(
+                id_token=_unsigned_jwt({'exp': int(time.time()) - 10}),
+                credential='id_token',
+                expires_at=time.time() - 10,
+            )
+        )
+        respx.get(DISCOVERY_URL).mock(
+            return_value=httpx.Response(200, json={'token_endpoint': TOKEN_URL})
+        )
+        respx.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200, json={'access_token': 'opaque-new', 'expires_in': 3600}
+            )
+        )
+
+        headers = await resolve_client_headers(self._id_config(api_key='fallback'))
         assert headers == {'X-API-Key': 'fallback'}
 
 

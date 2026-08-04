@@ -1,8 +1,10 @@
 """Unit tests for OIDC bearer-token verification (offline, no network)."""
 
+import logging
 import time
 
 import httpx
+import pytest
 import respx
 from authlib.jose import JsonWebKey, jwt
 
@@ -272,3 +274,259 @@ async def test_forced_refetch_failure_falls_back_to_stale_keyset():
 
     token = _mint(new_key, _valid_claims(), kid='new-kid')
     assert await verifier.verify(token) is None
+
+
+# ---------------------------------------------------------------------------
+# Vault-style providers: the signature is on the id_token, not the access token
+# ---------------------------------------------------------------------------
+
+VAULT_ISSUER = 'https://vault.example.com/v1/identity/oidc/provider/memex'
+VAULT_CLIENT_ID = 'memex-cli'
+VAULT_DISCOVERY_URL = f'{VAULT_ISSUER}/.well-known/openid-configuration'
+VAULT_JWKS_URL = f'{VAULT_ISSUER}/.well-known/keys'
+
+# A Vault batch token: an opaque string, not a JWT. Only Vault's own userinfo
+# endpoint can resolve it, so it can never verify against a JWKS.
+VAULT_OPAQUE_ACCESS_TOKEN = 'hvb.AAAAAQKO3xkQ7Xr1YQpVZ2LmN4tGhRfDsWqEiUoPaS8dFgHjKlZxCvBnM'
+
+
+def _vault_provider(**overrides) -> OidcProviderConfig:
+    """A provider trusting Vault, with the CLIENT ID as the accepted audience.
+
+    A Vault id_token's `aud` is the OIDC client id, not a separate API
+    identifier, so that is what the operator configures.
+    """
+    defaults = dict(
+        issuer=VAULT_ISSUER,
+        audience=[VAULT_CLIENT_ID],
+        grant_rules=[OidcGrantRule(claim='groups', value='memex-admins', policy='admin')],
+    )
+    defaults.update(overrides)
+    return OidcProviderConfig(**defaults)
+
+
+def _vault_id_token_claims(**overrides) -> dict:
+    """Claims shaped like a Vault OIDC id_token, including id_token-only ones."""
+    claims = {
+        'iss': VAULT_ISSUER,
+        'aud': VAULT_CLIENT_ID,
+        'sub': 'vault-entity-id',
+        'groups': ['memex-admins'],
+        'exp': int(time.time()) + 3600,
+        'iat': int(time.time()),
+        'nonce': 'n-0S6_WzA2Mj',
+        'at_hash': 'kQ7Xr1YQpVZ2LmN4tGhRfA',
+        'azp': VAULT_CLIENT_ID,
+    }
+    claims.update(overrides)
+    return claims
+
+
+@respx.mock
+async def test_vault_id_token_verifies_to_a_context():
+    """The whole point of the id_token credential: no server change needed."""
+    key = _make_key('test-key')
+    respx.get(VAULT_DISCOVERY_URL).mock(
+        return_value=httpx.Response(200, json={'jwks_uri': VAULT_JWKS_URL})
+    )
+    respx.get(VAULT_JWKS_URL).mock(return_value=httpx.Response(200, json=_jwks(key)))
+    verifier = OidcVerifier([_vault_provider()])
+
+    ctx = await verifier.verify(_mint(key, _vault_id_token_claims()))
+
+    assert ctx is not None
+    assert ctx.policy is Policy.ADMIN
+    assert ctx.key_prefix == 'oidc:vault-entity-id'
+
+
+@respx.mock
+async def test_vault_id_token_with_list_audience_verifies():
+    key = _make_key('test-key')
+    respx.get(VAULT_DISCOVERY_URL).mock(
+        return_value=httpx.Response(200, json={'jwks_uri': VAULT_JWKS_URL})
+    )
+    respx.get(VAULT_JWKS_URL).mock(return_value=httpx.Response(200, json=_jwks(key)))
+    verifier = OidcVerifier([_vault_provider()])
+
+    claims = _vault_id_token_claims(aud=[VAULT_CLIENT_ID, 'someone-else'])
+    assert await verifier.verify(_mint(key, claims)) is not None
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics: each of the three ways a bearer becomes a 403 says why
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _restore_memex_logger_propagation():
+    """Ensure ``memex.core.server`` records reach pytest's caplog.
+
+    ``configure_logging()`` sets ``memex.propagate = False``
+    (``packages/core/src/memex_core/logging_config.py:69``), and any earlier
+    test in the suite that calls it leaves that in place. caplog attaches its
+    handler to the ROOT logger, so without propagation ``caplog.records`` stays
+    empty even though the ``logger.info(...)`` call fires. Same fixture as
+    ``test_run_dspy_operation_timeout.py``. Production loggers are unaffected:
+    this only restores the test's view.
+    """
+    memex_logger = logging.getLogger('memex')
+    saved = memex_logger.propagate
+    memex_logger.propagate = True
+    try:
+        yield
+    finally:
+        memex_logger.propagate = saved
+
+
+async def test_opaque_token_logs_a_jwt_shape_diagnostic(caplog):
+    """An opaque access token must be distinguishable from a bad signature."""
+    verifier = OidcVerifier([_vault_provider()])
+
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(VAULT_OPAQUE_ACCESS_TOKEN) is None
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno >= logging.WARNING
+    message = caplog.records[0].getMessage()
+    assert 'not a parseable JWT' in message
+    assert 'id_token' in message
+    # The token itself is a credential: it must never reach the log.
+    assert VAULT_OPAQUE_ACCESS_TOKEN not in message
+
+
+@respx.mock
+async def test_unknown_issuer_logs_the_unmatched_issuer(caplog):
+    key = _make_key('test-key')
+    verifier = OidcVerifier([_provider()])
+
+    token = _mint(key, _valid_claims(iss='https://elsewhere.example'))
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(token) is None
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno >= logging.WARNING
+    message = caplog.records[0].getMessage()
+    assert 'https://elsewhere.example' in message
+    assert ISSUER in message  # the configured issuers, so the mismatch is visible
+
+
+@respx.mock
+async def test_unknown_issuer_log_escapes_a_newline_in_the_claim(caplog):
+    """`iss` is unverified, attacker-controlled input: it must not forge a line."""
+    key = _make_key('test-key')
+    verifier = OidcVerifier([_provider()])
+
+    hostile = 'https://a.example/\nINFO forged log line\x1b[31m'
+    token = _mint(key, _valid_claims(iss=hostile))
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(token) is None
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    # repr() escapes both, so the injected text cannot start its own log line
+    # nor recolor the operator's terminal.
+    assert '\nINFO forged log line' not in message
+    assert '\\n' in message
+    assert '\x1b' not in message
+
+
+@respx.mock
+async def test_unknown_issuer_log_truncates_an_oversized_claim(caplog):
+    """An unbounded claim must not flood the log."""
+    key = _make_key('test-key')
+    verifier = OidcVerifier([_provider()])
+
+    token = _mint(key, _valid_claims(iss='https://a.example/' + 'A' * 8000))
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(token) is None
+
+    assert len(caplog.records) == 1
+    assert len(caplog.records[0].getMessage()) < 600
+
+
+@respx.mock
+async def test_verified_but_unauthorized_logs_the_reason(caplog):
+    """The third silent 403: verified, but no grant_rule matched."""
+    key = _make_key('test-key')
+    _mock_provider_endpoints(key)
+    verifier = OidcVerifier([_provider()])
+
+    token = _mint(key, _valid_claims(groups=['unmapped-group']))
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(token) is None
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1
+    assert caplog.records[0].levelno >= logging.WARNING
+    assert 'matched no grant_rule' in messages[0]
+    assert ISSUER in messages[0]
+    assert 'groups' in messages[0]  # claim NAMES help the operator write the rule
+    # ...but never the claim VALUES, which are the caller's identity data.
+    assert 'unmapped-group' not in messages[0]
+    assert 'alice@example.com' not in messages[0]
+
+
+@respx.mock
+async def test_authorized_token_logs_nothing(caplog):
+    """The diagnostics are for failures only; a good request stays quiet."""
+    key = _make_key('test-key')
+    _mock_provider_endpoints(key)
+    verifier = OidcVerifier([_provider()])
+
+    with caplog.at_level('INFO', logger='memex.core.server'):
+        assert await verifier.verify(_mint(key, _valid_claims())) is not None
+
+    assert caplog.records == []
+
+
+@respx.mock
+async def test_all_rejection_reasons_survive_the_default_log_level(caplog):
+    """The diagnostics are useless if the operator must first find a log knob.
+
+    `LoggingConfig.level` defaults to WARNING
+    (`packages/common/src/memex_common/config.py`), so a diagnostic emitted at
+    INFO is invisible on a stock server and the troubleshooting doc's "read the
+    log" instruction dead-ends. Capture at WARNING, not INFO, and assert every
+    refusal reason still shows up.
+    """
+    key = _make_key('test-key')
+    _mock_provider_endpoints(key)
+    verifier = OidcVerifier([_provider()])
+
+    with caplog.at_level(logging.WARNING, logger='memex.core.server'):
+        # 1. opaque bearer
+        assert await verifier.verify(VAULT_OPAQUE_ACCESS_TOKEN) is None
+        # 2. unknown issuer
+        assert await verifier.verify(_mint(key, _valid_claims(iss='https://nope.example'))) is None
+        # 3. bad audience (the pre-existing reason, raised to WARNING for parity)
+        assert await verifier.verify(_mint(key, _valid_claims(aud='wrong-audience'))) is None
+        # 4. verified but authorizes nothing
+        assert await verifier.verify(_mint(key, _valid_claims(groups=['unmapped']))) is None
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 4, messages
+    assert 'not a parseable JWT' in messages[0]
+    assert 'no configured provider matches issuer' in messages[1]
+    assert 'OIDC token rejected for issuer' in messages[2]
+    assert 'matched no grant_rule' in messages[3]
+
+
+@respx.mock
+async def test_jwks_fetch_failure_is_visible_at_the_default_log_level(caplog):
+    """An unreachable JWKS refuses EVERY bearer, so it cannot be silent either.
+
+    DNS, egress rules, or an expired cert on the provider makes `verify` return
+    None for every token. At INFO that whole failure mode is invisible on a
+    stock server, which is the same silent-403 class this ticket closes.
+    """
+    key = _make_key('test-key')
+    respx.get(DISCOVERY_URL).mock(return_value=httpx.Response(200, json={'jwks_uri': JWKS_URL}))
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(503))
+    verifier = OidcVerifier([_provider()])
+
+    with caplog.at_level(logging.WARNING, logger='memex.core.server'):
+        assert await verifier.verify(_mint(key, _valid_claims())) is None
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1
+    assert 'OIDC JWKS fetch failed for issuer' in messages[0]
