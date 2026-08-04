@@ -125,10 +125,24 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
-      # packages/common and packages/cli also ran in NO CI job, so the config
-      # loader, the OIDC client, and the whole CLI surface were untested on
-      # push. Separate steps, not one combined invocation: sharing a pytest
-      # process across suites leaks module-level state between them.
+
+  # packages/common and packages/cli ran in NO CI job, so the config loader, the
+  # OIDC client, and the whole CLI surface were untested on push. Their own job
+  # rather than more steps on python-tests: that job already spends ~15.5 of its
+  # 20-minute budget, and appending these two (~4.5 min) tips it over the
+  # timeout. A separate job also runs them in parallel and keeps a slow CLI
+  # suite from starving the core tests.
+  package-tests:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      # Separate steps, not one combined invocation: sharing a pytest process
+      # across suites leaks module-level state between them.
       - name: Run common package tests
         uses: JasperHG90/toiminnot/actions/pytest@main
         with:
